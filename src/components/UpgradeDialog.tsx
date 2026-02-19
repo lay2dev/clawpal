@@ -11,6 +11,11 @@ import {
 
 type Step = "confirm" | "backup" | "upgrading" | "done";
 
+/** Strip ANSI escape codes from terminal output */
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+}
+
 export function UpgradeDialog({
   open,
   onOpenChange,
@@ -31,6 +36,7 @@ export function UpgradeDialog({
   const [output, setOutput] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showLog, setShowLog] = useState(false);
 
   const reset = () => {
     setStep("confirm");
@@ -38,6 +44,7 @@ export function UpgradeDialog({
     setOutput("");
     setError("");
     setLoading(false);
+    setShowLog(false);
   };
 
   const handleClose = (open: boolean) => {
@@ -77,11 +84,12 @@ export function UpgradeDialog({
       const result = isRemote
         ? await api.remoteRunOpenclawUpgrade(instanceId)
         : await api.runOpenclawUpgrade();
-      setOutput(result);
+      setOutput(stripAnsi(result));
       setStep("done");
     } catch (e) {
-      setOutput(String(e));
+      setOutput(stripAnsi(String(e)));
       setError("Upgrade failed. See output below.");
+      setShowLog(true);
     } finally {
       setLoading(false);
     }
@@ -163,9 +171,19 @@ export function UpgradeDialog({
               Upgrade completed successfully.
             </p>
             {output && (
-              <pre className="max-h-60 overflow-auto rounded-md bg-muted p-3 text-xs font-mono whitespace-pre-wrap">
-                {output}
-              </pre>
+              <>
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setShowLog(!showLog)}
+                >
+                  {showLog ? "Hide details" : "Show details"}
+                </button>
+                {showLog && (
+                  <pre className="max-h-60 overflow-auto rounded-md bg-muted p-3 text-xs font-mono whitespace-pre-wrap">
+                    {output}
+                  </pre>
+                )}
+              </>
             )}
           </div>
         )}

@@ -59,7 +59,28 @@
 - `docs/plans/2026-02-15-clawpal-mvp-design.md`（设计）
 - `docs/plans/2026-02-15-clawpal-mvp-implementation-plan.md`（计划）
 
-## 7. 安全与风险
+## 7. 部署
+
+### 官网（clawpal.zhixian.io）
+
+使用 Cloudflare Pages Direct Upload 部署，源目录为 `docs/site/`。
+
+部署命令：
+```bash
+npx wrangler pages deploy docs/site --project-name clawpal
+```
+
+项目域名：`clawpal.zhixian.io`（也可通过 `clawpal.pages.dev` 访问）。
+
+### 桌面应用 Release
+
+通过 GitHub Actions 自动构建，push tag 触发（如 `v0.1.1`）：
+- CI workflow: `.github/workflows/release.yml`
+- 构建产物：macOS (ARM/x64 .dmg)、Windows (.exe/.msi)、Linux (.deb/.AppImage)
+- 需要 `TAURI_SIGNING_PRIVATE_KEY` 等 secrets，本地无法打 release bundle
+- 发布新版本流程：更新 `package.json` + `src-tauri/Cargo.toml` 版本号 → commit → `git tag vX.Y.Z` → push
+
+## 8. 安全与风险
 
 - 禁止提交明文密钥/配置路径泄露
 - 避免大文件和自动生成产物直接提交

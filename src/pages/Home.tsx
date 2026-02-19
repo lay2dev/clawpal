@@ -201,9 +201,8 @@ export function Home({
     return () => clearTimeout(timer);
   }, [isRemote, isConnected, instanceId]);
 
-  // ClawPal app self-update check (local only)
+  // ClawPal app self-update check
   useEffect(() => {
-    if (isRemote) return;
     setAppUpdateChecking(true);
     check()
       .then((update) => {
@@ -213,10 +212,9 @@ export function Home({
       })
       .catch((e) => console.error("Failed to check app update:", e))
       .finally(() => setAppUpdateChecking(false));
-  }, [isRemote]);
+  }, []);
 
   const handleAppUpdate = useCallback(async () => {
-    if (isRemote) return;
     setAppUpdating(true);
     setAppUpdateProgress(0);
     try {
@@ -242,7 +240,7 @@ export function Home({
       setAppUpdating(false);
       setAppUpdateProgress(null);
     }
-  }, [isRemote]);
+  }, []);
 
   const handleDeleteAgent = (agentId: string) => {
     if (isRemote && !isConnected) return;
@@ -303,8 +301,8 @@ export function Home({
               )}
             </div>
 
-            {/* ClawPal app self-update (local only) */}
-            {!isRemote && (appUpdateChecking || appUpdate) && (
+            {/* ClawPal app self-update */}
+            {(appUpdateChecking || appUpdate) && (
               <>
                 <span className="text-sm text-muted-foreground">App Update</span>
                 <div className="flex items-center gap-2 flex-wrap">
