@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClawPal — Desktop Companion for OpenClaw</title>
+  <meta name="description" content="Manage your AI agents, models, and configurations visually. ClawPal is a native desktop app for OpenClaw.">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0c0a09;
+      --bg-card: #1c1917;
+      --border: #292524;
+      --text: #fafaf9;
+      --text-muted: #a8a29e;
+      --accent: #ea580c;
+      --accent-light: #fb923c;
+      --accent-glow: rgba(234, 88, 12, 0.15);
+      --radius: 16px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px 256px;
+    }
+
+    /* ─── Nav ─── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(20px) saturate(1.4);
+      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      background: rgba(12, 10, 9, 0.7);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text);
+    }
+
+    .nav-brand img { width: 32px; height: 32px; border-radius: 8px; }
+
+    .nav-brand span {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 700;
+      font-size: 1.2rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    /* ─── Buttons ─── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 24px;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.25s cubic-bezier(0.33, 1, 0.68, 1);
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn:hover {
+      background: var(--accent-light);
+      transform: translateY(-1px);
+      box-shadow: 0 8px 32px rgba(234, 88, 12, 0.3);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--accent-light);
+      background: var(--accent-glow);
+      box-shadow: 0 8px 32px rgba(234, 88, 12, 0.1);
+    }
+
+    .btn-sm {
+      padding: 8px 16px;
+      font-size: 0.82rem;
+      border-radius: 8px;
+    }
+
+    /* ─── Hero ─── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 800px;
+      background: radial-gradient(ellipse, rgba(234, 88, 12, 0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-icon {
+      width: 96px;
+      height: 96px;
+      border-radius: 24px;
+      margin-bottom: 40px;
+      filter: drop-shadow(0 0 60px rgba(234, 88, 12, 0.3));
+      animation: float 6s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .hero h1 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 800;
+      font-size: clamp(2.8rem, 6vw, 4.5rem);
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 .accent {
+      background: linear-gradient(135deg, var(--accent-light), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin-bottom: 48px;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .hero-sub {
+      margin-top: 32px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    /* ─── Sections ─── */
+    section {
+      padding: 120px 24px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 700;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 800;
+      font-size: clamp(2rem, 4vw, 3rem);
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+    }
+
+    .section-desc {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+      max-width: 560px;
+      line-height: 1.7;
+      margin-bottom: 64px;
+    }
+
+    /* ─── Feature grid ─── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 32px;
+      transition: all 0.35s cubic-bezier(0.33, 1, 0.68, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0;
+      transition: opacity 0.35s;
+    }
+
+    .feature-card:hover {
+      border-color: #44403c;
+      transform: translateY(-4px);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+    }
+
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      font-size: 1.6rem;
+      margin-bottom: 20px;
+      display: block;
+      width: 48px;
+      height: 48px;
+      line-height: 48px;
+      text-align: center;
+      background: var(--accent-glow);
+      border-radius: 12px;
+    }
+
+    .feature-card h3 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 700;
+      font-size: 1.15rem;
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 0.92rem;
+      line-height: 1.65;
+    }
+
+    /* ─── Download grid ─── */
+    .download-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .download-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 32px;
+      text-align: center;
+      transition: all 0.3s cubic-bezier(0.33, 1, 0.68, 1);
+    }
+
+    .download-card:hover {
+      border-color: #44403c;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+    }
+
+    .download-card .os-icon {
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .download-card h3 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin-bottom: 6px;
+    }
+
+    .download-card .formats {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      margin-bottom: 24px;
+    }
+
+    .download-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .download-buttons .btn { width: 100%; }
+
+    /* ─── Footer ─── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 24px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    footer a:hover { color: var(--text); }
+
+    /* ─── Scroll reveal ─── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(32px);
+      transition: opacity 0.7s cubic-bezier(0.33, 1, 0.68, 1),
+                  transform 0.7s cubic-bezier(0.33, 1, 0.68, 1);
+    }
+
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    .reveal-delay-1 { transition-delay: 0.08s; }
+    .reveal-delay-2 { transition-delay: 0.16s; }
+    .reveal-delay-3 { transition-delay: 0.24s; }
+    .reveal-delay-4 { transition-delay: 0.32s; }
+    .reveal-delay-5 { transition-delay: 0.40s; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 768px) {
+      nav { padding: 16px 20px; }
+      .nav-links a:not(.btn) { display: none; }
+      .features-grid, .download-grid { grid-template-columns: 1fr; }
+      section { padding: 80px 20px; }
+      .hero { padding: 100px 20px 60px; }
+    }
+
+    @media (min-width: 769px) and (max-width: 1024px) {
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Reusable SVG icons -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
+    <symbol id="icon-apple" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83"/>
+      <path d="M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11"/>
+    </symbol>
+    <symbol id="icon-windows" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M3 5.548l7.126-0.966 0.003 6.883-7.12 0.04L3 5.548zm7.124 6.693l0.005 6.89-7.12-0.975V12.2l7.115 0.04zm0.862-7.807L20.996 3v8.478l-9.99 0.078-0.02-7.122zm10.01 7.81L20.998 21l-9.98-1.378-0.014-7.18 9.992-0.198z"/>
+    </symbol>
+    <symbol id="icon-linux" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12.504 0c-.155 0-.311.015-.466.047C9.792.456 8.52 2.439 8.52 4.744c0 .218.013.432.038.643-2.418-.353-4.142-.037-4.142-.037C2.838 5.758 2 7.3 2 7.3c-1.137 2.072-.158 5.137-.158 5.137.572 1.653 1.825 2.326 3.014 2.55-.143.324-.246.678-.246 1.07 0 1.468 1.16 1.895 2.255 1.983-.024.227-.038.46-.038.699 0 1.858.758 2.297 1.688 2.297.893 0 1.27-.51 1.27-1.106 0-.233-.023-.77-.064-1.336-.04-.567-.072-1.126-.072-1.383 0-.87.387-1.298 1.351-1.298.648 0 1.308.467 1.308 1.298 0 .257-.031.816-.072 1.383-.04.567-.064 1.103-.064 1.336 0 .596.377 1.106 1.27 1.106.93 0 1.688-.439 1.688-2.297 0-.239-.014-.472-.038-.699 1.095-.088 2.255-.515 2.255-1.983 0-.392-.103-.746-.246-1.07 1.189-.224 2.442-.897 3.014-2.55 0 0 .979-3.065-.158-5.137 0 0-.838-1.542-2.416-1.95 0 0-1.724-.316-4.142.037.025-.211.038-.425.038-.643 0-2.305-1.272-4.288-3.518-4.697A3.584 3.584 0 0 0 12.504 0"/>
+    </symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </symbol>
+  </svg>
+
+  <!-- Nav -->
+  <nav>
+    <a href="#" class="nav-brand">
+      <img src="icon.png" alt="ClawPal">
+      <span>ClawPal</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/zhixianio/clawpal" target="_blank">GitHub</a>
+      <a href="#download" class="btn" style="color:white;">
+        Download
+        <svg width="16" height="16"><use href="#icon-download"/></svg>
+      </a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <img src="icon.png" alt="ClawPal" class="hero-icon reveal">
+    <h1 class="reveal reveal-delay-1">Your <span class="accent">OpenClaw</span><br>command center</h1>
+    <p class="reveal reveal-delay-2">Manage AI agents, models, and configs with a visual interface.<br>Stop editing JSON by hand.</p>
+    <div class="hero-actions reveal reveal-delay-3">
+      <a href="#download" class="btn" style="padding:14px 32px;font-size:1rem;border-radius:12px;">
+        Download
+        <svg width="16" height="16"><use href="#icon-download"/></svg>
+      </a>
+      <a href="https://github.com/zhixianio/clawpal" class="btn btn-outline" style="padding:14px 32px;font-size:1rem;border-radius:12px;" target="_blank">
+        View on GitHub
+      </a>
+      <a href="https://discord.gg/4yqf28wf7R" class="btn btn-outline" style="padding:14px 32px;font-size:1rem;border-radius:12px;" target="_blank">
+        Join Discord
+      </a>
+    </div>
+    <div class="hero-sub reveal reveal-delay-4">
+      Free &amp; open source &middot; macOS, Windows, Linux
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features">
+    <div class="section-label reveal">Features</div>
+    <h2 class="section-title reveal reveal-delay-1">Everything you need to<br>manage OpenClaw</h2>
+    <p class="section-desc reveal reveal-delay-2">A native desktop app that gives you full control over your AI agents, models, and infrastructure.</p>
+
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <span class="feature-icon">&#x1f4dc;</span>
+        <h3>Recipes</h3>
+        <p>Browse and apply pre-built configuration templates. Preview diffs before applying, auto-rollback on failure.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <span class="feature-icon">&#x1f916;</span>
+        <h3>Agent Management</h3>
+        <p>Create, configure, and monitor all your OpenClaw agents from a single dashboard.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <span class="feature-icon">&#x2699;&#xfe0f;</span>
+        <h3>Model Profiles</h3>
+        <p>Set up API keys, browse the model catalog, and switch the default model in one click.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-3">
+        <span class="feature-icon">&#x1f517;</span>
+        <h3>Channel Bindings</h3>
+        <p>Connect Discord channels to agents with per-channel model overrides and fine-grained control.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-4">
+        <span class="feature-icon">&#x1fa7a;</span>
+        <h3>Doctor</h3>
+        <p>Run diagnostics, auto-fix common issues, and clean up stale sessions to keep things running smooth.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-5">
+        <span class="feature-icon">&#x1f310;</span>
+        <h3>Remote Management</h3>
+        <p>Connect to remote OpenClaw instances over SSH and manage them exactly the same way as local.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download -->
+  <section id="download">
+    <div class="section-label reveal">Download</div>
+    <h2 class="section-title reveal reveal-delay-1">Get ClawPal</h2>
+    <p class="section-desc reveal reveal-delay-2">Free and open source. Available for all major platforms.</p>
+
+    <div class="download-grid">
+      <div class="download-card reveal">
+        <div class="os-icon"><svg width="28" height="28"><use href="#icon-apple"/></svg></div>
+        <h3>macOS</h3>
+        <div class="formats">.dmg installer</div>
+        <div class="download-buttons">
+          <a id="dl-mac-arm" href="#" class="btn btn-sm">Apple Silicon</a>
+          <a id="dl-mac-intel" href="#" class="btn btn-sm btn-outline">Intel</a>
+        </div>
+      </div>
+      <div class="download-card reveal reveal-delay-1">
+        <div class="os-icon"><svg width="26" height="26"><use href="#icon-windows"/></svg></div>
+        <h3>Windows</h3>
+        <div class="formats">x64 installer</div>
+        <div class="download-buttons">
+          <a id="dl-win" href="#" class="btn btn-sm">Installer (.exe)</a>
+          <a id="dl-win-portable" href="#" class="btn btn-sm btn-outline">Portable</a>
+        </div>
+      </div>
+      <div class="download-card reveal reveal-delay-2">
+        <div class="os-icon"><svg width="28" height="28"><use href="#icon-linux"/></svg></div>
+        <h3>Linux</h3>
+        <div class="formats">x64 packages</div>
+        <div class="download-buttons">
+          <a id="dl-linux-deb" href="#" class="btn btn-sm">.deb</a>
+          <a id="dl-linux-appimage" href="#" class="btn btn-sm btn-outline">.AppImage</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>Built by <a href="https://zhixian.io" target="_blank">zhixian.io</a> &middot; <a href="https://github.com/zhixianio/clawpal" target="_blank">GitHub</a></p>
+  </footer>
+
+  <script>
+    // Scroll reveal
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+    // Fetch latest release assets from GitHub
+    const REPO = 'zhixianio/clawpal';
+    const FALLBACK = `https://github.com/${REPO}/releases`;
+
+    const ASSET_MAP = {
+      'dl-mac-arm':        (name) => name.endsWith('_aarch64.dmg'),
+      'dl-mac-intel':      (name) => name.endsWith('_x64.dmg'),
+      'dl-win':            (name) => name.endsWith('_x64-setup.exe'),
+      'dl-win-portable':   (name) => name === 'ClawPal_portable_x64.exe',
+      'dl-linux-deb':      (name) => name.endsWith('_amd64.deb'),
+      'dl-linux-appimage': (name) => name.endsWith('_amd64.AppImage'),
+    };
+
+    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(release => {
+        const assets = release.assets || [];
+        for (const [id, matcher] of Object.entries(ASSET_MAP)) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          const asset = assets.find(a => matcher(a.name));
+          el.href = asset ? asset.browser_download_url : FALLBACK;
+          if (!asset) el.style.opacity = '0.4';
+        }
+      })
+      .catch(() => {
+        // Fallback: point everything to releases page
+        for (const id of Object.keys(ASSET_MAP)) {
+          const el = document.getElementById(id);
+          if (el) el.href = FALLBACK;
+        }
+      });
+  </script>
+</body>
+</html>
