@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { Home } from "./pages/Home";
 import { Recipes } from "./pages/Recipes";
 import { Cook } from "./pages/Cook";
@@ -82,29 +80,6 @@ export function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // App self-update (manual check from sidebar)
-  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
-
-  const handleCheckForUpdates = useCallback(async () => {
-    setCheckingAppUpdate(true);
-    try {
-      const update = await check();
-      if (update) {
-        const confirmed = window.confirm(`ClawPal v${update.version} is available. Update and restart now?`);
-        if (confirmed) {
-          await update.downloadAndInstall();
-          await relaunch();
-        }
-      } else {
-        showToast("You're on the latest version");
-      }
-    } catch (e) {
-      console.error("Update check failed:", e);
-      showToast(`Update check failed: ${e}`, "error");
-    } finally {
-      setCheckingAppUpdate(false);
-    }
-  }, [showToast]);
 
   const handleInstanceSelect = useCallback((id: string) => {
     setActiveInstance(id);
@@ -311,15 +286,25 @@ export function App() {
           >
             Settings
           </Button>
-          <Button
-            variant="ghost"
-            className="justify-start hover:bg-accent text-muted-foreground"
-            onClick={handleCheckForUpdates}
-            disabled={checkingAppUpdate}
-          >
-            {checkingAppUpdate ? "Checking..." : "Check for Updates"}
-          </Button>
         </nav>
+
+        <div className="px-4 pb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <a
+            href="#"
+            className="hover:text-foreground transition-colors"
+            onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.zhixian.io"); }}
+          >
+            Website
+          </a>
+          <span>·</span>
+          <a
+            href="#"
+            className="hover:text-foreground transition-colors"
+            onClick={(e) => { e.preventDefault(); api.openUrl("https://x.com/zhixianio"); }}
+          >
+            @zhixian
+          </a>
+        </div>
 
         {/* Dirty config action bar */}
         {dirty && (

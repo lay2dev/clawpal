@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { api } from "../lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -74,11 +72,6 @@ export function Home({
   const [backingUp, setBackingUp] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
 
-  // ClawPal app self-update state
-  const [appUpdate, setAppUpdate] = useState<{ version: string; body?: string } | null>(null);
-  const [appUpdateChecking, setAppUpdateChecking] = useState(false);
-  const [appUpdating, setAppUpdating] = useState(false);
-  const [appUpdateProgress, setAppUpdateProgress] = useState<number | null>(null);
 
   // Create agent dialog
   const [showCreateAgent, setShowCreateAgent] = useState(false);
@@ -201,46 +194,6 @@ export function Home({
     return () => clearTimeout(timer);
   }, [isRemote, isConnected, instanceId]);
 
-  // ClawPal app self-update check
-  useEffect(() => {
-    setAppUpdateChecking(true);
-    check()
-      .then((update) => {
-        if (update) {
-          setAppUpdate({ version: update.version, body: update.body });
-        }
-      })
-      .catch((e) => console.error("Failed to check app update:", e))
-      .finally(() => setAppUpdateChecking(false));
-  }, []);
-
-  const handleAppUpdate = useCallback(async () => {
-    setAppUpdating(true);
-    setAppUpdateProgress(0);
-    try {
-      const update = await check();
-      if (!update) return;
-      let totalBytes = 0;
-      let downloadedBytes = 0;
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started" && event.data.contentLength) {
-          totalBytes = event.data.contentLength;
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-          if (totalBytes > 0) {
-            setAppUpdateProgress(Math.round((downloadedBytes / totalBytes) * 100));
-          }
-        } else if (event.event === "Finished") {
-          setAppUpdateProgress(100);
-        }
-      });
-      await relaunch();
-    } catch (e) {
-      console.error("App update failed:", e);
-      setAppUpdating(false);
-      setAppUpdateProgress(null);
-    }
-  }, []);
 
   const handleDeleteAgent = (agentId: string) => {
     if (isRemote && !isConnected) return;
@@ -301,46 +254,6 @@ export function Home({
               )}
             </div>
 
-            {/* ClawPal app self-update */}
-            {(appUpdateChecking || appUpdate) && (
-              <>
-                <span className="text-sm text-muted-foreground">App Update</span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {appUpdateChecking && (
-                    <Badge variant="outline" className="text-muted-foreground">Checking for app updates...</Badge>
-                  )}
-                  {!appUpdateChecking && appUpdate && !appUpdating && (
-                    <>
-                      <Badge variant="outline" className="text-primary border-primary">
-                        ClawPal v{appUpdate.version} available
-                      </Badge>
-                      <Button size="sm" className="text-xs h-6" onClick={handleAppUpdate}>
-                        Update &amp; Restart
-                      </Button>
-                    </>
-                  )}
-                  {appUpdating && (
-                    <>
-                      <Badge variant="outline" className="text-muted-foreground">
-                        {appUpdateProgress !== null && appUpdateProgress < 100
-                          ? `Downloading... ${appUpdateProgress}%`
-                          : appUpdateProgress === 100
-                            ? "Installing..."
-                            : "Preparing..."}
-                      </Badge>
-                      {appUpdateProgress !== null && appUpdateProgress < 100 && (
-                        <div className="w-32 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full transition-all"
-                            style={{ width: `${appUpdateProgress}%` }}
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              </>
-            )}
 
             <span className="text-sm text-muted-foreground">Default Model</span>
             <div className="max-w-xs">

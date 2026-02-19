@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import { api } from "@/lib/api";
 import { useInstance } from "@/lib/instance-context";
 import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion, ResolvedApiKey } from "@/lib/types";
@@ -124,6 +127,61 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
+
+  // ClawPal app version & self-update
+  const [appVersion, setAppVersion] = useState<string>("");
+  const [appUpdate, setAppUpdate] = useState<{ version: string; body?: string } | null>(null);
+  const [appUpdateChecking, setAppUpdateChecking] = useState(false);
+  const [appUpdating, setAppUpdating] = useState(false);
+  const [appUpdateProgress, setAppUpdateProgress] = useState<number | null>(null);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  const handleCheckForUpdates = useCallback(async () => {
+    setAppUpdateChecking(true);
+    setAppUpdate(null);
+    try {
+      const update = await check();
+      if (update) {
+        setAppUpdate({ version: update.version, body: update.body });
+      }
+    } catch (e) {
+      console.error("Update check failed:", e);
+    } finally {
+      setAppUpdateChecking(false);
+    }
+  }, []);
+
+  const handleAppUpdate = useCallback(async () => {
+    setAppUpdating(true);
+    setAppUpdateProgress(0);
+    try {
+      const update = await check();
+      if (!update) return;
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started" && event.data.contentLength) {
+          totalBytes = event.data.contentLength;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          if (totalBytes > 0) {
+            setAppUpdateProgress(Math.round((downloadedBytes / totalBytes) * 100));
+          }
+        } else if (event.event === "Finished") {
+          setAppUpdateProgress(100);
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      console.error("App update failed:", e);
+      setAppUpdating(false);
+      setAppUpdateProgress(null);
+    }
+  }, []);
+
 
   // Extract profiles from remote config on first load
   useEffect(() => {
@@ -291,6 +349,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
       )}
 
           <div className="grid grid-cols-2 gap-3 items-start">
+            <div className="space-y-3">
             {/* Create / Edit form */}
             <Card>
               <CardHeader>
@@ -413,6 +472,56 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
               </CardContent>
             </Card>
 
+            {/* Current Version */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Current Version</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-sm font-medium">{appVersion ? `v${appVersion}` : "..."}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCheckForUpdates}
+                    disabled={appUpdateChecking || appUpdating}
+                  >
+                    {appUpdateChecking ? "Checking..." : "Check for Updates"}
+                  </Button>
+                </div>
+                {!appUpdateChecking && appUpdate && !appUpdating && (
+                  <div className="flex items-center gap-2 mt-3">
+                    <Badge variant="outline" className="text-primary border-primary">
+                      v{appUpdate.version} available
+                    </Badge>
+                    <Button size="sm" onClick={handleAppUpdate}>
+                      Update &amp; Restart
+                    </Button>
+                  </div>
+                )}
+                {appUpdating && (
+                  <div className="flex items-center gap-2 mt-3">
+                    <Badge variant="outline" className="text-muted-foreground">
+                      {appUpdateProgress !== null && appUpdateProgress < 100
+                        ? `Downloading... ${appUpdateProgress}%`
+                        : appUpdateProgress === 100
+                          ? "Installing..."
+                          : "Preparing..."}
+                    </Badge>
+                    {appUpdateProgress !== null && appUpdateProgress < 100 && (
+                      <div className="w-32 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: `${appUpdateProgress}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            </div>
+
             {/* Profiles list */}
             <Card>
               <CardHeader>
@@ -494,6 +603,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
       {message && (
         <p className="text-sm text-muted-foreground mt-3">{message}</p>
       )}
+
     </section>
   );
 }
