@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { RecipeCard } from "../components/RecipeCard";
 import type { Recipe } from "../lib/types";
@@ -12,6 +13,7 @@ export function Recipes({
 }: {
   onCook: (id: string, source?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [source, setSource] = useState("");
   const [loadedSource, setLoadedSource] = useState<string | undefined>(undefined);
@@ -41,9 +43,9 @@ export function Recipes({
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">Recipes</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('recipes.title')}</h2>
       <form onSubmit={onLoadSource} className="mb-2 flex items-center gap-2">
-        <Label>Recipe source (file path or URL)</Label>
+        <Label>{t('recipes.sourceLabel')}</Label>
         <Input
           value={source}
           onChange={(event) => setSource(event.target.value)}
@@ -51,11 +53,11 @@ export function Recipes({
           className="w-[380px]"
         />
         <Button type="submit" className="ml-2">
-          {isLoading ? "Loading..." : "Load"}
+          {isLoading ? t('recipes.loading') : t('recipes.load')}
         </Button>
       </form>
       <p className="text-sm text-muted-foreground mt-0">
-        Loaded from: {loadedSource || "builtin / clawpal recipes"}
+        {t('recipes.loadedFrom', { source: loadedSource || t('recipes.builtinSource') })}
       </p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
         {recipes.map((recipe) => (

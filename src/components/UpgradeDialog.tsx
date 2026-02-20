@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,7 @@ export function UpgradeDialog({
   currentVersion: string;
   latestVersion: string;
 }) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>("confirm");
   const [backupName, setBackupName] = useState("");
   const [output, setOutput] = useState("");
@@ -88,7 +90,7 @@ export function UpgradeDialog({
       setStep("done");
     } catch (e) {
       setOutput(stripAnsi(String(e)));
-      setError("Upgrade failed. See output below.");
+      setError(t('upgrade.upgradeFailed'));
       setShowLog(true);
     } finally {
       setLoading(false);
@@ -100,24 +102,24 @@ export function UpgradeDialog({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {step === "confirm" && "Upgrade OpenClaw"}
-            {step === "backup" && "Creating Backup..."}
-            {step === "upgrading" && "Upgrading..."}
-            {step === "done" && "Upgrade Complete"}
+            {step === "confirm" && t('upgrade.title')}
+            {step === "backup" && t('upgrade.backupTitle')}
+            {step === "upgrading" && t('upgrade.upgradingTitle')}
+            {step === "done" && t('upgrade.doneTitle')}
           </DialogTitle>
         </DialogHeader>
 
         {step === "confirm" && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-muted-foreground">Current:</span>
+              <span className="text-muted-foreground">{t('upgrade.current')}</span>
               <code className="font-medium">{currentVersion}</code>
               <span className="text-muted-foreground mx-1">&rarr;</span>
-              <span className="text-muted-foreground">New:</span>
+              <span className="text-muted-foreground">{t('upgrade.new')}</span>
               <code className="font-medium text-primary">{latestVersion}</code>
             </div>
             <p className="text-sm text-muted-foreground">
-              This will back up your config and upgrade OpenClaw{isRemote ? " on the remote instance" : ""}.
+              {isRemote ? t('upgrade.confirmDescriptionRemote') : t('upgrade.confirmDescription')}
             </p>
           </div>
         )}
@@ -127,7 +129,7 @@ export function UpgradeDialog({
             {loading && (
               <div className="flex items-center gap-2 text-sm">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                <span>Creating backup...</span>
+                <span>{t('upgrade.creatingBackup')}</span>
               </div>
             )}
             {error && (
@@ -140,13 +142,13 @@ export function UpgradeDialog({
           <div className="space-y-3">
             {backupName && (
               <p className="text-sm text-muted-foreground">
-                Backup created: <code>{backupName}</code>
+                {t('upgrade.backupCreated')} <code>{backupName}</code>
               </p>
             )}
             {loading && (
               <div className="flex items-center gap-2 text-sm">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                <span>Running upgrade...</span>
+                <span>{t('upgrade.runningUpgrade')}</span>
               </div>
             )}
             {error && (
@@ -164,11 +166,11 @@ export function UpgradeDialog({
           <div className="space-y-3">
             {backupName && (
               <p className="text-sm text-muted-foreground">
-                Backup: <code>{backupName}</code>
+                {t('upgrade.backup')} <code>{backupName}</code>
               </p>
             )}
             <p className="text-sm font-medium text-green-600">
-              Upgrade completed successfully.
+              {t('upgrade.upgradeSuccess')}
             </p>
             {output && (
               <>
@@ -176,7 +178,7 @@ export function UpgradeDialog({
                   className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                   onClick={() => setShowLog(!showLog)}
                 >
-                  {showLog ? "Hide details" : "Show details"}
+                  {showLog ? t('upgrade.hideDetails') : t('upgrade.showDetails')}
                 </button>
                 {showLog && (
                   <pre className="max-h-60 overflow-auto rounded-md bg-muted p-3 text-xs font-mono whitespace-pre-wrap">
@@ -192,26 +194,26 @@ export function UpgradeDialog({
           {step === "confirm" && (
             <>
               <Button variant="outline" onClick={() => handleClose(false)}>
-                Cancel
+                {t('upgrade.cancel')}
               </Button>
-              <Button onClick={startUpgrade}>Start Upgrade</Button>
+              <Button onClick={startUpgrade}>{t('upgrade.startUpgrade')}</Button>
             </>
           )}
           {step === "backup" && error && (
             <>
               <Button variant="outline" onClick={() => handleClose(false)}>
-                Cancel
+                {t('upgrade.cancel')}
               </Button>
-              <Button onClick={runBackup}>Retry Backup</Button>
+              <Button onClick={runBackup}>{t('upgrade.retryBackup')}</Button>
             </>
           )}
           {step === "upgrading" && error && (
             <Button variant="outline" onClick={() => handleClose(false)}>
-              Close
+              {t('upgrade.close')}
             </Button>
           )}
           {step === "done" && (
-            <Button onClick={() => handleClose(false)}>Close</Button>
+            <Button onClick={() => handleClose(false)}>{t('upgrade.close')}</Button>
           )}
         </DialogFooter>
       </DialogContent>

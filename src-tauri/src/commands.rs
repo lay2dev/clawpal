@@ -675,38 +675,78 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
             .and_then(|d| d.get("guilds"))
             .and_then(Value::as_object);
 
-        let Some(guilds) = guilds else {
-            return Ok(Vec::new());
-        };
-
         let mut entries: Vec<DiscordGuildChannel> = Vec::new();
         let mut channel_ids: Vec<String> = Vec::new();
         let mut unresolved_guild_ids: Vec<String> = Vec::new();
 
-        for (guild_id, guild_val) in guilds {
-            let guild_name = guild_val
-                .get("slug")
-                .or_else(|| guild_val.get("name"))
-                .and_then(Value::as_str)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| guild_id.clone());
+        // Collect from channels.discord.guilds (structured config)
+        if let Some(guilds) = guilds {
+            for (guild_id, guild_val) in guilds {
+                let guild_name = guild_val
+                    .get("slug")
+                    .or_else(|| guild_val.get("name"))
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| guild_id.clone());
 
-            if guild_name == *guild_id {
-                unresolved_guild_ids.push(guild_id.clone());
-            }
+                if guild_name == *guild_id {
+                    unresolved_guild_ids.push(guild_id.clone());
+                }
 
-            if let Some(channels) = guild_val.get("channels").and_then(Value::as_object) {
-                for (channel_id, _channel_val) in channels {
-                    channel_ids.push(channel_id.clone());
-                    entries.push(DiscordGuildChannel {
-                        guild_id: guild_id.clone(),
-                        guild_name: guild_name.clone(),
-                        channel_id: channel_id.clone(),
-                        channel_name: channel_id.clone(),
-                    });
+                if let Some(channels) = guild_val.get("channels").and_then(Value::as_object) {
+                    for (channel_id, _channel_val) in channels {
+                        channel_ids.push(channel_id.clone());
+                        entries.push(DiscordGuildChannel {
+                            guild_id: guild_id.clone(),
+                            guild_name: guild_name.clone(),
+                            channel_id: channel_id.clone(),
+                            channel_name: channel_id.clone(),
+                        });
+                    }
                 }
             }
+        }
+
+        // Also collect from bindings array (users may only have bindings, no guilds map)
+        if let Some(bindings) = cfg.get("bindings").and_then(Value::as_array) {
+            for b in bindings {
+                let m = match b.get("match") {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if m.get("channel").and_then(Value::as_str) != Some("discord") {
+                    continue;
+                }
+                let guild_id = match m.get("guildId") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Number(n)) => n.to_string(),
+                    _ => continue,
+                };
+                let channel_id = match m.pointer("/peer/id") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Number(n)) => n.to_string(),
+                    _ => continue,
+                };
+                // Skip if already collected from guilds map
+                if entries.iter().any(|e| e.guild_id == guild_id && e.channel_id == channel_id) {
+                    continue;
+                }
+                if !unresolved_guild_ids.contains(&guild_id) {
+                    unresolved_guild_ids.push(guild_id.clone());
+                }
+                channel_ids.push(channel_id.clone());
+                entries.push(DiscordGuildChannel {
+                    guild_id: guild_id.clone(),
+                    guild_name: guild_id.clone(),
+                    channel_id: channel_id.clone(),
+                    channel_name: channel_id.clone(),
+                });
+            }
+        }
+
+        if entries.is_empty() {
+            return Ok(Vec::new());
         }
 
         // Resolve channel names via openclaw CLI
@@ -3291,7 +3331,7 @@ fn enrich_channel_display_names(
         }
     }
 
-    let cache_file = paths.base_dir.join(".clawpal-channel-name-cache.json");
+    let cache_file = paths.clawpal_dir.join("channel-name-cache.json");
     if nodes.is_empty() {
         if cache_file.exists() {
             let _ = fs::remove_file(&cache_file);
@@ -4043,7 +4083,7 @@ pub async fn remote_backup_before_upgrade(
     let cmd = format!(
         concat!(
             "set -e; ",
-            "BDIR=\"$HOME/.openclaw/.clawpal/backups/{name}\"; ",
+            "BDIR=\"$HOME/.clawpal/backups/{name}\"; ",
             "mkdir -p \"$BDIR\"; ",
             "cp \"$HOME/.openclaw/openclaw.json\" \"$BDIR/\" 2>/dev/null || true; ",
             "cp -r \"$HOME/.openclaw/agents\" \"$BDIR/\" 2>/dev/null || true; ",
@@ -4075,9 +4115,18 @@ pub async fn remote_list_backups(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<BackupInfo>, String> {
+    // Migrate remote data from legacy path ~/.openclaw/.clawpal → ~/.clawpal
+    let _ = pool.exec_login(&host_id, concat!(
+        "if [ -d \"$HOME/.openclaw/.clawpal\" ]; then ",
+            "mkdir -p \"$HOME/.clawpal\"; ",
+            "cp -a \"$HOME/.openclaw/.clawpal/.\" \"$HOME/.clawpal/\" 2>/dev/null; ",
+            "rm -rf \"$HOME/.openclaw/.clawpal\"; ",
+        "fi"
+    )).await;
+
     // List backup directory names
     let list_result = pool
-        .exec_login(&host_id, "ls -1d \"$HOME/.openclaw/.clawpal/backups\"/*/  2>/dev/null || true")
+        .exec_login(&host_id, "ls -1d \"$HOME/.clawpal/backups\"/*/  2>/dev/null || true")
         .await?;
 
     let dirs: Vec<String> = list_result
@@ -4116,7 +4165,7 @@ pub async fn remote_list_backups(
             let size_bytes = size_map.get(d.trim_end_matches('/')).copied().unwrap_or(0);
             BackupInfo {
                 name: name.clone(),
-                path: String::new(),
+                path: d.clone(),
                 created_at: name.clone(), // Name is the timestamp
                 size_bytes,
             }
@@ -4136,7 +4185,7 @@ pub async fn remote_restore_from_backup(
     let cmd = format!(
         concat!(
             "set -e; ",
-            "BDIR=\"$HOME/.openclaw/.clawpal/backups/{name}\"; ",
+            "BDIR=\"$HOME/.clawpal/backups/{name}\"; ",
             "[ -d \"$BDIR\" ] || {{ echo 'Backup not found'; exit 1; }}; ",
             "cp \"$BDIR/openclaw.json\" \"$HOME/.openclaw/openclaw.json\" 2>/dev/null || true; ",
             "[ -d \"$BDIR/agents\" ] && cp -r \"$BDIR/agents\" \"$HOME/.openclaw/\" 2>/dev/null || true; ",
@@ -4161,7 +4210,7 @@ pub async fn remote_delete_backup(
     backup_name: String,
 ) -> Result<bool, String> {
     let cmd = format!(
-        "BDIR=\"$HOME/.openclaw/.clawpal/backups/{name}\"; [ -d \"$BDIR\" ] && rm -rf \"$BDIR\" && echo 'deleted' || echo 'not_found'",
+        "BDIR=\"$HOME/.clawpal/backups/{name}\"; [ -d \"$BDIR\" ] && rm -rf \"$BDIR\" && echo 'deleted' || echo 'not_found'",
         name = backup_name
     );
 

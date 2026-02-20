@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import type { AgentOverview, ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { api } from "../lib/api";
 import { useInstance } from "@/lib/instance-context";
@@ -18,25 +20,25 @@ import {
 function validateField(param: RecipeParam, value: string): string | null {
   const trim = value.trim();
   if (param.required && trim.length === 0) {
-    return `${param.label} is required`;
+    return i18n.t('paramForm.isRequired', { label: param.label });
   }
   // Select-based types only need required check
   if (param.type === "discord_guild" || param.type === "discord_channel" || param.type === "model_profile" || param.type === "agent") {
     return null;
   }
   if (param.minLength != null && trim.length < param.minLength) {
-    return `${param.label} is too short`;
+    return i18n.t('paramForm.tooShort', { label: param.label });
   }
   if (param.maxLength != null && trim.length > param.maxLength) {
-    return `${param.label} is too long`;
+    return i18n.t('paramForm.tooLong', { label: param.label });
   }
   if (param.pattern && trim.length > 0) {
     try {
       if (!new RegExp(param.pattern).test(trim)) {
-        return `${param.label} format is invalid`;
+        return i18n.t('paramForm.invalidFormat', { label: param.label });
       }
     } catch {
-      return `${param.label} has invalid validation rule`;
+      return i18n.t('paramForm.invalidRule', { label: param.label });
     }
   }
   return null;
@@ -55,6 +57,7 @@ export function ParamForm({
   onSubmit: () => void;
   submitLabel?: string;
 }) {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected, discordGuildChannels } = useInstance();
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
@@ -149,7 +152,7 @@ export function ParamForm({
           }}
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
-            <SelectValue placeholder="Select a guild" />
+            <SelectValue placeholder={t('paramForm.selectGuild')} />
           </SelectTrigger>
           <SelectContent>
             {uniqueGuilds.map((g) => (
@@ -175,7 +178,7 @@ export function ParamForm({
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
             <SelectValue
-              placeholder={guildSelected ? "Select a channel" : "Select a guild first"}
+              placeholder={guildSelected ? t('paramForm.selectChannel') : t('paramForm.selectGuildFirst')}
             />
           </SelectTrigger>
           <SelectContent>
@@ -199,7 +202,7 @@ export function ParamForm({
           }}
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
-            <SelectValue placeholder="Select an agent" />
+            <SelectValue placeholder={t('paramForm.selectAgent')} />
           </SelectTrigger>
           <SelectContent>
             {agents.map((a) => (
@@ -224,11 +227,11 @@ export function ParamForm({
           }}
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
-            <SelectValue placeholder="Select a model" />
+            <SelectValue placeholder={t('paramForm.selectModel')} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__default__">
-              <span className="text-muted-foreground">Use global default</span>
+              <span className="text-muted-foreground">{t('paramForm.useGlobalDefault')}</span>
             </SelectItem>
             {enabledProfiles.map((p) => (
               <SelectItem key={p.id} value={p.id}>

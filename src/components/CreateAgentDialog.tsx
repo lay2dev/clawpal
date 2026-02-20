@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useInstance } from "@/lib/instance-context";
 import { api } from "../lib/api";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export function CreateAgentDialog({
   modelProfiles: ModelProfile[];
   onCreated: (result: CreateAgentResult) => void;
 }) {
+  const { t } = useTranslation();
   const { instanceId, isRemote } = useInstance();
   const [agentId, setAgentId] = useState("");
   const [model, setModel] = useState("");
@@ -61,7 +63,7 @@ export function CreateAgentDialog({
   const handleCreate = async () => {
     const id = agentId.trim();
     if (!id) {
-      setError("Agent ID is required");
+      setError(t('createAgent.agentIdRequired'));
       return;
     }
     setCreating(true);
@@ -94,22 +96,22 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New Agent</DialogTitle>
+          <DialogTitle>{t('createAgent.title')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
-            <Label>Agent ID</Label>
+            <Label>{t('createAgent.agentId')}</Label>
             <Input
-              placeholder="e.g. my-agent"
+              placeholder={t('createAgent.agentIdPlaceholder')}
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Letters, numbers, hyphens, and underscores only.
+              {t('createAgent.agentIdHint')}
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label>Model</Label>
+            <Label>{t('createAgent.model')}</Label>
             <Select
               value={model || "__default__"}
               onValueChange={(val) => setModel(val === "__default__" ? "" : val)}
@@ -119,7 +121,7 @@ export function CreateAgentDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__default__">
-                  <span className="text-muted-foreground">use global default</span>
+                  <span className="text-muted-foreground">{t('createAgent.useGlobalDefault')}</span>
                 </SelectItem>
                 {modelProfiles.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
@@ -143,20 +145,20 @@ export function CreateAgentDialog({
                 }
               }}
             />
-            <Label htmlFor="create-agent-independent">Independent agent (separate workspace)</Label>
+            <Label htmlFor="create-agent-independent">{t('createAgent.independent')}</Label>
           </div>
           {independent && (
             <>
               <div className="space-y-1.5">
-                <Label>Display Name</Label>
+                <Label>{t('createAgent.displayName')}</Label>
                 <Input
-                  placeholder="e.g. MyBot"
+                  placeholder={t('createAgent.displayNamePlaceholder')}
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Emoji</Label>
+                <Label>{t('createAgent.emoji')}</Label>
                 <Input
                   placeholder="e.g. \uD83E\uDD16"
                   value={emoji}
@@ -165,9 +167,9 @@ export function CreateAgentDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Persona</Label>
+                <Label>{t('createAgent.persona')}</Label>
                 <Textarea
-                  placeholder="You are..."
+                  placeholder={t('createAgent.personaPlaceholder')}
                   value={persona}
                   onChange={(e) => setPersona(e.target.value)}
                   rows={3}
@@ -181,10 +183,10 @@ export function CreateAgentDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t('createAgent.cancel')}
           </Button>
           <Button onClick={handleCreate} disabled={creating}>
-            {creating ? "Creating..." : "Create"}
+            {creating ? t('createAgent.creating') : t('createAgent.create')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { Recipe } from "../lib/types";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,8 @@ export function RecipeCard({
   onCook: (id: string) => void;
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
+
   if (compact) {
     return (
       <Card
@@ -24,7 +27,7 @@ export function RecipeCard({
             {recipe.description}
           </div>
           <div className="text-xs text-muted-foreground mt-2">
-            {recipe.steps.length} step{recipe.steps.length !== 1 ? "s" : ""} &middot; {recipe.difficulty}
+            {t('recipeCard.steps', { count: recipe.steps.length })} &middot; {recipe.difficulty}
           </div>
         </CardContent>
       </Card>
@@ -39,19 +42,19 @@ export function RecipeCard({
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap gap-1.5 mb-2">
-          {recipe.tags.map((t) => (
-            <Badge key={t} variant="secondary" className="bg-muted-foreground/15">
-              {t}
+          {recipe.tags.map((tag) => (
+            <Badge key={tag} variant="secondary" className="bg-muted-foreground/15">
+              {tag}
             </Badge>
           ))}
         </div>
         <p className="text-sm text-muted-foreground">
-          {recipe.steps.length} step{recipe.steps.length !== 1 ? "s" : ""} &middot; {recipe.difficulty}
+          {t('recipeCard.steps', { count: recipe.steps.length })} &middot; {recipe.difficulty}
         </p>
       </CardContent>
       <CardFooter>
         <Button onClick={() => onCook(recipe.id)}>
-          Cook
+          {t('recipeCard.cook')}
         </Button>
       </CardFooter>
     </Card>

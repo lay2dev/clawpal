@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -40,6 +41,7 @@ Rules:
 User message: `;
 
 export function Chat() {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -95,14 +97,14 @@ export function Chat() {
       }
       // Extract reply text
       const payloads = result.payloads as Array<{ text?: string }> | undefined;
-      const text = payloads?.map((p) => p.text).filter(Boolean).join("\n") || "No response";
+      const text = payloads?.map((p) => p.text).filter(Boolean).join("\n") || t('chat.noResponse');
       setMessages((prev) => [...prev, { role: "assistant", content: text }]);
     } catch (err) {
       setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${err}` }]);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, agentId, sessionId, isRemote, isConnected, instanceId]);
+  }, [input, loading, agentId, sessionId, isRemote, isConnected, instanceId, t]);
 
   return (
     <div className="flex flex-col h-full">
@@ -123,7 +125,7 @@ export function Chat() {
           className="text-xs opacity-70"
           onClick={() => { clearSessionId(instanceId, agentId); setSessionId(undefined); setMessages([]); }}
         >
-          New
+          {t('chat.new')}
         </Button>
       </div>
       <ScrollArea className="flex-1 mb-2 overflow-hidden">
@@ -137,7 +139,7 @@ export function Chat() {
             </div>
           </div>
         ))}
-        {loading && <div className="opacity-50 text-sm">Thinking...</div>}
+        {loading && <div className="opacity-50 text-sm">{t('chat.thinking')}</div>}
         <div ref={bottomRef} />
       </ScrollArea>
       <div className="flex gap-2">
@@ -145,14 +147,14 @@ export function Chat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Ask your OpenClaw agent..."
+          placeholder={t('chat.placeholder')}
           className="flex-1"
         />
         <Button
           onClick={send}
           disabled={loading}
         >
-          Send
+          {t('chat.send')}
         </Button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +60,7 @@ export function Home({
   onCook?: (recipeId: string, source?: string) => void;
   showToast?: (message: string, type?: "success" | "error") => void;
 }) {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [status, setStatus] = useState<StatusLight | null>(null);
   const [version, setVersion] = useState<string | null>(null);
@@ -94,7 +96,7 @@ export function Home({
         console.error("Failed to fetch remote status:", e);
         if (!remoteErrorShownRef.current) {
           remoteErrorShownRef.current = true;
-          showToast?.(`Failed to read remote OpenClaw instance: ${e}`, "error");
+          showToast?.(t('home.remoteReadFailed', { error: String(e) }), "error");
         }
       });
     } else {
@@ -130,7 +132,7 @@ export function Home({
         console.error("Failed to load remote agents:", e);
         if (!remoteErrorShownRef.current) {
           remoteErrorShownRef.current = true;
-          showToast?.(`Failed to load remote agents: ${e}`, "error");
+          showToast?.(t('home.remoteAgentsFailed', { error: String(e) }), "error");
         }
       });
       return;
@@ -225,33 +227,33 @@ export function Home({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-4">Home</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('home.title')}</h2>
 
         {/* Status Summary */}
-        <h3 className="text-lg font-semibold mt-6 mb-3">Status</h3>
+        <h3 className="text-lg font-semibold mt-6 mb-3">{t('home.status')}</h3>
         <Card>
           <CardContent className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 items-center">
-            <span className="text-sm text-muted-foreground">Health</span>
+            <span className="text-sm text-muted-foreground">{t('home.health')}</span>
             <span className="text-sm font-medium">
               {!status ? "..." : status.healthy ? (
-                <Badge className="bg-green-100 text-green-700 border-0">Healthy</Badge>
+                <Badge className="bg-green-100 text-green-700 border-0">{t('home.healthy')}</Badge>
               ) : !statusSettled ? (
-                <Badge className="bg-amber-100 text-amber-700 border-0">Checking...</Badge>
+                <Badge className="bg-amber-100 text-amber-700 border-0">{t('home.checking')}</Badge>
               ) : (
-                <Badge className="bg-red-100 text-red-700 border-0">Unhealthy</Badge>
+                <Badge className="bg-red-100 text-red-700 border-0">{t('home.unhealthy')}</Badge>
               )}
             </span>
 
-            <span className="text-sm text-muted-foreground">Version</span>
+            <span className="text-sm text-muted-foreground">{t('home.version')}</span>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-medium">{version || "..."}</span>
               {checkingUpdate && (
-                <Badge variant="outline" className="text-muted-foreground">Checking for updates...</Badge>
+                <Badge variant="outline" className="text-muted-foreground">{t('home.checkingUpdates')}</Badge>
               )}
               {!checkingUpdate && updateInfo?.available && updateInfo.latest && updateInfo.latest !== version && (
                 <>
                   <Badge variant="outline" className="text-primary border-primary">
-                    {updateInfo.latest} available
+                    {t('home.available', { version: updateInfo.latest })}
                   </Badge>
                   <Button
                     size="sm"
@@ -259,21 +261,21 @@ export function Home({
                     variant="outline"
                     onClick={() => api.openUrl("https://github.com/openclaw/openclaw/releases")}
                   >
-                    View
+                    {t('home.view')}
                   </Button>
                   <Button
                     size="sm"
                     className="text-xs h-6"
                     onClick={() => setShowUpgradeDialog(true)}
                   >
-                    Upgrade
+                    {t('home.upgrade')}
                   </Button>
                 </>
               )}
             </div>
 
 
-            <span className="text-sm text-muted-foreground">Default Model</span>
+            <span className="text-sm text-muted-foreground">{t('home.defaultModel')}</span>
             <div className="max-w-xs">
               {status ? (
                 <Select
@@ -300,7 +302,7 @@ export function Home({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">
-                      <span className="text-muted-foreground">not set</span>
+                      <span className="text-muted-foreground">{t('home.notSet')}</span>
                     </SelectItem>
                     {status?.globalDefaultModel && !currentModelProfileId && (
                       <SelectItem value="__raw__">
@@ -323,9 +325,9 @@ export function Home({
 
         {/* Agents Overview -- grouped by identity */}
         <div className="flex items-center justify-between mt-6 mb-3">
-          <h3 className="text-lg font-semibold">Agents</h3>
+          <h3 className="text-lg font-semibold">{t('home.agents')}</h3>
           <Button size="sm" variant="outline" onClick={() => setShowCreateAgent(true)}>
-            + New Agent
+            {t('home.newAgent')}
           </Button>
         </div>
         {agents === null ? (
@@ -334,7 +336,7 @@ export function Home({
             <Skeleton className="h-24 w-full" />
           </div>
         ) : agentGroups.length === 0 ? (
-          <p className="text-muted-foreground">No agents found.</p>
+          <p className="text-muted-foreground">{t('home.noAgents')}</p>
         ) : (
           <div className="space-y-3">
             {agentGroups.map((group) => (
@@ -382,7 +384,7 @@ export function Home({
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="__none__">
-                                <span className="text-muted-foreground">default model</span>
+                                <span className="text-muted-foreground">{t('home.defaultModelOption')}</span>
                               </SelectItem>
                               {modelProfiles.map((p) => (
                                 <SelectItem key={p.id} value={p.id}>
@@ -394,31 +396,31 @@ export function Home({
                         </div>
                         <div className="flex items-center gap-2">
                           {agent.online ? (
-                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">online</Badge>
+                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.online')}</Badge>
                           ) : (
-                            <Badge className="bg-red-100 text-red-700 border-0 text-xs">offline</Badge>
+                            <Badge className="bg-red-100 text-red-700 border-0 text-xs">{t('home.offline')}</Badge>
                           )}
                           {agent.id !== "main" && (
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
                                 <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive">
-                                  Delete
+                                  {t('home.delete')}
                                 </Button>
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle>Delete agent "{agent.id}"?</AlertDialogTitle>
+                                  <AlertDialogTitle>{t('home.deleteAgentTitle', { agentId: agent.id })}</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    This will remove the agent from the config and any channel bindings associated with it.
+                                    {t('home.deleteAgentDescription')}
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                                   <AlertDialogAction
                                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                     onClick={() => handleDeleteAgent(agent.id)}
                                   >
-                                    Delete
+                                    {t('home.delete')}
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
@@ -435,9 +437,9 @@ export function Home({
         )}
 
         {/* Recommended Recipes */}
-        <h3 className="text-lg font-semibold mt-6 mb-3">Recommended Recipes</h3>
+        <h3 className="text-lg font-semibold mt-6 mb-3">{t('home.recommendedRecipes')}</h3>
         {recipes.length === 0 ? (
-          <p className="text-muted-foreground">No recipes available.</p>
+          <p className="text-muted-foreground">{t('home.noRecipes')}</p>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
             {recipes.map((recipe) => (
@@ -453,7 +455,7 @@ export function Home({
 
         {/* Backups */}
         <div className="flex items-center justify-between mt-6 mb-3">
-          <h3 className="text-lg font-semibold">Backups</h3>
+          <h3 className="text-lg font-semibold">{t('home.backups')}</h3>
           <Button
             size="sm"
             variant="outline"
@@ -466,14 +468,14 @@ export function Home({
                 : api.backupBeforeUpgrade();
               backupPromise
                 .then((info) => {
-                  setBackupMessage(`Created backup: ${info.name}`);
+                  setBackupMessage(t('home.backupCreated', { name: info.name }));
                   refreshBackups();
                 })
-                .catch((e) => setBackupMessage(`Backup failed: ${e}`))
+                .catch((e) => setBackupMessage(t('home.backupFailed', { error: String(e) })))
                 .finally(() => setBackingUp(false));
             }}
           >
-            {backingUp ? "Creating..." : "Create Backup"}
+            {backingUp ? t('home.creating') : t('home.createBackup')}
           </Button>
         </div>
         {backupMessage && (
@@ -485,7 +487,7 @@ export function Home({
             <Skeleton className="h-16 w-full" />
           </div>
         ) : backups.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No backups available.</p>
+          <p className="text-muted-foreground text-sm">{t('home.noBackups')}</p>
         ) : (
           <div className="space-y-2">
             {backups.map((backup) => (
@@ -496,6 +498,9 @@ export function Home({
                     <div className="text-xs text-muted-foreground">
                       {formatTime(backup.createdAt)} — {formatBytes(backup.sizeBytes)}
                     </div>
+                    {isRemote && backup.path && (
+                      <div className="text-xs text-muted-foreground mt-0.5 font-mono">{backup.path}</div>
+                    )}
                   </div>
                   <div className="flex gap-1.5">
                     {!isRemote && (
@@ -504,24 +509,24 @@ export function Home({
                         variant="outline"
                         onClick={() => api.openUrl(backup.path)}
                       >
-                        Show
+                        {t('home.show')}
                       </Button>
                     )}
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button size="sm" variant="outline">
-                          Restore
+                          {t('home.restore')}
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Restore from backup?</AlertDialogTitle>
+                          <AlertDialogTitle>{t('home.restoreTitle')}</AlertDialogTitle>
                           <AlertDialogDescription>
-                            This will restore config and workspace files from backup "{backup.name}". Current files will be overwritten.
+                            {t('home.restoreDescription', { name: backup.name })}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                           <AlertDialogAction
                             onClick={() => {
                               const restorePromise = isRemote
@@ -529,10 +534,10 @@ export function Home({
                                 : api.restoreFromBackup(backup.name);
                               restorePromise
                                 .then((msg) => setBackupMessage(msg))
-                                .catch((e) => setBackupMessage(`Restore failed: ${e}`));
+                                .catch((e) => setBackupMessage(t('home.restoreFailed', { error: String(e) })));
                             }}
                           >
-                            Restore
+                            {t('home.restore')}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -540,18 +545,18 @@ export function Home({
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button size="sm" variant="destructive">
-                          Delete
+                          {t('home.delete')}
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Delete backup?</AlertDialogTitle>
+                          <AlertDialogTitle>{t('home.deleteBackupTitle')}</AlertDialogTitle>
                           <AlertDialogDescription>
-                            This will permanently delete backup "{backup.name}". This action cannot be undone.
+                            {t('home.deleteBackupDescription', { name: backup.name })}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                           <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => {
@@ -560,13 +565,13 @@ export function Home({
                                 : api.deleteBackup(backup.name);
                               deletePromise
                                 .then(() => {
-                                  setBackupMessage(`Deleted backup "${backup.name}"`);
+                                  setBackupMessage(t('home.deletedBackup', { name: backup.name }));
                                   refreshBackups();
                                 })
-                                .catch((e) => setBackupMessage(`Delete failed: ${e}`));
+                                .catch((e) => setBackupMessage(t('home.deleteBackupFailed', { error: String(e) })));
                             }}
                           >
-                            Delete
+                            {t('home.delete')}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { check } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { Home } from "./pages/Home";
 import { Recipes } from "./pages/Recipes";
 import { Cook } from "./pages/Cook";
@@ -34,6 +37,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { DiscordGuildChannel, SshHost } from "./lib/types";
 
+const PING_URL = "";
+
 type Route = "home" | "recipes" | "cook" | "history" | "channels" | "doctor" | "settings";
 
 interface ToastItem {
@@ -45,6 +50,7 @@ interface ToastItem {
 let toastIdCounter = 0;
 
 export function App() {
+  const { t } = useTranslation();
   const [route, setRoute] = useState<Route>("home");
   const [recipeId, setRecipeId] = useState<string | null>(null);
   const [recipeSource, setRecipeSource] = useState<string | undefined>(undefined);
@@ -63,6 +69,33 @@ export function App() {
   useEffect(() => {
     refreshHosts();
   }, [refreshHosts]);
+
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+
+  // Startup: check for updates + analytics ping
+  useEffect(() => {
+    let installId = localStorage.getItem("clawpal_install_id");
+    if (!installId) {
+      installId = crypto.randomUUID();
+      localStorage.setItem("clawpal_install_id", installId);
+    }
+
+    // Silent update check
+    check()
+      .then((update) => { if (update) setAppUpdateAvailable(true); })
+      .catch(() => {});
+
+    // Analytics ping (fire-and-forget)
+    getVersion().then((version) => {
+      const url = PING_URL;
+      if (!url) return;
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ v: version, id: installId, platform: navigator.platform }),
+      }).catch(() => {});
+    }).catch(() => {});
+  }, []);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
@@ -90,10 +123,10 @@ export function App() {
         .then(() => setConnectionStatus((prev) => ({ ...prev, [id]: "connected" })))
         .catch((e) => {
           setConnectionStatus((prev) => ({ ...prev, [id]: "error" }));
-          showToast(`SSH connection failed: ${e}`, "error");
+          showToast(t('config.sshFailed', { error: String(e) }), "error");
         });
     }
-  }, [showToast]);
+  }, [showToast, t]);
 
   // Config dirty state
   const [dirty, setDirty] = useState(false);
@@ -190,7 +223,7 @@ export function App() {
         setShowApplyDialog(false);
         setDirty(false);
         bumpConfigVersion();
-        showToast("Gateway restarted successfully");
+        showToast(t('config.gatewayRestarted'));
       })
       .catch((e) => setApplyError(String(e)))
       .finally(() => setApplying(false));
@@ -205,9 +238,9 @@ export function App() {
         setShowDiscardDialog(false);
         setDirty(false);
         bumpConfigVersion();
-        showToast("Changes discarded");
+        showToast(t('config.changesDiscarded'));
       })
-      .catch((e) => showToast(`Discard failed: ${e}`, "error"));
+      .catch((e) => showToast(t('config.discardFailed', { error: String(e) }), "error"));
   };
 
   return (
@@ -235,7 +268,7 @@ export function App() {
             )}
             onClick={() => setRoute("home")}
           >
-            Home
+            {t('nav.home')}
           </Button>
           <Button
             variant="ghost"
@@ -245,7 +278,7 @@ export function App() {
             )}
             onClick={() => setRoute("recipes")}
           >
-            Recipes
+            {t('nav.recipes')}
           </Button>
           <Button
             variant="ghost"
@@ -255,7 +288,7 @@ export function App() {
             )}
             onClick={() => setRoute("channels")}
           >
-            Channels
+            {t('nav.channels')}
           </Button>
           <Button
             variant="ghost"
@@ -265,7 +298,7 @@ export function App() {
             )}
             onClick={() => setRoute("history")}
           >
-            History
+            {t('nav.history')}
           </Button>
           <Button
             variant="ghost"
@@ -275,7 +308,7 @@ export function App() {
             )}
             onClick={() => setRoute("doctor")}
           >
-            Doctor
+            {t('nav.doctor')}
           </Button>
           <Separator className="my-2" />
           <Button
@@ -286,7 +319,10 @@ export function App() {
             )}
             onClick={() => setRoute("settings")}
           >
-            Settings
+            {t('nav.settings')}
+            {appUpdateAvailable && (
+              <span className="ml-1.5 w-2 h-2 rounded-full bg-destructive inline-block" />
+            )}
           </Button>
         </nav>
 
@@ -296,7 +332,7 @@ export function App() {
             className="hover:text-foreground transition-colors"
             onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.zhixian.io"); }}
           >
-            Website
+            {t('nav.website')}
           </a>
           <span>·</span>
           <a
@@ -312,13 +348,13 @@ export function App() {
         {dirty && (
           <div className="px-2 pb-2 space-y-1.5">
             <Separator className="mb-2" />
-            <p className="text-xs text-center text-muted-foreground px-1">Pending changes</p>
+            <p className="text-xs text-center text-muted-foreground px-1">{t('config.pendingChanges')}</p>
             <Button
               className="w-full"
               size="sm"
               onClick={handleApplyClick}
             >
-              Apply Changes
+              {t('config.applyChanges')}
             </Button>
             <Button
               className="w-full"
@@ -326,7 +362,7 @@ export function App() {
               variant="outline"
               onClick={() => setShowDiscardDialog(true)}
             >
-              Discard
+              {t('config.discard')}
             </Button>
           </div>
         )}
@@ -341,7 +377,7 @@ export function App() {
             className="absolute top-4 right-4 z-10"
             onClick={() => setChatOpen(true)}
           >
-            Chat
+            {t('nav.chat')}
           </Button>
         )}
 
@@ -374,7 +410,7 @@ export function App() {
             }}
           />
         )}
-        {route === "cook" && !recipeId && <p>No recipe selected.</p>}
+        {route === "cook" && !recipeId && <p>{t('config.noRecipeSelected')}</p>}
         {route === "channels" && (
           <Channels
             key={`${activeInstance}-${configVersion}`}
@@ -384,7 +420,12 @@ export function App() {
         {route === "history" && <History key={`${activeInstance}-${configVersion}`} />}
         {route === "doctor" && <Doctor />}
         {route === "settings" && (
-          <Settings key={`${activeInstance}-${configVersion}`} onDataChange={bumpConfigVersion} />
+          <Settings
+            key={`${activeInstance}-${configVersion}`}
+            onDataChange={bumpConfigVersion}
+            hasAppUpdate={appUpdateAvailable}
+            onAppUpdateSeen={() => setAppUpdateAvailable(false)}
+          />
         )}
       </main>
 
@@ -392,7 +433,7 @@ export function App() {
       {chatOpen && (
         <aside className="w-[360px] min-w-[360px] border-l border-border flex flex-col bg-background">
           <div className="flex items-center justify-between px-4 pt-4 pb-2">
-            <h2 className="text-lg font-semibold">Chat</h2>
+            <h2 className="text-lg font-semibold">{t('nav.chat')}</h2>
             <Button
               variant="ghost"
               size="sm"
@@ -415,10 +456,10 @@ export function App() {
     <Dialog open={showApplyDialog} onOpenChange={setShowApplyDialog}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Apply Changes</DialogTitle>
+          <DialogTitle>{t('config.applyTitle')}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Review config changes. Applying will restart the gateway.
+          {t('config.applyDescription')}
         </p>
         <DiffViewer oldValue={applyDiffBaseline} newValue={applyDiffCurrent} />
         {applyError && (
@@ -426,10 +467,10 @@ export function App() {
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setShowApplyDialog(false)} disabled={applying}>
-            Cancel
+            {t('config.cancel')}
           </Button>
           <Button onClick={handleApplyConfirm} disabled={applying}>
-            {applying ? "Applying..." : "Apply & Restart Gateway"}
+            {applying ? t('config.applying') : t('config.applyRestart')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -439,18 +480,18 @@ export function App() {
     <AlertDialog open={showDiscardDialog} onOpenChange={setShowDiscardDialog}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Discard all pending changes?</AlertDialogTitle>
+          <AlertDialogTitle>{t('config.discardTitle')}</AlertDialogTitle>
           <AlertDialogDescription>
-            This will restore the config to its state before your recent changes. This cannot be undone.
+            {t('config.discardDescription')}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={handleDiscardConfirm}
           >
-            Discard
+            {t('config.discard')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

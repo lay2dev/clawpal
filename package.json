@@ -18,12 +18,15 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "i18next": "^25.8.11",
+    "i18next-browser-languagedetector": "^8.2.1",
     "json5": "^2.2.3",
     "lucide-react": "^0.564.0",
     "radix-ui": "^1.4.3",
     "react": "^18.3.1",
     "react-diff-viewer-continued": "^4.1.2",
     "react-dom": "^18.3.1",
+    "react-i18next": "^16.5.4",
     "tailwind-merge": "^3.4.1"
   },
   "devDependencies": {

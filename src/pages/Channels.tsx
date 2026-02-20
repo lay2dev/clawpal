@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { AgentOverview, Binding, ChannelNode, DiscordGuildChannel, ModelProfile } from "../lib/types";
 import { api } from "../lib/api";
 import { useInstance } from "@/lib/instance-context";
@@ -57,6 +58,7 @@ export function Channels({
 }: {
   showToast?: (message: string, type?: "success" | "error") => void;
 }) {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [agents, setAgents] = useState<AgentOverview[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
@@ -128,7 +130,7 @@ export function Channels({
     api.refreshDiscordGuildChannels()
       .then((channels) => {
         setDiscordChannels(channels);
-        showToast?.("Discord channels refreshed", "success");
+        showToast?.(t('channels.discordRefreshed'), "success");
       })
       .catch((e) => showToast?.(String(e), "error"))
       .finally(() => setRefreshing(null));
@@ -140,7 +142,7 @@ export function Channels({
     api.listChannelsMinimal()
       .then((nodes) => {
         setChannelNodes(nodes);
-        showToast?.(`${PLATFORM_LABELS[platform] || platform} channels refreshed`, "success");
+        showToast?.(t('channels.platformRefreshed', { platform: PLATFORM_LABELS[platform] || platform }), "success");
       })
       .catch((e) => showToast?.(String(e), "error"))
       .finally(() => setRefreshing(null));
@@ -226,12 +228,12 @@ export function Channels({
       >
         <SelectTrigger size="sm" className="text-xs">
           <SelectValue>
-            {currentAgent ? agentDisplayLabel(currentAgent) : "main (default)"}
+            {currentAgent ? agentDisplayLabel(currentAgent) : t('channels.mainDefault')}
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="__default__">
-            <span className="text-muted-foreground">main (default)</span>
+            <span className="text-muted-foreground">{t('channels.mainDefault')}</span>
           </SelectItem>
           {agentGroups.map((group, gi) => (
             <SelectGroup key={group.agents[0].workspace || group.agents[0].id}>
@@ -243,7 +245,7 @@ export function Channels({
                 <SelectItem key={a.id} value={a.id}>
                   <code className="text-xs">{a.id}</code>
                   <span className="text-muted-foreground ml-1.5 text-xs">
-                    {a.model || "default model"}
+                    {a.model || t('channels.defaultModel')}
                   </span>
                 </SelectItem>
               ))}
@@ -252,7 +254,7 @@ export function Channels({
           <>
             <SelectSeparator />
             <SelectItem value="__new__">
-              <span className="text-primary">+ New agent...</span>
+              <span className="text-primary">{t('channels.newAgent')}</span>
             </SelectItem>
           </>
         </SelectContent>
@@ -265,11 +267,11 @@ export function Channels({
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">Channels</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('channels.title')}</h2>
 
       {!hasDiscord && !hasOther && (
         <p className="text-muted-foreground">
-          No channels configured. Add channel plugins in your OpenClaw config, then refresh to see them here.
+          {t('channels.noChannels')}
         </p>
       )}
 
@@ -287,16 +289,16 @@ export function Channels({
                 onClick={handleRefreshDiscord}
                 disabled={refreshing === "discord"}
               >
-                {refreshing === "discord" ? "Refreshing..." : "Refresh"}
+                {refreshing === "discord" ? t('channels.refreshing') : t('channels.refresh')}
               </Button>
               )}
             </div>
 
             {discordChannels === null ? (
-              <p className="text-sm text-muted-foreground animate-pulse">Loading Discord channels...</p>
+              <p className="text-sm text-muted-foreground animate-pulse">{t('channels.loadingDiscord')}</p>
             ) : discordGuilds.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No Discord channels cached. Click "Refresh" to discover channels from Discord.
+                {t('channels.noDiscordChannels')}
               </p>
             ) : (
               <div className="space-y-4">
@@ -336,7 +338,7 @@ export function Channels({
                   onClick={() => handleRefreshPlatform(platform)}
                   disabled={refreshing === platform}
                 >
-                  {refreshing === platform ? "Refreshing..." : "Refresh"}
+                  {refreshing === platform ? t('channels.refreshing') : t('channels.refresh')}
                 </Button>
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { useInstance } from "@/lib/instance-context";
 import { initialState, reducer } from "@/lib/state";
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 
 export function Doctor() {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [state, dispatch] = useReducer(reducer, initialState);
   const [rawOutput, setRawOutput] = useState<string | null>(null);
@@ -100,11 +102,11 @@ export function Doctor() {
       if (!isConnected) return;
       api.remoteListSessionFiles(instanceId)
         .then(setSessionFiles)
-        .catch(() => setDataMessage("Failed to load remote session files"));
+        .catch(() => setDataMessage(t('doctor.failedLoadRemoteSessions')));
     } else {
       api.listSessionFiles()
         .then(setSessionFiles)
-        .catch(() => setDataMessage("Failed to load session files"));
+        .catch(() => setDataMessage(t('doctor.failedLoadSessions')));
     }
   }
 
@@ -134,7 +136,7 @@ export function Doctor() {
       runDoctorCmd()
         .then((report) => dispatch({ type: "setDoctor", doctor: report }))
         .catch(() =>
-          dispatch({ type: "setMessage", message: "Failed to run doctor" }),
+          dispatch({ type: "setMessage", message: t('doctor.failedRunDoctor') }),
         );
     }
     refreshData();
@@ -148,7 +150,7 @@ export function Doctor() {
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">Doctor</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('doctor.title')}</h2>
 
       {/* Config Diagnostics — local only */}
       {!isRemote && (
@@ -156,7 +158,7 @@ export function Doctor() {
           {state.doctor && (
             <div>
               <p className="text-sm text-muted-foreground mb-3">
-                Health score: {state.doctor.score}
+                {t('doctor.healthScore', { score: state.doctor.score })}
               </p>
               <div className="space-y-2">
                 {state.doctor.issues.map((issue) => (
@@ -187,12 +189,12 @@ export function Doctor() {
                             .catch(() =>
                               dispatch({
                                 type: "setMessage",
-                                message: "Failed to fix issue",
+                                message: t('doctor.failedFix'),
                               }),
                             );
                         }}
                       >
-                        fix
+                        {t('doctor.fix')}
                       </Button>
                     )}
                   </div>
@@ -211,13 +213,13 @@ export function Doctor() {
                       .catch(() =>
                         dispatch({
                           type: "setMessage",
-                          message: "Failed to fix all issues",
+                          message: t('doctor.failedFixAll'),
                         }),
                       );
                   }}
                   disabled={!autoFixable.length}
                 >
-                  Fix all auto issues
+                  {t('doctor.fixAll')}
                 </Button>
                 <Button
                   variant="outline"
@@ -233,17 +235,17 @@ export function Doctor() {
                       .catch(() =>
                         dispatch({
                           type: "setMessage",
-                          message: "Refresh failed",
+                          message: t('doctor.refreshFailed'),
                         }),
                       )
                       .finally(() => setRefreshing(false));
                   }}
                 >
-                  {refreshing ? "Refreshing..." : "Refresh"}
+                  {refreshing ? t('doctor.refreshing') : t('doctor.refresh')}
                 </Button>
                 {lastRefreshed && (
                   <span className="text-xs text-muted-foreground ml-2">
-                    Last refreshed: {lastRefreshed}
+                    {t('doctor.lastRefreshed', { time: lastRefreshed })}
                   </span>
                 )}
               </div>
@@ -258,7 +260,7 @@ export function Doctor() {
                   )
               }
             >
-              Run Doctor
+              {t('doctor.runDoctor')}
             </Button>
           ) : null}
           <p className="text-sm text-muted-foreground mt-2">{state.message}</p>
@@ -267,7 +269,7 @@ export function Doctor() {
 
       {/* Data Cleanup */}
       <h3 className="text-lg font-semibold mt-6 mb-3">
-        Data Cleanup
+        {t('doctor.dataCleanup')}
       </h3>
       {dataMessage && (
         <p className="text-sm text-muted-foreground mt-2">{dataMessage}</p>
@@ -278,7 +280,7 @@ export function Doctor() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
-              <span>Sessions</span>
+              <span>{t('doctor.sessions')}</span>
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -294,27 +296,27 @@ export function Doctor() {
                         setExpandedAgents(new Set());
                         setSelectedSessions(new Map());
                       })
-                      .catch(() => setDataMessage("Failed to analyze sessions"))
+                      .catch(() => setDataMessage(t('doctor.failedAnalyze')))
                       .finally(() => setAnalyzing(false));
                   }}
                 >
-                  {analyzing ? "Analyzing..." : "Analyze"}
+                  {analyzing ? t('doctor.analyzing') : t('doctor.analyze')}
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button size="sm" variant="destructive" disabled={sessionFiles.length === 0}>
-                      Clear all
+                      {t('doctor.clearAll')}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Clear all sessions?</AlertDialogTitle>
+                      <AlertDialogTitle>{t('doctor.clearAllTitle')}</AlertDialogTitle>
                       <AlertDialogDescription>
-                        This will permanently delete {sessionFiles.length} session file(s). This action cannot be undone.
+                        {t('doctor.clearAllDescription', { count: sessionFiles.length })}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                       <AlertDialogAction
                         className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onClick={() => {
@@ -323,14 +325,14 @@ export function Doctor() {
                             : api.clearAllSessions();
                           clearPromise
                             .then((count) => {
-                              setDataMessage(`Cleared ${count} session file(s)`);
+                              setDataMessage(t('doctor.clearedSessions', { count }));
                               setSessionAnalysis(null);
                               refreshData();
                             })
-                            .catch(() => setDataMessage("Failed to clear sessions"));
+                            .catch(() => setDataMessage(t('doctor.failedClear')));
                         }}
                       >
-                        Clear
+                        {t('doctor.clear')}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -340,7 +342,7 @@ export function Doctor() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-3">
-              {sessionFiles.length} files ({formatBytes(totalSessionBytes)})
+              {t('doctor.filesCount', { count: sessionFiles.length, size: formatBytes(totalSessionBytes) })}
             </p>
 
             {!sessionAnalysis ? (
@@ -356,7 +358,7 @@ export function Doctor() {
               /* Analysis results: two-level view */
               <div className="space-y-3">
                 {sessionAnalysis.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No session files found.</p>
+                  <p className="text-sm text-muted-foreground">{t('doctor.noSessionFiles')}</p>
                 )}
                 {sessionAnalysis.map((agentData) => {
                   const isExpanded = expandedAgents.has(agentData.agent);
@@ -376,7 +378,7 @@ export function Doctor() {
                         <div>
                           <span className="font-medium text-sm">{agentData.agent}</span>
                           <span className="text-xs text-muted-foreground ml-2">
-                            {agentData.totalFiles} files ({formatBytes(agentData.totalSizeBytes)})
+                            {t('doctor.filesCount', { count: agentData.totalFiles, size: formatBytes(agentData.totalSizeBytes) })}
                           </span>
                         </div>
                         <Button
@@ -391,7 +393,7 @@ export function Doctor() {
                             });
                           }}
                         >
-                          {isExpanded ? "\u25B2 Collapse" : "\u25BC Details"}
+                          {isExpanded ? t('doctor.collapse') : t('doctor.details')}
                         </Button>
                       </div>
 
@@ -399,17 +401,17 @@ export function Doctor() {
                       <div className="flex items-center gap-2 mb-2 flex-wrap">
                         {agentData.emptyCount > 0 && (
                           <Badge variant="destructive" className="text-xs">
-                            {agentData.emptyCount} empty
+                            {t('doctor.empty', { count: agentData.emptyCount })}
                           </Badge>
                         )}
                         {agentData.lowValueCount > 0 && (
                           <Badge variant="secondary" className="text-xs bg-yellow-500/15 text-yellow-700 dark:text-yellow-400">
-                            {agentData.lowValueCount} low value
+                            {t('doctor.lowValue', { count: agentData.lowValueCount })}
                           </Badge>
                         )}
                         {agentData.valuableCount > 0 && (
                           <Badge variant="secondary" className="text-xs bg-green-500/15 text-green-700 dark:text-green-400">
-                            {agentData.valuableCount} valuable
+                            {t('doctor.valuable', { count: agentData.valuableCount })}
                           </Badge>
                         )}
                       </div>
@@ -428,18 +430,18 @@ export function Doctor() {
                                 className="text-xs h-7"
                                 onClick={() => setDeletingCategory({ agent: agentData.agent, category: "empty" })}
                               >
-                                Clean empty
+                                {t('doctor.cleanEmpty')}
                               </Button>
                             </AlertDialogTrigger>
                             <AlertDialogContent>
                               <AlertDialogHeader>
-                                <AlertDialogTitle>Clean empty sessions?</AlertDialogTitle>
+                                <AlertDialogTitle>{t('doctor.cleanEmptyTitle')}</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  Delete {agentData.emptyCount} empty session(s) for {agentData.agent}. These sessions have no messages.
+                                  {t('doctor.cleanEmptyDescription', { count: agentData.emptyCount, agent: agentData.agent })}
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                                 <AlertDialogAction
                                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                   onClick={() => {
@@ -448,14 +450,14 @@ export function Doctor() {
                                       .map((s) => s.sessionId);
                                     deleteSessionsFn(ids)
                                       .then((count) => {
-                                        setDataMessage(`Deleted ${count} empty session(s) for ${agentData.agent}`);
+                                        setDataMessage(t('doctor.deletedEmpty', { count, agent: agentData.agent }));
                                         removeSessionsFromAnalysis(agentData.agent, new Set(ids));
                                         refreshData();
                                       })
-                                      .catch(() => setDataMessage("Failed to delete sessions"));
+                                      .catch(() => setDataMessage(t('doctor.failedDelete')));
                                   }}
                                 >
-                                  Delete
+                                  {t('home.delete')}
                                 </AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
@@ -473,18 +475,18 @@ export function Doctor() {
                                 className="text-xs h-7"
                                 onClick={() => setDeletingCategory({ agent: agentData.agent, category: "low_value" })}
                               >
-                                Clean low value
+                                {t('doctor.cleanLowValue')}
                               </Button>
                             </AlertDialogTrigger>
                             <AlertDialogContent>
                               <AlertDialogHeader>
-                                <AlertDialogTitle>Clean low-value sessions?</AlertDialogTitle>
+                                <AlertDialogTitle>{t('doctor.cleanLowValueTitle')}</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  Delete {agentData.lowValueCount} low-value session(s) for {agentData.agent}. These are old sessions with minimal interaction.
+                                  {t('doctor.cleanLowValueDescription', { count: agentData.lowValueCount, agent: agentData.agent })}
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                                 <AlertDialogAction
                                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                   onClick={() => {
@@ -493,14 +495,14 @@ export function Doctor() {
                                       .map((s) => s.sessionId);
                                     deleteSessionsFn(ids)
                                       .then((count) => {
-                                        setDataMessage(`Deleted ${count} low-value session(s) for ${agentData.agent}`);
+                                        setDataMessage(t('doctor.deletedLowValue', { count, agent: agentData.agent }));
                                         removeSessionsFromAnalysis(agentData.agent, new Set(ids));
                                         refreshData();
                                       })
-                                      .catch(() => setDataMessage("Failed to delete sessions"));
+                                      .catch(() => setDataMessage(t('doctor.failedDelete')));
                                   }}
                                 >
-                                  Delete
+                                  {t('home.delete')}
                                 </AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
@@ -511,25 +513,25 @@ export function Doctor() {
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
                                 <Button size="sm" variant="destructive" className="text-xs h-7">
-                                  Delete {agentSelected.size} selected
+                                  {t('doctor.deleteSelected', { count: agentSelected.size })}
                                 </Button>
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle>Delete selected sessions?</AlertDialogTitle>
+                                  <AlertDialogTitle>{t('doctor.deleteSelectedTitle')}</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    Delete {agentSelected.size} session(s) for {agentData.agent}. This cannot be undone.
+                                    {t('doctor.deleteSelectedDescription', { count: agentSelected.size, agent: agentData.agent })}
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                                   <AlertDialogAction
                                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                     onClick={() => {
                                       const ids = Array.from(agentSelected);
                                       deleteSessionsFn(ids)
                                         .then((count) => {
-                                          setDataMessage(`Deleted ${count} session(s) for ${agentData.agent}`);
+                                          setDataMessage(t('doctor.deletedSelected', { count, agent: agentData.agent }));
                                           removeSessionsFromAnalysis(agentData.agent, new Set(ids));
                                           setSelectedSessions((prev) => {
                                             const next = new Map(prev);
@@ -538,10 +540,10 @@ export function Doctor() {
                                           });
                                           refreshData();
                                         })
-                                        .catch(() => setDataMessage("Failed to delete sessions"));
+                                        .catch(() => setDataMessage(t('doctor.failedDelete')));
                                     }}
                                   >
-                                    Delete
+                                    {t('home.delete')}
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
@@ -558,7 +560,7 @@ export function Doctor() {
                                 });
                               }}
                             >
-                              Deselect
+                              {t('doctor.deselect')}
                             </Button>
                           </>
                         )}
@@ -620,14 +622,14 @@ export function Doctor() {
                                       : api.previewSession(agentData.agent, session.sessionId);
                                     previewPromise
                                       .then(setPreviewMessages)
-                                      .catch(() => setPreviewMessages([{ role: "error", content: "Failed to load session" }]))
+                                      .catch(() => setPreviewMessages([{ role: "error", content: t('doctor.failedLoadSession') }]))
                                       .finally(() => setPreviewLoading(false));
                                   }}
                                 >
                                   {session.sessionId.slice(0, 8)}
                                 </button>
                                 <span className="w-16 text-right">{formatBytes(session.sizeBytes)}</span>
-                                <span className="w-16 text-right">{session.messageCount} msgs</span>
+                                <span className="w-16 text-right">{t('doctor.msgs', { count: session.messageCount })}</span>
                                 <span className="w-12 text-right text-muted-foreground">{ageLabel}</span>
                                 <span className="w-16 truncate text-muted-foreground" title={session.model || ""}>
                                   {session.model || "—"}
@@ -652,9 +654,9 @@ export function Doctor() {
       {/* Backups — local only */}
       {!isRemote && (
       <>
-      <h3 className="text-lg font-semibold mt-6 mb-3">Backups</h3>
+      <h3 className="text-lg font-semibold mt-6 mb-3">{t('doctor.backups')}</h3>
       {backups.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No backups available.</p>
+        <p className="text-muted-foreground text-sm">{t('doctor.noBackups')}</p>
       ) : (
         <div className="space-y-2">
           {backups.map((backup) => (
@@ -672,31 +674,31 @@ export function Doctor() {
                     variant="outline"
                     onClick={() => api.openUrl(backup.path)}
                   >
-                    Show
+                    {t('doctor.show')}
                   </Button>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
                       <Button size="sm" variant="outline">
-                        Restore
+                        {t('doctor.restore')}
                       </Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Restore from backup?</AlertDialogTitle>
+                        <AlertDialogTitle>{t('doctor.restoreTitle')}</AlertDialogTitle>
                         <AlertDialogDescription>
-                          This will restore config and workspace files from backup "{backup.name}". Current files will be overwritten. Session data will not be affected.
+                          {t('doctor.restoreDescription', { name: backup.name })}
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => {
                             api.restoreFromBackup(backup.name)
                               .then((msg) => setDataMessage(msg))
-                              .catch(() => setDataMessage("Restore failed"));
+                              .catch(() => setDataMessage(t('doctor.restoreFailed')));
                           }}
                         >
-                          Restore
+                          {t('doctor.restore')}
                         </AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
@@ -704,30 +706,30 @@ export function Doctor() {
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
                       <Button size="sm" variant="destructive">
-                        Delete
+                        {t('home.delete')}
                       </Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Delete backup?</AlertDialogTitle>
+                        <AlertDialogTitle>{t('doctor.deleteBackupTitle')}</AlertDialogTitle>
                         <AlertDialogDescription>
-                          This will permanently delete backup "{backup.name}". This action cannot be undone.
+                          {t('doctor.deleteBackupDescription', { name: backup.name })}
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                         <AlertDialogAction
                           className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                           onClick={() => {
                             api.deleteBackup(backup.name)
                               .then(() => {
-                                setDataMessage(`Deleted backup "${backup.name}"`);
+                                setDataMessage(t('doctor.deletedBackup', { name: backup.name }));
                                 api.listBackups().then(setBackups).catch(() => {});
                               })
-                              .catch(() => setDataMessage("Delete failed"));
+                              .catch(() => setDataMessage(t('doctor.deleteBackupFailed')));
                           }}
                         >
-                          Delete
+                          {t('home.delete')}
                         </AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
@@ -747,9 +749,9 @@ export function Doctor() {
             <DialogTitle className="font-mono text-sm">{previewTitle}</DialogTitle>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto space-y-3 text-sm">
-            {previewLoading && <p className="text-muted-foreground">Loading...</p>}
+            {previewLoading && <p className="text-muted-foreground">{t('doctor.loading')}</p>}
             {!previewLoading && previewMessages.length === 0 && (
-              <p className="text-muted-foreground">No messages in this session.</p>
+              <p className="text-muted-foreground">{t('doctor.noMessages')}</p>
             )}
             {previewMessages.map((msg, i) => (
               <div key={i} className={`rounded-md p-2 ${msg.role === "user" ? "bg-muted" : msg.role === "assistant" ? "bg-primary/5" : "bg-destructive/10"}`}>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { useInstance } from "@/lib/instance-context";
 import { DiffViewer } from "../components/DiffViewer";
@@ -15,6 +16,7 @@ import type { HistoryItem, PreviewResult } from "../lib/types";
 import { formatTime } from "@/lib/utils";
 
 export function History() {
+  const { t } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
@@ -25,11 +27,11 @@ export function History() {
       if (!isConnected) return;
       return api.remoteListHistory(instanceId)
         .then((resp) => setHistory(resp.items))
-        .catch(() => setMessage("Failed to load history"));
+        .catch(() => setMessage(t('history.failedLoad')));
     }
     return api.listHistory(50, 0)
       .then((resp) => setHistory(resp.items))
-      .catch(() => setMessage("Failed to load history"));
+      .catch(() => setMessage(t('history.failedLoad')));
   };
 
   useEffect(() => {
@@ -43,7 +45,7 @@ export function History() {
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">History</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('history.title')}</h2>
       <div className="space-y-3">
         {history.map((item) => {
           const isRollback = item.source === "rollback";
@@ -55,12 +57,16 @@ export function History() {
                   <span className="text-muted-foreground">{formatTime(item.createdAt)}</span>
                   {isRollback ? (
                     <>
-                      <Badge variant="outline">rollback</Badge>
+                      <Badge variant="outline">{t('history.rollback')}</Badge>
                       <span className="text-muted-foreground">
-                        Reverted {rollbackTarget
-                          ? `"${rollbackTarget.recipeId || "manual"}" from ${formatTime(rollbackTarget.createdAt)}`
-                          : item.recipeId || "unknown"
-                        }
+                        {t('history.reverted', {
+                          details: rollbackTarget
+                            ? t('history.revertedRecipe', {
+                                recipeId: rollbackTarget.recipeId || t('history.manual'),
+                                time: formatTime(rollbackTarget.createdAt),
+                              })
+                            : item.recipeId || t('history.unknown'),
+                        })}
                       </span>
                     </>
                   ) : (
@@ -70,7 +76,7 @@ export function History() {
                     </>
                   )}
                   {!item.canRollback && !isRollback && (
-                    <Badge variant="outline" className="text-muted-foreground">not rollbackable</Badge>
+                    <Badge variant="outline" className="text-muted-foreground">{t('history.notRollbackable')}</Badge>
                   )}
                 </div>
                 {!isRollback && (
@@ -90,7 +96,7 @@ export function History() {
                       }}
                       disabled={!item.canRollback}
                     >
-                      Preview
+                      {t('history.preview')}
                     </Button>
                     <Button
                       variant="destructive"
@@ -102,7 +108,7 @@ export function History() {
                           } else {
                             await api.rollback(item.id);
                           }
-                          setMessage("Rollback completed");
+                          setMessage(t('history.rollbackCompleted'));
                           await refreshHistory();
                         } catch (err) {
                           setMessage(String(err));
@@ -110,7 +116,7 @@ export function History() {
                       }}
                       disabled={!item.canRollback}
                     >
-                      Rollback
+                      {t('history.rollbackBtn')}
                     </Button>
                   </div>
                 )}
@@ -120,7 +126,7 @@ export function History() {
         })}
       </div>
       <Button variant="outline" onClick={refreshHistory} className="mt-3">
-        Refresh
+        {t('history.refresh')}
       </Button>
       {message && (
         <p className="text-sm text-muted-foreground mt-2">{message}</p>
@@ -130,7 +136,7 @@ export function History() {
       <Dialog open={!!preview} onOpenChange={(open) => { if (!open) setPreview(null); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Rollback Preview</DialogTitle>
+            <DialogTitle>{t('history.rollbackPreview')}</DialogTitle>
           </DialogHeader>
           {preview && (
             <DiffViewer

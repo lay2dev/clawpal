@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,6 +46,7 @@ export function InstanceTabBar({
   onSelect,
   onHostsChange,
 }: InstanceTabBarProps) {
+  const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingHost, setEditingHost] = useState<SshHost | null>(null);
   const [form, setForm] = useState<Omit<SshHost, "id">>(emptyHost);
@@ -120,7 +122,7 @@ export function InstanceTabBar({
           onClick={() => onSelect("local")}
         >
           {statusDot("connected")}
-          Local
+          {t('instance.local')}
         </button>
 
         {/* Remote tabs */}
@@ -164,7 +166,7 @@ export function InstanceTabBar({
           className="h-7 px-2 shrink-0 text-xs"
           onClick={openAddDialog}
         >
-          + SSH
+          {t('instance.addSsh')}
         </Button>
       </div>
 
@@ -173,21 +175,21 @@ export function InstanceTabBar({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {editingHost ? "Edit Remote Instance" : "Add Remote Instance"}
+              {editingHost ? t('instance.editRemote') : t('instance.addRemote')}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="ssh-label">Label</Label>
+              <Label htmlFor="ssh-label">{t('instance.label')}</Label>
               <Input
                 id="ssh-label"
                 value={form.label}
                 onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
-                placeholder="My Server"
+                placeholder={t('instance.labelPlaceholder')}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ssh-host">Host</Label>
+              <Label htmlFor="ssh-host">{t('instance.host')}</Label>
               <Input
                 id="ssh-host"
                 value={form.host}
@@ -199,7 +201,7 @@ export function InstanceTabBar({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ssh-port">Port</Label>
+              <Label htmlFor="ssh-port">{t('instance.port')}</Label>
               <Input
                 id="ssh-port"
                 type="number"
@@ -210,19 +212,19 @@ export function InstanceTabBar({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ssh-username">Username</Label>
+              <Label htmlFor="ssh-username">{t('instance.username')}</Label>
               <Input
                 id="ssh-username"
                 value={form.username}
                 onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-                placeholder="(optional, defaults to current user)"
+                placeholder={t('instance.usernamePlaceholder')}
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Auth Method</Label>
+              <Label>{t('instance.authMethod')}</Label>
               <Select
                 value={form.authMethod}
                 onValueChange={(val) =>
@@ -238,15 +240,15 @@ export function InstanceTabBar({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ssh_config">SSH Config / Agent</SelectItem>
-                  <SelectItem value="key">Private Key</SelectItem>
-                  <SelectItem value="password">Password</SelectItem>
+                  <SelectItem value="ssh_config">{t('instance.authSshConfig')}</SelectItem>
+                  <SelectItem value="key">{t('instance.authKey')}</SelectItem>
+                  <SelectItem value="password">{t('instance.authPassword')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             {form.authMethod === "key" && (
               <div className="space-y-1.5">
-                <Label htmlFor="ssh-keypath">Key Path</Label>
+                <Label htmlFor="ssh-keypath">{t('instance.keyPath')}</Label>
                 <Input
                   id="ssh-keypath"
                   value={form.keyPath || ""}
@@ -260,7 +262,7 @@ export function InstanceTabBar({
             )}
             {form.authMethod === "password" && (
               <div className="space-y-1.5">
-                <Label htmlFor="ssh-password">Password</Label>
+                <Label htmlFor="ssh-password">{t('instance.password')}</Label>
                 <Input
                   id="ssh-password"
                   type="password"
@@ -268,17 +270,17 @@ export function InstanceTabBar({
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                 />
                 <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  Password auth requires sshpass on the system. Recommended: use SSH Config / Agent mode instead.
+                  {t('instance.passwordWarning')}
                 </p>
               </div>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
-              Cancel
+              {t('instance.cancel')}
             </Button>
             <Button onClick={handleSave} disabled={saving || !form.host}>
-              {saving ? "Saving..." : editingHost ? "Update" : "Add"}
+              {saving ? t('instance.saving') : editingHost ? t('instance.update') : t('instance.add')}
             </Button>
           </DialogFooter>
         </DialogContent>

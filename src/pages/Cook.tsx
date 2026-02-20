@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { ParamForm } from "../components/ParamForm";
 import { resolveSteps, executeStep, type ResolvedStep } from "../lib/actions";
@@ -20,6 +21,7 @@ export function Cook({
   onDone?: () => void;
   recipeSource?: string;
 }) {
+  const { t } = useTranslation();
   const { instanceId, isRemote, discordGuildChannels } = useInstance();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [params, setParams] = useState<Record<string, string>>({});
@@ -99,7 +101,7 @@ export function Cook({
     }).catch(() => { /* ignore config read errors */ });
   }, [recipe, params.guild_id, params.channel_id, isRemote, instanceId]);
 
-  if (!recipe) return <div>Recipe not found</div>;
+  if (!recipe) return <div>{t('cook.recipeNotFound')}</div>;
 
   const handleNext = () => {
     const steps = resolveSteps(recipe.steps, params);
@@ -200,7 +202,7 @@ export function Cook({
           values={params}
           onChange={(id, value) => setParams((prev) => ({ ...prev, [id]: value }))}
           onSubmit={handleNext}
-          submitLabel="Next"
+          submitLabel={t('cook.next')}
         />
       )}
 
@@ -217,7 +219,7 @@ export function Cook({
                     <div className="text-sm font-medium">
                       {step.label}
                       {stepStatuses[i] === "skipped" && phase === "confirm" && (
-                        <span className="text-xs text-muted-foreground ml-2">(skipped — empty params)</span>
+                        <span className="text-xs text-muted-foreground ml-2">{t('cook.skippedEmpty')}</span>
                       )}
                     </div>
                     {step.description !== step.label && stepStatuses[i] !== "skipped" && (
@@ -229,10 +231,10 @@ export function Cook({
                     {stepStatuses[i] === "failed" && (
                       <div className="flex gap-2 mt-1.5">
                         <Button size="sm" variant="outline" onClick={() => handleRetry(i)}>
-                          Retry
+                          {t('cook.retry')}
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => handleSkip(i)}>
-                          Skip
+                          {t('cook.skip')}
                         </Button>
                       </div>
                     )}
@@ -242,8 +244,8 @@ export function Cook({
             </div>
             {phase === "confirm" && (
               <div className="flex gap-2 mt-4">
-                <Button onClick={handleExecute}>Execute</Button>
-                <Button variant="outline" onClick={() => setPhase("params")}>Back</Button>
+                <Button onClick={handleExecute}>{t('cook.execute')}</Button>
+                <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.back')}</Button>
               </div>
             )}
           </CardContent>
@@ -255,16 +257,16 @@ export function Cook({
           <CardContent className="py-8 text-center">
             <div className="text-2xl mb-2">&#10003;</div>
             <p className="text-lg font-medium">
-              {doneCount} step{doneCount !== 1 ? "s" : ""} completed
-              {skippedCount > 0 && `, ${skippedCount} skipped`}
+              {t('cook.stepsCompleted', { done: doneCount })}
+              {skippedCount > 0 && t('cook.stepsSkipped', { skipped: skippedCount })}
             </p>
             {needsRestart && (
               <p className="text-sm text-muted-foreground mt-1">
-                Use "Apply Changes" in the sidebar to restart the gateway and activate config changes.
+                {t('cook.applyHint')}
               </p>
             )}
             <Button className="mt-4" onClick={onDone}>
-              Done
+              {t('cook.done')}
             </Button>
           </CardContent>
         </Card>

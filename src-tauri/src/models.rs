@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use dirs::home_dir;
@@ -36,7 +37,22 @@ pub fn resolve_paths() -> OpenClawPaths {
     let openclaw_dir =
         env_path("CLAWPAL_OPENCLAW_DIR").or_else(|| env_path("OPENCLAW_HOME")).unwrap_or_else(|| home.join(".openclaw"));
     let clawpal_dir =
-        env_path("CLAWPAL_DATA_DIR").unwrap_or_else(|| openclaw_dir.join(".clawpal"));
+        env_path("CLAWPAL_DATA_DIR").unwrap_or_else(|| home.join(".clawpal"));
+
+    // Migrate: ~/.openclaw/.clawpal → ~/.clawpal
+    let legacy_dir = openclaw_dir.join(".clawpal");
+    if legacy_dir.is_dir() {
+        if !clawpal_dir.exists() {
+            // New dir doesn't exist yet — just rename
+            if let Err(e) = fs::rename(&legacy_dir, &clawpal_dir) {
+                eprintln!("Failed to migrate {:?} → {:?}: {}", legacy_dir, clawpal_dir, e);
+            }
+        } else {
+            // Both exist (ensure_dirs created new one first) — remove stale legacy
+            let _ = fs::remove_dir_all(&legacy_dir);
+        }
+    }
+
     let config_path = openclaw_dir.join("openclaw.json");
     let history_dir = clawpal_dir.join("history");
     let metadata_path = clawpal_dir.join("metadata.json");

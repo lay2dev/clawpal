@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -12,6 +13,13 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -117,7 +125,12 @@ function AutocompleteField({
   );
 }
 
-export function Settings({ onDataChange }: { onDataChange?: () => void }) {
+export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
+  onDataChange?: () => void;
+  hasAppUpdate?: boolean;
+  onAppUpdateSeen?: () => void;
+}) {
+  const { t, i18n } = useTranslation();
   const { instanceId, isRemote, isConnected } = useInstance();
   const [profiles, setProfiles] = useState<ModelProfile[] | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalogProvider[]>([]);
@@ -182,6 +195,13 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
     }
   }, []);
 
+  // Auto-trigger update check when navigated to from red dot
+  useEffect(() => {
+    if (hasAppUpdate) {
+      handleCheckForUpdates();
+      onAppUpdateSeen?.();
+    }
+  }, [hasAppUpdate]);
 
   // Extract profiles from remote config on first load
   useEffect(() => {
@@ -275,11 +295,11 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
   const upsert = (event: FormEvent) => {
     event.preventDefault();
     if (!form.provider || !form.model) {
-      setMessage("Provider and Model are required");
+      setMessage(t('settings.providerModelRequired'));
       return;
     }
     if (!isRemote && !form.apiKey && !form.id && !authSuggestion?.hasKey) {
-      setMessage("API Key is required");
+      setMessage(t('settings.apiKeyRequired'));
       return;
     }
     const profileData: ModelProfile = {
@@ -297,12 +317,12 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
       : api.upsertModelProfile(profileData);
     upsertPromise
       .then(() => {
-        setMessage("Profile saved");
+        setMessage(t('settings.profileSaved'));
         setForm(emptyForm());
         refreshProfiles();
         onDataChange?.();
       })
-      .catch((e) => setMessage(`Save failed: ${e}`));
+      .catch((e) => setMessage(t('settings.saveFailed', { error: String(e) })));
   };
 
   const editProfile = (profile: ModelProfile) => {
@@ -323,28 +343,28 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
       : api.deleteModelProfile(id);
     deletePromise
       .then(() => {
-        setMessage("Profile deleted");
+        setMessage(t('settings.profileDeleted'));
         if (form.id === id) {
           setForm(emptyForm());
         }
         refreshProfiles();
         onDataChange?.();
       })
-      .catch((e) => setMessage(`Delete failed: ${e}`));
+      .catch((e) => setMessage(t('settings.deleteFailed', { error: String(e) })));
   };
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">Settings</h2>
+      <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
 
       {/* ---- Model Profiles ---- */}
       {!isRemote && (
         <p className="text-sm text-muted-foreground mb-4">
-          For OAuth-based providers (GitHub Copilot, etc.), use the CLI:
+          {t('settings.oauthHint')}
           <code className="mx-1 px-1.5 py-0.5 bg-muted rounded text-xs">openclaw models auth login</code>
-          or
+          {t('settings.or')}
           <code className="mx-1 px-1.5 py-0.5 bg-muted rounded text-xs">openclaw models auth login-github-copilot</code>.
-          Profiles created via CLI will appear in the list on the right.
+          {t('settings.oauthHintSuffix')}
         </p>
       )}
 
@@ -353,12 +373,12 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
             {/* Create / Edit form */}
             <Card>
               <CardHeader>
-                <CardTitle>{form.id ? "Edit Profile" : "Add Profile"}</CardTitle>
+                <CardTitle>{form.id ? t('settings.editProfile') : t('settings.addProfile')}</CardTitle>
               </CardHeader>
               <CardContent>
                 <form onSubmit={upsert} className="space-y-4">
                   <div className="space-y-1.5">
-                    <Label>Provider</Label>
+                    <Label>{t('settings.provider')}</Label>
                     <AutocompleteField
                       value={form.provider}
                       onChange={(val) =>
@@ -374,7 +394,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>Model</Label>
+                    <Label>{t('settings.model')}</Label>
                     <AutocompleteField
                       value={form.model}
                       onChange={(val) =>
@@ -390,10 +410,10 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>API Key</Label>
+                    <Label>{t('settings.apiKey')}</Label>
                     <Input
                       type="password"
-                      placeholder={form.id ? "(unchanged if empty)" : authSuggestion?.hasKey ? "(optional — key already available)" : "sk-..."}
+                      placeholder={form.id ? t('settings.apiKeyUnchanged') : authSuggestion?.hasKey ? t('settings.apiKeyOptional') : t('settings.apiKeyPlaceholder')}
                       value={form.apiKey}
                       onChange={(e) =>
                         setForm((p) => ({ ...p, apiKey: e.target.value }))
@@ -401,7 +421,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                     />
                     {!form.id && authSuggestion?.hasKey && (
                       <p className="text-xs text-muted-foreground">
-                        Key available via {authSuggestion.source}. Leave empty to reuse it.
+                        {t('settings.keyAvailable', { source: authSuggestion.source })}
                       </p>
                     )}
                   </div>
@@ -414,12 +434,12 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                         setForm((p) => ({ ...p, useCustomUrl: checked === true }))
                       }
                     />
-                    <Label htmlFor="custom-url">Custom Base URL</Label>
+                    <Label htmlFor="custom-url">{t('settings.customBaseUrl')}</Label>
                   </div>
 
                   {form.useCustomUrl && (
                     <div className="space-y-1.5">
-                      <Label>Base URL</Label>
+                      <Label>{t('settings.baseUrl')}</Label>
                       <Input
                         placeholder="e.g. https://api.openai.com/v1"
                         value={form.baseUrl}
@@ -431,29 +451,29 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                   )}
 
                   <div className="flex gap-2 mt-2">
-                    <Button type="submit">Save</Button>
+                    <Button type="submit">{t('settings.save')}</Button>
                     {form.id && (
                       <>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button type="button" variant="destructive">
-                              Delete
+                              {t('settings.delete')}
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader>
-                              <AlertDialogTitle>Delete profile?</AlertDialogTitle>
+                              <AlertDialogTitle>{t('settings.deleteProfileTitle')}</AlertDialogTitle>
                               <AlertDialogDescription>
-                                This will permanently delete the profile "{form.provider}/{form.model}". This action cannot be undone.
+                                {t('settings.deleteProfileDescription', { name: `${form.provider}/${form.model}` })}
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogCancel>{t('settings.cancel')}</AlertDialogCancel>
                               <AlertDialogAction
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                 onClick={() => deleteProfile(form.id)}
                               >
-                                Delete
+                                {t('settings.delete')}
                               </AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
@@ -463,7 +483,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                           variant="outline"
                           onClick={() => setForm(emptyForm())}
                         >
-                          Cancel
+                          {t('settings.cancel')}
                         </Button>
                       </>
                     )}
@@ -475,7 +495,7 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
             {/* Current Version */}
             <Card>
               <CardHeader>
-                <CardTitle>Current Version</CardTitle>
+                <CardTitle>{t('settings.currentVersion')}</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-3 flex-wrap">
@@ -486,16 +506,16 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                     onClick={handleCheckForUpdates}
                     disabled={appUpdateChecking || appUpdating}
                   >
-                    {appUpdateChecking ? "Checking..." : "Check for Updates"}
+                    {appUpdateChecking ? t('settings.checkingUpdates') : t('settings.checkForUpdates')}
                   </Button>
                 </div>
                 {!appUpdateChecking && appUpdate && !appUpdating && (
                   <div className="flex items-center gap-2 mt-3">
                     <Badge variant="outline" className="text-primary border-primary">
-                      v{appUpdate.version} available
+                      {t('settings.updateAvailable', { version: appUpdate.version })}
                     </Badge>
                     <Button size="sm" onClick={handleAppUpdate}>
-                      Update &amp; Restart
+                      {t('settings.updateRestart')}
                     </Button>
                   </div>
                 )}
@@ -503,10 +523,10 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                   <div className="flex items-center gap-2 mt-3">
                     <Badge variant="outline" className="text-muted-foreground">
                       {appUpdateProgress !== null && appUpdateProgress < 100
-                        ? `Downloading... ${appUpdateProgress}%`
+                        ? t('settings.downloading', { progress: appUpdateProgress })
                         : appUpdateProgress === 100
-                          ? "Installing..."
-                          : "Preparing..."}
+                          ? t('settings.installing')
+                          : t('settings.preparing')}
                     </Badge>
                     {appUpdateProgress !== null && appUpdateProgress < 100 && (
                       <div className="w-32 h-1.5 bg-muted rounded-full overflow-hidden">
@@ -520,18 +540,40 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                 )}
               </CardContent>
             </Card>
+
+            {/* Language Selector */}
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('settings.language')}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-3">{t('settings.languageDescription')}</p>
+                <Select
+                  value={i18n.language?.startsWith('zh') ? 'zh' : 'en'}
+                  onValueChange={(val) => i18n.changeLanguage(val)}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="en">English</SelectItem>
+                    <SelectItem value="zh">简体中文</SelectItem>
+                  </SelectContent>
+                </Select>
+              </CardContent>
+            </Card>
             </div>
 
             {/* Profiles list */}
             <Card>
               <CardHeader>
-                <CardTitle>Model Profiles</CardTitle>
+                <CardTitle>{t('settings.modelProfiles')}</CardTitle>
               </CardHeader>
               <CardContent>
                 {profiles === null ? (
-                  <p className="text-muted-foreground">Loading profiles...</p>
+                  <p className="text-muted-foreground">{t('settings.loadingProfiles')}</p>
                 ) : profiles.length === 0 ? (
-                  <p className="text-muted-foreground">No model profiles yet.</p>
+                  <p className="text-muted-foreground">{t('settings.noProfiles')}</p>
                 ) : null}
                 <div className="grid gap-2">
                   {(profiles || []).map((profile) => (
@@ -543,16 +585,16 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                         <strong>{profile.provider}/{profile.model}</strong>
                         {profile.enabled ? (
                           <Badge className="bg-blue-100 text-blue-700 border-0">
-                            enabled
+                            {t('settings.enabled')}
                           </Badge>
                         ) : (
                           <Badge className="bg-red-100 text-red-700 border-0">
-                            disabled
+                            {t('settings.disabled')}
                           </Badge>
                         )}
                       </div>
                       <div className="text-sm text-muted-foreground mt-1">
-                        API Key: {maskedKeyMap.get(profile.id) || "..."}
+                        {t('settings.apiKey')}: {maskedKeyMap.get(profile.id) || "..."}
                       </div>
                       {profile.baseUrl && (
                         <div className="text-sm text-muted-foreground mt-0.5">
@@ -566,28 +608,28 @@ export function Settings({ onDataChange }: { onDataChange?: () => void }) {
                           type="button"
                           onClick={() => editProfile(profile)}
                         >
-                          Edit
+                          {t('settings.edit')}
                         </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button size="sm" variant="destructive" type="button">
-                              Delete
+                              {t('settings.delete')}
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader>
-                              <AlertDialogTitle>Delete profile?</AlertDialogTitle>
+                              <AlertDialogTitle>{t('settings.deleteProfileTitle')}</AlertDialogTitle>
                               <AlertDialogDescription>
-                                This will permanently delete the profile "{profile.provider}/{profile.model}". This action cannot be undone.
+                                {t('settings.deleteProfileDescription', { name: `${profile.provider}/${profile.model}` })}
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogCancel>{t('settings.cancel')}</AlertDialogCancel>
                               <AlertDialogAction
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                 onClick={() => deleteProfile(profile.id)}
                               >
-                                Delete
+                                {t('settings.delete')}
                               </AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
