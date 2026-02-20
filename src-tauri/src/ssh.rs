@@ -398,9 +398,26 @@ impl SshConnectionPool {
     }
 
     /// Execute a command with login shell setup (sources profile for PATH).
+    /// Also probes common Node version manager paths for Linux compatibility.
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
+        let target_bin = command.split_whitespace().next().unwrap_or("");
         let wrapped = format!(
-            ". \"$HOME/.profile\" 2>/dev/null; . \"$HOME/.bashrc\" 2>/dev/null; . \"$HOME/.zshrc\" 2>/dev/null; {command}"
+            concat!(
+                ". \"$HOME/.profile\" 2>/dev/null; ",
+                ". \"$HOME/.bashrc\" 2>/dev/null; ",
+                ". \"$HOME/.zshrc\" 2>/dev/null; ",
+                "export NVM_DIR=\"${{NVM_DIR:-$HOME/.nvm}}\"; ",
+                "[ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" 2>/dev/null; ",
+                "[ -s \"$HOME/.fnm/fnm\" ] && eval \"$($HOME/.fnm/fnm env)\" 2>/dev/null; ",
+                "if ! command -v {target_bin} >/dev/null 2>&1; then ",
+                  "for d in \"$HOME\"/.nvm/versions/node/*/bin; do ",
+                    "[ -x \"$d/{target_bin}\" ] && export PATH=\"$d:$PATH\" && break; ",
+                  "done; ",
+                "fi; ",
+                "{command}"
+            ),
+            target_bin = target_bin,
+            command = command
         );
         self.exec(id, &wrapped).await
     }

@@ -193,6 +193,9 @@ export function InstanceTabBar({
                 value={form.host}
                 onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))}
                 placeholder="192.168.1.100"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
             <div className="space-y-1.5">
@@ -213,6 +216,9 @@ export function InstanceTabBar({
                 value={form.username}
                 onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
                 placeholder="(optional, defaults to current user)"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
             <div className="space-y-1.5">
@@ -246,6 +252,9 @@ export function InstanceTabBar({
                   value={form.keyPath || ""}
                   onChange={(e) => setForm((f) => ({ ...f, keyPath: e.target.value }))}
                   placeholder="~/.ssh/id_rsa"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                 />
               </div>
             )}
@@ -259,7 +268,7 @@ export function InstanceTabBar({
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                 />
                 <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  Password is stored in plaintext. Prefer SSH key or SSH config for better security.
+                  Password auth requires sshpass on the system. Recommended: use SSH Config / Agent mode instead.
                 </p>
               </div>
             )}

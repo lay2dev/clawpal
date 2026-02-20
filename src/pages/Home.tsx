@@ -80,6 +80,7 @@ export function Home({
   // Health status with grace period: retry quickly when unhealthy, then slow-poll
   const [statusSettled, setStatusSettled] = useState(false);
   const retriesRef = useRef(0);
+  const remoteErrorShownRef = useRef(false);
 
   const fetchStatus = useCallback(() => {
     if (isRemote) {
@@ -87,8 +88,15 @@ export function Home({
       api.remoteGetSystemStatus(instanceId).then((s: RemoteSystemStatus) => {
         setStatus({ healthy: s.healthy, activeAgents: s.activeAgents, globalDefaultModel: s.globalDefaultModel });
         setStatusSettled(true);
+        remoteErrorShownRef.current = false;
         if (s.openclawVersion) setVersion(s.openclawVersion);
-      }).catch((e) => console.error("Failed to fetch remote status:", e));
+      }).catch((e) => {
+        console.error("Failed to fetch remote status:", e);
+        if (!remoteErrorShownRef.current) {
+          remoteErrorShownRef.current = true;
+          showToast?.(`Failed to read remote OpenClaw instance: ${e}`, "error");
+        }
+      });
     } else {
       api.getStatusLight().then((s) => {
         setStatus(s);
@@ -105,6 +113,7 @@ export function Home({
   }, [isRemote, isConnected, instanceId]);
 
   useEffect(() => {
+    remoteErrorShownRef.current = false;
     fetchStatus();
     // Poll fast (2s) while not settled, slow (10s) once settled
     const interval = setInterval(fetchStatus, statusSettled ? 10000 : 2000);
@@ -114,7 +123,16 @@ export function Home({
   const refreshAgents = useCallback(() => {
     if (isRemote) {
       if (!isConnected) return; // Wait for SSH connection
-      api.remoteListAgentsOverview(instanceId).then(setAgents).catch((e) => console.error("Failed to load remote agents:", e));
+      api.remoteListAgentsOverview(instanceId).then((a) => {
+        setAgents(a);
+        remoteErrorShownRef.current = false;
+      }).catch((e) => {
+        console.error("Failed to load remote agents:", e);
+        if (!remoteErrorShownRef.current) {
+          remoteErrorShownRef.current = true;
+          showToast?.(`Failed to load remote agents: ${e}`, "error");
+        }
+      });
       return;
     }
     api.listAgentsOverview().then(setAgents).catch((e) => console.error("Failed to load agents:", e));
@@ -259,8 +277,9 @@ export function Home({
             <div className="max-w-xs">
               {status ? (
                 <Select
-                  value={currentModelProfileId || "__none__"}
+                  value={currentModelProfileId || (status?.globalDefaultModel ? "__raw__" : "__none__")}
                   onValueChange={(val) => {
+                    if (val === "__raw__") return;
                     setSavingModel(true);
                     const setModelPromise = isRemote
                       ? (() => {
@@ -283,6 +302,11 @@ export function Home({
                     <SelectItem value="__none__">
                       <span className="text-muted-foreground">not set</span>
                     </SelectItem>
+                    {status?.globalDefaultModel && !currentModelProfileId && (
+                      <SelectItem value="__raw__">
+                        {status.globalDefaultModel}
+                      </SelectItem>
+                    )}
                     {modelProfiles.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.provider}/{p.model}

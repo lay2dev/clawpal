@@ -153,6 +153,8 @@ export function App() {
       }
       api.listDiscordGuildChannels().then(setDiscordGuildChannels).catch((e) => console.error("Failed to load Discord channels:", e));
     } else if (isConnected) {
+      api.remoteExtractModelProfilesFromConfig(activeInstance)
+        .catch((e) => console.error("Failed to extract remote model profiles:", e));
       api.remoteListDiscordGuildChannels(activeInstance).then(setDiscordGuildChannels).catch((e) => console.error("Failed to load remote Discord channels:", e));
     }
   }, [activeInstance, isConnected]);

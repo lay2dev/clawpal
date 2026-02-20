@@ -4321,9 +4321,12 @@ pub async fn remote_read_raw_config(pool: State<'_, SshConnectionPool>, host_id:
 
 #[tauri::command]
 pub async fn remote_get_system_status(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Value, String> {
-    // 1. Get openclaw version (use login shell for PATH)
-    let version_result = pool.exec_login(&host_id, "openclaw --version").await?;
-    let openclaw_version = version_result.stdout.trim().to_string();
+    // 1. Get openclaw version (use login shell for PATH) — don't fail if binary not found
+    let openclaw_version = match pool.exec_login(&host_id, "openclaw --version").await {
+        Ok(r) if r.exit_code == 0 => r.stdout.trim().to_string(),
+        Ok(r) => r.stdout.trim().to_string(), // might have partial output
+        Err(_) => String::new(),
+    };
 
     // 2. Read remote config
     let config_raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await;
@@ -4370,10 +4373,12 @@ pub async fn remote_check_openclaw_update(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
-    // Get installed version and extract clean semver
-    let version_result = pool.exec_login(&host_id, "openclaw --version").await?;
-    let installed_version = extract_version_from_text(version_result.stdout.trim())
-        .unwrap_or_else(|| version_result.stdout.trim().to_string());
+    // Get installed version and extract clean semver — don't fail if binary not found
+    let installed_version = match pool.exec_login(&host_id, "openclaw --version").await {
+        Ok(r) => extract_version_from_text(r.stdout.trim())
+            .unwrap_or_else(|| r.stdout.trim().to_string()),
+        Err(_) => String::new(),
+    };
 
     // Try `openclaw update status --json` first (may not exist on older versions)
     let update_result = pool.exec_login(&host_id, "openclaw update status --json --no-color 2>/dev/null").await;
@@ -4392,7 +4397,10 @@ pub async fn remote_check_openclaw_update(
     }
 
     // Fallback: query npm registry directly from Tauri (no remote CLI dependency)
-    let latest_version = query_openclaw_latest_npm().ok().flatten();
+    // Must use spawn_blocking because reqwest::blocking panics in async context
+    let latest_version = tokio::task::spawn_blocking(|| {
+        query_openclaw_latest_npm().ok().flatten()
+    }).await.unwrap_or(None);
     let upgrade = latest_version
         .as_ref()
         .is_some_and(|latest| compare_semver(&installed_version, Some(latest.as_str())));
@@ -5094,7 +5102,7 @@ for agent_dir in */; do
       [ -z "$user_msgs" ] && user_msgs=0
       asst_msgs=$(grep -c '"role":"assistant"' "$f" 2>/dev/null || true)
       [ -z "$asst_msgs" ] && asst_msgs=0
-      mtime=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+      mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
       age_days=$(( (now - mtime) / 86400 ))
       printf '%s{"agent":"%s","sessionId":"%s","sizeBytes":%s,"messageCount":%s,"userMessageCount":%s,"assistantMessageCount":%s,"ageDays":%s,"kind":"%s"}' \
         "$sep" "$safe_agent" "$safe_fname" "$size" "$msgs" "$user_msgs" "$asst_msgs" "$age_days" "$kind"
@@ -5231,18 +5239,21 @@ pub async fn remote_list_session_files(
 ) -> Result<Vec<SessionFile>, String> {
     let script = r#"
 cd ~/.openclaw/agents 2>/dev/null || { echo "[]"; exit 0; }
+sep=""
 echo "["
-first=1
 for agent_dir in */; do
+  [ -d "$agent_dir" ] || continue
   agent="${agent_dir%/}"
+  safe_agent=$(printf '%s' "$agent" | sed 's/\\/\\\\/g; s/"/\\"/g')
   for kind in sessions sessions_archive; do
     dir="$agent_dir$kind"
     [ -d "$dir" ] || continue
     for f in "$dir"/*.jsonl; do
       [ -f "$f" ] || continue
       size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
-      if [ "$first" = "1" ]; then first=0; else echo ","; fi
-      printf '{"agent":"%s","kind":"%s","path":"%s","sizeBytes":%s}' "$agent" "$kind" "$f" "$size"
+      safe_path=$(printf '%s' "$f" | sed 's/\\/\\\\/g; s/"/\\"/g')
+      printf '%s{"agent":"%s","kind":"%s","path":"%s","sizeBytes":%s}' "$sep" "$safe_agent" "$kind" "$safe_path" "$size"
+      sep=","
     done
   done
 done
