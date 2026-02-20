@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyResult, BackupInfo, Binding, ChannelNode, ConfigDirtyState, DiscordGuildChannel, HistoryItem, ModelCatalogProvider, ModelProfile, PreviewResult, ProviderAuthSuggestion, Recipe, RemoteSystemStatus, ResolvedApiKey, StatusLight, SystemStatus, DoctorReport, MemoryFile, SessionFile, SshHost, SshExecResult, SftpEntry } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, ApplyResult, BackupInfo, Binding, ChannelNode, ConfigDirtyState, CronJob, CronRun, DiscordGuildChannel, HistoryItem, ModelCatalogProvider, ModelProfile, PreviewResult, ProviderAuthSuggestion, Recipe, RemoteSystemStatus, ResolvedApiKey, StatusLight, SystemStatus, DoctorReport, MemoryFile, SessionFile, SshHost, SshExecResult, SftpEntry, WatchdogStatus } from "./types";
 
 export const api = {
   getSystemStatus: (): Promise<SystemStatus> =>
@@ -224,4 +224,40 @@ export const api = {
     invoke("run_openclaw_upgrade", {}),
   remoteRunOpenclawUpgrade: (hostId: string): Promise<string> =>
     invoke("remote_run_openclaw_upgrade", { hostId }),
+
+  // Cron
+  listCronJobs: (): Promise<CronJob[]> =>
+    invoke("list_cron_jobs", {}),
+  getCronRuns: (jobId: string, limit?: number): Promise<CronRun[]> =>
+    invoke("get_cron_runs", { jobId, limit }),
+  triggerCronJob: (jobId: string): Promise<string> =>
+    invoke("trigger_cron_job", { jobId }),
+
+  // Watchdog
+  getWatchdogStatus: (): Promise<WatchdogStatus & { alive: boolean; deployed: boolean }> =>
+    invoke("get_watchdog_status", {}),
+  deployWatchdog: (): Promise<boolean> =>
+    invoke("deploy_watchdog", {}),
+  startWatchdog: (): Promise<boolean> =>
+    invoke("start_watchdog", {}),
+  stopWatchdog: (): Promise<boolean> =>
+    invoke("stop_watchdog", {}),
+
+  // Remote cron
+  remoteListCronJobs: (hostId: string): Promise<CronJob[]> =>
+    invoke("remote_list_cron_jobs", { hostId }),
+  remoteGetCronRuns: (hostId: string, jobId: string, limit?: number): Promise<CronRun[]> =>
+    invoke("remote_get_cron_runs", { hostId, jobId, limit }),
+  remoteTriggerCronJob: (hostId: string, jobId: string): Promise<string> =>
+    invoke("remote_trigger_cron_job", { hostId, jobId }),
+
+  // Remote watchdog
+  remoteGetWatchdogStatus: (hostId: string): Promise<WatchdogStatus & { alive: boolean; deployed: boolean }> =>
+    invoke("remote_get_watchdog_status", { hostId }),
+  remoteDeployWatchdog: (hostId: string, scriptContent: string): Promise<boolean> =>
+    invoke("remote_deploy_watchdog", { hostId, scriptContent }),
+  remoteStartWatchdog: (hostId: string): Promise<boolean> =>
+    invoke("remote_start_watchdog", { hostId }),
+  remoteStopWatchdog: (hostId: string): Promise<boolean> =>
+    invoke("remote_stop_watchdog", { hostId }),
 };
