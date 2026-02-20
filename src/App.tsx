@@ -9,6 +9,7 @@ import { History } from "./pages/History";
 import { Settings } from "./pages/Settings";
 import { Doctor } from "./pages/Doctor";
 import { Channels } from "./pages/Channels";
+import { Cron } from "./pages/Cron";
 import { Chat } from "./components/Chat";
 import logoUrl from "./assets/logo.png";
 import { DiffViewer } from "./components/DiffViewer";
@@ -39,7 +40,7 @@ import type { DiscordGuildChannel, SshHost } from "./lib/types";
 
 const PING_URL = "https://api.clawpal.zhixian.io/ping";
 
-type Route = "home" | "recipes" | "cook" | "history" | "channels" | "doctor" | "settings";
+type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "settings";
 
 interface ToastItem {
   id: number;
@@ -71,6 +72,7 @@ export function App() {
   }, [refreshHosts]);
 
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+  const [hasEscalatedCron, setHasEscalatedCron] = useState(false);
 
   // Startup: check for updates + analytics ping
   useEffect(() => {
@@ -192,6 +194,26 @@ export function App() {
     }
   }, [activeInstance, isConnected]);
 
+  // Poll watchdog status for escalated cron jobs (red dot badge)
+  useEffect(() => {
+    const check = () => {
+      const p = isRemote
+        ? api.remoteGetWatchdogStatus(activeInstance)
+        : api.getWatchdogStatus();
+      p.then((status: any) => {
+        if (status?.jobs) {
+          const escalated = Object.values(status.jobs).some((j: any) => j.status === "escalated");
+          setHasEscalatedCron(escalated);
+        } else {
+          setHasEscalatedCron(false);
+        }
+      }).catch(() => setHasEscalatedCron(false));
+    };
+    check();
+    const interval = setInterval(check, 30000);
+    return () => clearInterval(interval);
+  }, [activeInstance, isRemote]);
+
   const bumpConfigVersion = useCallback(() => {
     setConfigVersion((v) => v + 1);
   }, []);
@@ -289,6 +311,19 @@ export function App() {
             onClick={() => setRoute("channels")}
           >
             {t('nav.channels')}
+          </Button>
+          <Button
+            variant="ghost"
+            className={cn(
+              "justify-start hover:bg-accent",
+              (route === "cron") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
+            )}
+            onClick={() => setRoute("cron")}
+          >
+            {t('nav.cron')}
+            {hasEscalatedCron && (
+              <span className="ml-auto w-2 h-2 rounded-full bg-red-500" />
+            )}
           </Button>
           <Button
             variant="ghost"
@@ -417,6 +452,7 @@ export function App() {
             showToast={showToast}
           />
         )}
+        {route === "cron" && <Cron key={`${activeInstance}`} />}
         {route === "history" && <History key={`${activeInstance}-${configVersion}`} />}
         {route === "doctor" && <Doctor />}
         {route === "settings" && (
