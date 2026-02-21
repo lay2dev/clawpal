@@ -421,12 +421,17 @@ pub async fn apply_queued_commands(
             summary.truncate(80);
             summary.push_str("...");
         }
+        // Detect if this is a rollback operation (contains __config_write__ commands)
+        let is_rollback = commands.iter()
+            .any(|c| c.command.first().map(|s| s.as_str()) == Some("__config_write__"));
+        let source = if is_rollback { "rollback" } else { "clawpal" };
+        let can_rollback = !is_rollback;
         let _ = crate::history::add_snapshot(
             &paths.history_dir,
             &paths.metadata_path,
             Some(summary),
-            "clawpal",
-            true,
+            source,
+            can_rollback,
             &config_before,
             None,
         );
