@@ -53,14 +53,17 @@ export function Doctor() {
 
   // Logs state
   const [logsOpen, setLogsOpen] = useState(false);
+  const [logsSource, setLogsSource] = useState<"clawpal" | "gateway">("clawpal");
   const [logsTab, setLogsTab] = useState<"app" | "error">("app");
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
   const logsContentRef = useRef<HTMLPreElement>(null);
 
-  const fetchLog = (which: "app" | "error") => {
+  const fetchLog = (source: "clawpal" | "gateway", which: "app" | "error") => {
     setLogsLoading(true);
-    const fn = which === "app" ? ua.readAppLog : ua.readErrorLog;
+    const fn = source === "clawpal"
+      ? (which === "app" ? ua.readAppLog : ua.readErrorLog)
+      : (which === "app" ? ua.readGatewayLog : ua.readGatewayErrorLog);
     fn(500)
       .then((text) => {
         setLogsContent(text);
@@ -74,10 +77,16 @@ export function Doctor() {
       .finally(() => setLogsLoading(false));
   };
 
+  const openLogs = (source: "clawpal" | "gateway") => {
+    setLogsSource(source);
+    setLogsTab("app");
+    setLogsOpen(true);
+  };
+
   useEffect(() => {
-    if (logsOpen) fetchLog(logsTab);
+    if (logsOpen) fetchLog(logsSource, logsTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logsOpen, logsTab]);
+  }, [logsOpen, logsSource, logsTab]);
 
   const hasReport = Boolean(state.doctor);
   const autoFixable = hasReport
@@ -147,14 +156,18 @@ export function Doctor() {
   }
 
   useEffect(() => {
-    if (!ua.isRemote) {
+    // Reset state when switching instances
+    dispatch({ type: "setDoctor", doctor: { ok: true, score: 0, issues: [] } as any });
+    dispatch({ type: "setMessage", message: "" });
+    setRawOutput(null);
+    if (!ua.isRemote || ua.isConnected) {
       runDoctorCmd()
         .then((report) => dispatch({ type: "setDoctor", doctor: report }))
         .catch(() =>
           dispatch({ type: "setMessage", message: t('doctor.failedRunDoctor') }),
         );
+      refreshData();
     }
-    refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ua.instanceId, ua.isRemote, ua.isConnected]);
 
@@ -163,10 +176,9 @@ export function Doctor() {
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('doctor.title')}</h2>
 
-      <div className={`grid ${ua.isRemote ? '' : 'grid-cols-2'} gap-3 mb-6`}>
-        {/* Health Card — local only */}
-        {!ua.isRemote && (
-          <Card>
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        {/* Health Card */}
+        <Card>
             <CardHeader>
               <CardTitle>{t("doctor.health")}</CardTitle>
             </CardHeader>
@@ -280,22 +292,28 @@ export function Doctor() {
               {state.message && <p className="text-sm text-muted-foreground mt-2">{state.message}</p>}
             </CardContent>
           </Card>
-        )}
 
-        {/* Logs Card — always visible */}
+        {/* Logs Card */}
         <Card>
           <CardHeader>
             <CardTitle>{t("doctor.logs")}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-3">{t("doctor.logsDescription")}</p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => openLogs("clawpal")}>
+                {t("doctor.clawpalLogs")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
+                {t("doctor.gatewayLogs")}
+              </Button>
+            </div>
             <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">{t("doctor.viewLogs")}</Button>
-              </DialogTrigger>
               <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
                 <DialogHeader>
-                  <DialogTitle>{t("doctor.logs")}</DialogTitle>
+                  <DialogTitle>
+                    {logsSource === "clawpal" ? t("doctor.clawpalLogs") : t("doctor.gatewayLogs")}
+                  </DialogTitle>
                 </DialogHeader>
                 <div className="flex items-center gap-2 mb-2">
                   <Button
@@ -315,7 +333,7 @@ export function Doctor() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => fetchLog(logsTab)}
+                    onClick={() => fetchLog(logsSource, logsTab)}
                     disabled={logsLoading}
                   >
                     {t("doctor.refreshLogs")}

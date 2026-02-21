@@ -270,8 +270,16 @@ export const api = {
     invoke("read_app_log", { lines }),
   readErrorLog: (lines?: number): Promise<string> =>
     invoke("read_error_log", { lines }),
+  readGatewayLog: (lines?: number): Promise<string> =>
+    invoke("read_gateway_log", { lines }),
+  readGatewayErrorLog: (lines?: number): Promise<string> =>
+    invoke("read_gateway_error_log", { lines }),
   remoteReadAppLog: (hostId: string, lines?: number): Promise<string> =>
     invoke("remote_read_app_log", { hostId, lines }),
   remoteReadErrorLog: (hostId: string, lines?: number): Promise<string> =>
     invoke("remote_read_error_log", { hostId, lines }),
+  remoteReadGatewayLog: (hostId: string, lines?: number): Promise<string> =>
+    invoke("remote_read_gateway_log", { hostId, lines }),
+  remoteReadGatewayErrorLog: (hostId: string, lines?: number): Promise<string> =>
+    invoke("remote_read_gateway_error_log", { hostId, lines }),
 };

@@ -5808,6 +5808,34 @@ pub fn read_error_log(lines: Option<usize>) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn read_gateway_log(lines: Option<usize>) -> Result<String, String> {
+    let paths = crate::models::resolve_paths();
+    let path = paths.openclaw_dir.join("logs/gateway.log");
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let all_lines: Vec<&str> = content.lines().collect();
+    let n = lines.unwrap_or(200);
+    let start = all_lines.len().saturating_sub(n);
+    Ok(all_lines[start..].join("\n"))
+}
+
+#[tauri::command]
+pub fn read_gateway_error_log(lines: Option<usize>) -> Result<String, String> {
+    let paths = crate::models::resolve_paths();
+    let path = paths.openclaw_dir.join("logs/gateway.err.log");
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let all_lines: Vec<&str> = content.lines().collect();
+    let n = lines.unwrap_or(200);
+    let start = all_lines.len().saturating_sub(n);
+    Ok(all_lines[start..].join("\n"))
+}
+
+#[tauri::command]
 pub async fn remote_read_app_log(pool: State<'_, SshConnectionPool>, host_id: String, lines: Option<usize>) -> Result<String, String> {
     let n = lines.unwrap_or(200);
     let cmd = format!("tail -n {n} ~/.clawpal/logs/app.log 2>/dev/null || echo ''");
@@ -5819,6 +5847,22 @@ pub async fn remote_read_app_log(pool: State<'_, SshConnectionPool>, host_id: St
 pub async fn remote_read_error_log(pool: State<'_, SshConnectionPool>, host_id: String, lines: Option<usize>) -> Result<String, String> {
     let n = lines.unwrap_or(200);
     let cmd = format!("tail -n {n} ~/.clawpal/logs/error.log 2>/dev/null || echo ''");
+    let result = pool.exec(&host_id, &cmd).await?;
+    Ok(result.stdout)
+}
+
+#[tauri::command]
+pub async fn remote_read_gateway_log(pool: State<'_, SshConnectionPool>, host_id: String, lines: Option<usize>) -> Result<String, String> {
+    let n = lines.unwrap_or(200);
+    let cmd = format!("tail -n {n} ~/.openclaw/logs/gateway.log 2>/dev/null || echo ''");
+    let result = pool.exec(&host_id, &cmd).await?;
+    Ok(result.stdout)
+}
+
+#[tauri::command]
+pub async fn remote_read_gateway_error_log(pool: State<'_, SshConnectionPool>, host_id: String, lines: Option<usize>) -> Result<String, String> {
+    let n = lines.unwrap_or(200);
+    let cmd = format!("tail -n {n} ~/.openclaw/logs/gateway.err.log 2>/dev/null || echo ''");
     let result = pool.exec(&host_id, &cmd).await?;
     Ok(result.stdout)
 }

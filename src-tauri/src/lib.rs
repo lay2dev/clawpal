@@ -37,7 +37,8 @@ use crate::commands::{
     remote_list_cron_jobs, remote_get_cron_runs, remote_trigger_cron_job, remote_delete_cron_job,
     get_watchdog_status, deploy_watchdog, start_watchdog, stop_watchdog, uninstall_watchdog,
     remote_get_watchdog_status, remote_deploy_watchdog, remote_start_watchdog, remote_stop_watchdog, remote_uninstall_watchdog,
-    read_app_log, read_error_log, remote_read_app_log, remote_read_error_log,
+    read_app_log, read_error_log, read_gateway_log, read_gateway_error_log,
+    remote_read_app_log, remote_read_error_log, remote_read_gateway_log, remote_read_gateway_error_log,
 };
 use crate::cli_runner::{
     queue_command, remove_queued_command, list_queued_commands,
@@ -181,8 +182,12 @@ pub fn run() {
             remote_uninstall_watchdog,
             read_app_log,
             read_error_log,
+            read_gateway_log,
+            read_gateway_error_log,
             remote_read_app_log,
             remote_read_error_log,
+            remote_read_gateway_log,
+            remote_read_gateway_error_log,
             queue_command,
             remove_queued_command,
             list_queued_commands,

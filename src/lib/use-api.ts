@@ -195,6 +195,8 @@ export function useApi() {
       // Logs
       readAppLog: dispatch(api.readAppLog, api.remoteReadAppLog),
       readErrorLog: dispatch(api.readErrorLog, api.remoteReadErrorLog),
+      readGatewayLog: dispatch(api.readGatewayLog, api.remoteReadGatewayLog),
+      readGatewayErrorLog: dispatch(api.readGatewayErrorLog, api.remoteReadGatewayErrorLog),
 
       // Local-only (no remote equivalent needed)
       openUrl: api.openUrl,
