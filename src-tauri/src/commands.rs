@@ -622,12 +622,14 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
 }
 
 #[tauri::command]
-pub fn list_channels() -> Result<Vec<ChannelNode>, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let mut nodes = collect_channel_nodes(&cfg);
-    enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
-    Ok(nodes)
+pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        let mut nodes = collect_channel_nodes(&cfg);
+        enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
+        Ok(nodes)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -821,20 +823,23 @@ pub fn update_channel_config(
 
 /// List current channel→agent bindings from config.
 #[tauri::command]
-pub fn list_bindings(
-    cache: tauri::State<crate::cli_runner::CliCache>,
+pub async fn list_bindings(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<Value>, String> {
     let cache_key = "local:bindings";
     if let Some(cached) = cache.get(cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
-    let json = crate::cli_runner::parse_json_output(&output)?;
-    let result = json.as_array().cloned().unwrap_or_default();
-    if let Ok(serialized) = serde_json::to_string(&result) {
-        cache.set(cache_key.to_string(), serialized);
-    }
-    Ok(result)
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        let result = json.as_array().cloned().unwrap_or_default();
+        if let Ok(serialized) = serde_json::to_string(&result) {
+            cache.set(cache_key.to_string(), serialized);
+        }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Assign a Discord channel to an agent (modifies the `bindings` array).
@@ -970,26 +975,40 @@ pub fn list_model_bindings() -> Result<Vec<ModelBinding>, String> {
 }
 
 #[tauri::command]
-pub fn list_agents_overview(
-    cache: tauri::State<crate::cli_runner::CliCache>,
+pub async fn list_agents_overview(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<AgentOverview>, String> {
     let cache_key = "local:agents-list";
     if let Some(cached) = cache.get(cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
-    let json = crate::cli_runner::parse_json_output(&output)?;
-    let result = parse_agents_cli_output(&json)?;
-    if let Ok(serialized) = serde_json::to_string(&result) {
-        cache.set(cache_key.to_string(), serialized);
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        let result = parse_agents_cli_output(&json, None)?;
+        if let Ok(serialized) = serde_json::to_string(&result) {
+            cache.set(cache_key.to_string(), serialized);
+        }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
+}
+
+/// Check if an agent has active sessions by examining sessions/sessions.json.
+/// Returns true if the file exists and is larger than 2 bytes (i.e. not just "{}").
+fn agent_has_sessions(base_dir: &std::path::Path, agent_id: &str) -> bool {
+    let sessions_file = base_dir.join("agents").join(agent_id).join("sessions").join("sessions.json");
+    match std::fs::metadata(&sessions_file) {
+        Ok(m) => m.len() > 2, // "{}" is 2 bytes = empty
+        Err(_) => false,
     }
-    Ok(result)
 }
 
 /// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
-fn parse_agents_cli_output(json: &Value) -> Result<Vec<AgentOverview>, String> {
+/// `online_set`: if Some, use it to determine online status; if None, check local sessions.
+fn parse_agents_cli_output(json: &Value, online_set: Option<&std::collections::HashSet<String>>) -> Result<Vec<AgentOverview>, String> {
     let arr = json.as_array().ok_or("agents list output is not an array")?;
-    let paths = resolve_paths();
+    let paths = if online_set.is_none() { Some(resolve_paths()) } else { None };
     let mut agents = Vec::new();
     for entry in arr {
         let id = entry.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
@@ -997,14 +1016,17 @@ fn parse_agents_cli_output(json: &Value) -> Result<Vec<AgentOverview>, String> {
         let emoji = entry.get("identityEmoji").and_then(Value::as_str).map(|s| s.to_string());
         let model = entry.get("model").and_then(Value::as_str).map(|s| s.to_string());
         let workspace = entry.get("workspace").and_then(Value::as_str).map(|s| s.to_string());
-        let has_sessions = paths.base_dir.join("agents").join(&id).join("sessions").exists();
+        let online = match online_set {
+            Some(set) => set.contains(&id),
+            None => agent_has_sessions(paths.as_ref().unwrap().base_dir.as_path(), &id),
+        };
         agents.push(AgentOverview {
             id,
             name,
             emoji,
             model,
             channels: Vec::new(),
-            online: has_sessions,
+            online,
             workspace,
         });
     }
@@ -4290,7 +4312,21 @@ pub async fn remote_check_openclaw_update(
 pub async fn remote_list_agents_overview(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Vec<AgentOverview>, String> {
     let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["agents", "list", "--json"]).await?;
     let json = crate::cli_runner::parse_json_output(&output)?;
-    parse_agents_cli_output(&json)
+    // Check which agents have sessions remotely (single command, batch check)
+    // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
+    let online_set = match pool.exec_login(
+        &host_id,
+        "for d in ~/.openclaw/agents/*/sessions/sessions.json; do [ -f \"$d\" ] && [ $(wc -c < \"$d\") -gt 2 ] && basename $(dirname $(dirname \"$d\")); done",
+    ).await {
+        Ok(result) => {
+            result.stdout.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect::<std::collections::HashSet<String>>()
+        }
+        Err(_) => std::collections::HashSet::new(), // fallback: all offline
+    };
+    parse_agents_cli_output(&json, Some(&online_set))
 }
 
 #[tauri::command]
@@ -4601,19 +4637,24 @@ pub async fn remote_list_history(
         if entry.name.starts_with('.') || entry.is_dir {
             continue;
         }
-        // Parse filename: {timestamp}-{source}.json
+        // Parse filename: {unix_ts}-{source}-{summary}.json
         let stem = entry.name.trim_end_matches(".json");
-        let (ts_str, source) = stem.split_once('-').unwrap_or((stem, "unknown"));
+        let parts: Vec<&str> = stem.splitn(3, '-').collect();
+        let ts_str = parts.first().unwrap_or(&"0");
+        let source = parts.get(1).unwrap_or(&"unknown");
+        let recipe_id = parts.get(2).map(|s| s.to_string());
         let created_at = ts_str.parse::<i64>().unwrap_or(0);
         // Convert Unix timestamp to ISO 8601 format for frontend compatibility
         let created_at_iso = chrono::DateTime::from_timestamp(created_at, 0)
             .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
             .unwrap_or_else(|| created_at.to_string());
+        let is_rollback = *source == "rollback";
         items.push(serde_json::json!({
             "id": entry.name,
+            "recipeId": recipe_id,
             "createdAt": created_at_iso,
             "source": source,
-            "canRollback": true,
+            "canRollback": !is_rollback,
         }));
     }
     // Sort newest first
@@ -5423,6 +5464,31 @@ pub async fn remote_run_openclaw_upgrade(
 // Cron jobs
 // ---------------------------------------------------------------------------
 
+/// Strip Doctor warning banners from CLI output to show only meaningful errors.
+/// Doctor banners look like: ╭─ ... ─╮ ... ╰─ ... ─╯
+fn strip_doctor_banner(text: &str) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut in_banner = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("Doctor warnings") && trimmed.contains('╮') {
+            in_banner = true;
+            continue;
+        }
+        if in_banner {
+            if trimmed.contains('╯') {
+                in_banner = false;
+            }
+            continue;
+        }
+        if !trimmed.is_empty() {
+            lines.push(line);
+        }
+    }
+    let result = lines.join("\n").trim().to_string();
+    if result.is_empty() { "Command failed".into() } else { result }
+}
+
 fn parse_cron_jobs(text: &str) -> Value {
     let parsed: Value = serde_json::from_str(text).unwrap_or(Value::Array(vec![]));
     // Handle { "version": N, "jobs": [...] } wrapper
@@ -5499,7 +5565,9 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
         if output.status.success() {
             Ok(stdout)
         } else {
-            Err(format!("{stdout}\n{stderr}"))
+            // Extract meaningful error lines, skip Doctor warning banners
+            let error_msg = strip_doctor_banner(&format!("{stdout}\n{stderr}"));
+            Err(error_msg)
         }
     }).await.map_err(|e| format!("Task failed: {e}"))?
 }

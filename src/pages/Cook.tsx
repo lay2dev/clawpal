@@ -95,8 +95,11 @@ export function Cook({
             if (cur && typeof cur === "object") cur = (cur as Record<string, unknown>)[part];
             else { cur = undefined; break; }
           }
-          if (typeof cur === "string" && cur.length > 0) {
-            setParams((prev) => ({ ...prev, [paramId]: prev[paramId] || cur as string }));
+          if (typeof cur === "string") {
+            setParams((prev) => ({ ...prev, [paramId]: cur as string }));
+          } else {
+            // Clear param when config value is absent (e.g. channel has no persona)
+            setParams((prev) => ({ ...prev, [paramId]: "" }));
           }
         }
       } catch { /* ignore */ }

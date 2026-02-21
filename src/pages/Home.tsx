@@ -425,9 +425,9 @@ export function Home({
                         </div>
                         <div className="flex items-center gap-2">
                           {agent.online ? (
-                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.online')}</Badge>
+                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.active')}</Badge>
                           ) : (
-                            <Badge className="bg-red-100 text-red-700 border-0 text-xs">{t('home.offline')}</Badge>
+                            <Badge className="bg-gray-100 text-gray-500 border-0 text-xs">{t('home.idle')}</Badge>
                           )}
                           {agent.id !== "main" && (
                             <AlertDialog>

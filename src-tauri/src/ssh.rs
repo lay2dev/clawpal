@@ -223,16 +223,22 @@ impl SshConnectionPool {
     }
 
     /// Execute a command with login shell setup (sources profile for PATH).
+    /// Forces bash to avoid zsh glob/nomatch quirks.
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
         let target_bin = command.split_whitespace().next().unwrap_or("");
-        let wrapped = format!(
+        let inner = format!(
             concat!(
+                "shopt -s nullglob 2>/dev/null; ",
                 ". \"$HOME/.profile\" 2>/dev/null; ",
                 ". \"$HOME/.bashrc\" 2>/dev/null; ",
-                ". \"$HOME/.zshrc\" 2>/dev/null; ",
+                // ~/.local/bin is a common user bin dir (fnm, pip, etc.)
+                "[ -d \"$HOME/.local/bin\" ] && export PATH=\"$HOME/.local/bin:$PATH\"; ",
                 "export NVM_DIR=\"${{NVM_DIR:-$HOME/.nvm}}\"; ",
                 "[ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" 2>/dev/null; ",
-                "[ -s \"$HOME/.fnm/fnm\" ] && eval \"$($HOME/.fnm/fnm env)\" 2>/dev/null; ",
+                // fnm: check common locations
+                "for _fnm in \"$HOME/.fnm/fnm\" \"$HOME/.local/bin/fnm\"; do ",
+                  "[ -x \"$_fnm\" ] && eval \"$($_fnm env --shell bash)\" 2>/dev/null && break; ",
+                "done; ",
                 "if ! command -v {target_bin} >/dev/null 2>&1; then ",
                   "for d in \"$HOME\"/.nvm/versions/node/*/bin; do ",
                     "[ -x \"$d/{target_bin}\" ] && export PATH=\"$d:$PATH\" && break; ",
@@ -243,6 +249,12 @@ impl SshConnectionPool {
             target_bin = target_bin,
             command = command
         );
+        // Use bash -c with double-quote wrapping.
+        // Escape backslashes, double-quotes, backticks, and dollar signs that are
+        // NOT part of variable expansions we want to preserve ($HOME, $NVM_DIR, $PATH).
+        // Since the inner script intentionally uses $HOME etc., we pass it via
+        // env variable to avoid escaping issues entirely.
+        let wrapped = format!("export __CLP_CMD={}; bash -c \"$__CLP_CMD\"", shell_quote(&inner));
         self.exec(id, &wrapped).await
     }
 

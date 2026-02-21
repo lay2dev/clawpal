@@ -80,13 +80,30 @@ export function CreateAgentDialog({
       const modelValue = resolveModelValue(model || undefined);
 
       // Build CLI command for queue
+      // --non-interactive requires --workspace; for non-independent agents
+      // we must resolve the default workspace from config.
       const command: string[] = ["openclaw", "agents", "add", id, "--non-interactive"];
       if (modelValue) {
         command.push("--model", modelValue);
       }
       if (independent) {
-        // --workspace flag triggers independent agent creation
         command.push("--workspace", id);
+      } else {
+        // Resolve default workspace: from config, or from existing agents
+        let defaultWs: string | undefined;
+        try {
+          const rawConfig = await ua.readRawConfig();
+          const cfg = JSON.parse(rawConfig);
+          defaultWs = cfg?.agents?.defaults?.workspace ?? cfg?.agents?.default?.workspace;
+        } catch { /* ignore */ }
+        if (!defaultWs) {
+          // Fallback: use workspace of first existing agent
+          try {
+            const existingAgents = await ua.listAgents();
+            defaultWs = existingAgents.find((a) => a.workspace)?.workspace ?? undefined;
+          } catch { /* ignore */ }
+        }
+        if (defaultWs) command.push("--workspace", defaultWs);
       }
       await ua.queueCommand(`Create agent: ${id}`, command);
 

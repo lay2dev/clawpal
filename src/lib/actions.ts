@@ -62,9 +62,33 @@ const registry: Record<string, ActionDef> = {
         args.modelProfileId as string | undefined,
         ctx,
       );
+      // --non-interactive requires --workspace; for non-independent agents
+      // we must resolve the default workspace from config.
+      let workspace: string | undefined;
+      if (args.independent) {
+        workspace = args.agentId as string;
+      } else {
+        // Read default workspace from config
+        const rawConfig = ctx?.isRemote
+          ? await api.remoteReadRawConfig(ctx.instanceId)
+          : await api.readRawConfig();
+        try {
+          const cfg = JSON.parse(rawConfig);
+          workspace = cfg?.agents?.defaults?.workspace ?? cfg?.agents?.default?.workspace;
+        } catch { /* ignore parse errors */ }
+        if (!workspace) {
+          // Fallback: use workspace of first existing agent
+          try {
+            const agents = ctx?.isRemote
+              ? await api.remoteListAgentsOverview(ctx.instanceId)
+              : await api.listAgentsOverview();
+            workspace = agents.find((a) => a.workspace)?.workspace;
+          } catch { /* ignore */ }
+        }
+      }
       const cmd: string[] = ["openclaw", "agents", "add", args.agentId as string, "--non-interactive"];
       if (modelValue) cmd.push("--model", modelValue);
-      if (args.independent) cmd.push("--workspace", args.agentId as string);
+      if (workspace) cmd.push("--workspace", workspace);
       return [[`Create agent: ${args.agentId}`, cmd]];
     },
     describe: (args) => {

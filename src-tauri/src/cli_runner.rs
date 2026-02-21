@@ -337,8 +337,14 @@ pub async fn preview_queued_commands(
         }
 
         // Always read result config from sandbox (commands may have partially succeeded)
+        // Replace sandbox paths with real paths so the diff doesn't show sandbox artifacts.
+        let sandbox_prefix = sandbox_root.to_string_lossy().to_string();
+        let real_home = paths.openclaw_dir.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
         let config_after_raw = crate::config_io::read_text(&preview_config)
-            .unwrap_or_else(|_| config_before.clone());
+            .unwrap_or_else(|_| config_before.clone())
+            .replace(&sandbox_prefix, &real_home);
 
         // Normalize both configs to sorted-key pretty JSON so the diff only
         // shows semantic changes, not key reordering by the CLI.
@@ -665,23 +671,39 @@ pub async fn remote_preview_queued_commands(
     // Read current config via SSH
     let config_before = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
 
-    // Set up sandbox on remote
-    pool.exec(&host_id, "mkdir -p ~/.clawpal/preview/.openclaw")
-        .await?;
-    pool.exec(
-        &host_id,
+    // Set up sandbox on remote: symlink all entries from real .openclaw/ into sandbox,
+    // but copy openclaw.json so commands modify the copy, not the original.
+    pool.exec(&host_id, concat!(
+        "rm -rf ~/.clawpal/preview && ",
+        "mkdir -p ~/.clawpal/preview/.openclaw && ",
+        "for f in ~/.openclaw/*; do ",
+        "  name=$(basename \"$f\"); ",
+        "  [ \"$name\" = \"openclaw.json\" ] && continue; ",
+        "  ln -s \"$f\" ~/.clawpal/preview/.openclaw/\"$name\"; ",
+        "done && ",
         "cp ~/.openclaw/openclaw.json ~/.clawpal/preview/.openclaw/openclaw.json",
-    )
-    .await?;
+    )).await?;
 
     // Execute each command in sandbox with OPENCLAW_HOME override
+    // OPENCLAW_HOME should point to the parent of .openclaw/ (CLI adds .openclaw/ itself)
     let mut errors = Vec::new();
     for cmd in &commands {
+        // Handle internal commands (__config_write__, __rollback__) — write config directly
+        if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+            if let Some(content) = cmd.command.get(1) {
+                if let Err(e) = pool.sftp_write(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json", content).await {
+                    errors.push(format!("{}: {}", cmd.label, e));
+                    break;
+                }
+            }
+            continue;
+        }
+
         let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
         let mut env = HashMap::new();
         env.insert(
             "OPENCLAW_HOME".to_string(),
-            "~/.clawpal/preview/.openclaw".to_string(),
+            "~/.clawpal/preview".to_string(),
         );
 
         match run_openclaw_remote_with_env(&pool, &host_id, &args, Some(&env)).await {
@@ -703,18 +725,56 @@ pub async fn remote_preview_queued_commands(
     }
 
     let config_after = if errors.is_empty() {
-        pool.sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
-            .await?
+        let raw = pool.sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
+            .await?;
+        // Replace sandbox paths with real paths in preview output.
+        // The sandbox is at ~/.clawpal/preview, real OPENCLAW_HOME is ~.
+        // Resolve ~ on remote to get absolute sandbox prefix.
+        let resolved_home = pool.exec(&host_id, "echo $HOME").await
+            .map(|r| r.stdout.trim().to_string())
+            .unwrap_or_default();
+        if !resolved_home.is_empty() {
+            let sandbox_prefix = format!("{}/.clawpal/preview", resolved_home);
+            raw.replace(&sandbox_prefix, &resolved_home)
+        } else {
+            raw
+        }
     } else {
         config_before.clone()
     };
 
     let _ = pool.exec(&host_id, "rm -rf ~/.clawpal/preview").await;
 
+    // Normalize both configs to sorted-key pretty JSON so the diff only
+    // shows semantic changes, not key reordering by the CLI.
+    let normalize = |s: &str| -> String {
+        match serde_json::from_str::<Value>(s) {
+            Ok(v) => {
+                fn sort_value(v: &Value) -> Value {
+                    match v {
+                        Value::Object(map) => {
+                            let sorted: serde_json::Map<String, Value> = map.iter()
+                                .collect::<std::collections::BTreeMap<_, _>>()
+                                .into_iter()
+                                .map(|(k, v)| (k.clone(), sort_value(v)))
+                                .collect();
+                            Value::Object(sorted)
+                        }
+                        Value::Array(arr) => Value::Array(arr.iter().map(sort_value).collect()),
+                        other => other.clone(),
+                    }
+                }
+                serde_json::to_string_pretty(&sort_value(&v))
+                    .unwrap_or_else(|_| s.to_string())
+            }
+            Err(_) => s.to_string(),
+        }
+    };
+
     Ok(PreviewQueueResult {
         commands,
-        config_before,
-        config_after,
+        config_before: normalize(&config_before),
+        config_after: normalize(&config_after),
         errors,
     })
 }
@@ -739,8 +799,25 @@ pub async fn remote_apply_queued_commands(
     let config_before = pool
         .sftp_read(&host_id, "~/.openclaw/openclaw.json")
         .await?;
-    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let snapshot_path = format!("~/.clawpal/snapshots/{ts}-queue-apply.json");
+    let ts = chrono::Utc::now().timestamp();
+    let mut summary: String = commands.iter()
+        .map(|c| c.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if summary.len() > 80 {
+        summary.truncate(80);
+        summary.push_str("...");
+    }
+    // Sanitize summary for safe filename
+    let safe_summary: String = summary.chars().map(|c| match c {
+        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '-',
+        _ => c,
+    }).collect();
+    let is_rollback = commands.iter()
+        .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
+    let source = if is_rollback { "rollback" } else { "clawpal" };
+    let snapshot_filename = format!("{ts}-{source}-{safe_summary}.json");
+    let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_filename}");
     let _ = pool
         .exec(&host_id, "mkdir -p ~/.clawpal/snapshots")
         .await;
@@ -751,6 +828,25 @@ pub async fn remote_apply_queued_commands(
     // Execute each command
     let mut applied_count = 0;
     for cmd in &commands {
+        // Handle internal commands (__config_write__, __rollback__) — write config directly
+        if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+            if let Some(content) = cmd.command.get(1) {
+                if let Err(e) = pool.sftp_write(&host_id, "~/.openclaw/openclaw.json", content).await {
+                    let _ = pool.sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before).await;
+                    queues.clear(&host_id);
+                    return Ok(ApplyQueueResult {
+                        ok: false,
+                        applied_count,
+                        total_count,
+                        error: Some(format!("Step {} failed ({}): {}", applied_count + 1, cmd.label, e)),
+                        rolled_back: true,
+                    });
+                }
+            }
+            applied_count += 1;
+            continue;
+        }
+
         let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
         match run_openclaw_remote(&pool, &host_id, &args).await {
             Ok(output) if output.exit_code != 0 => {
