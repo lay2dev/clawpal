@@ -832,14 +832,9 @@ pub fn update_channel_config(
 /// List current channel→agent bindings from config.
 #[tauri::command]
 pub fn list_bindings() -> Result<Vec<Value>, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let bindings = cfg
-        .get("bindings")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(bindings)
+    let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    Ok(json.as_array().cloned().unwrap_or_default())
 }
 
 /// Assign a Discord channel to an agent (modifies the `bindings` array).
@@ -976,72 +971,44 @@ pub fn list_model_bindings() -> Result<Vec<ModelBinding>, String> {
 
 #[tauri::command]
 pub fn list_agents_overview() -> Result<Vec<AgentOverview>, String> {
+    let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    parse_agents_cli_output(&json)
+}
+
+/// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
+fn parse_agents_cli_output(json: &Value) -> Result<Vec<AgentOverview>, String> {
+    let arr = json.as_array().ok_or("agents list output is not an array")?;
     let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
     let mut agents = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-
-    let default_workspace = cfg.pointer("/agents/defaults/workspace")
-        .and_then(Value::as_str)
-        .map(|s| expand_tilde(s));
-
-    if let Some(list) = cfg.pointer("/agents/list").and_then(Value::as_array) {
-        let channel_nodes = collect_channel_nodes(&cfg);
-        for agent in list {
-            let id = agent.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
-
-            // Deduplicate by ID
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
-
-            // Read name/emoji from IDENTITY.md in the agent's workspace
-            let workspace = agent.get("workspace").and_then(Value::as_str)
-                .map(|s| expand_tilde(s))
-                .or_else(|| default_workspace.clone());
-            let (name, emoji) = workspace.as_ref()
-                .and_then(|ws| parse_identity_md(ws))
-                .unwrap_or((None, None));
-
-            let model = agent.get("model").and_then(read_model_value)
-                .or_else(|| cfg.pointer("/agents/defaults/model").and_then(read_model_value))
-                .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-            let channels: Vec<String> = channel_nodes.iter()
-                .map(|ch| ch.path.clone())
-                .collect();
-            let has_sessions = paths.base_dir.join("agents").join(&id).join("sessions").exists();
-            agents.push(AgentOverview {
-                id,
-                name,
-                emoji,
-                model,
-                channels,
-                online: has_sessions,
-                workspace,
-            });
-        }
-    }
-
-    // Implicit "main" agent: when agents.list is missing/empty, synthesize from defaults
-    if agents.is_empty() {
-        let default_model = cfg.pointer("/agents/defaults/model").and_then(read_model_value)
-            .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-        let workspace = default_workspace.clone();
-        let (name, emoji) = workspace.as_ref()
-            .and_then(|ws| parse_identity_md(ws))
-            .unwrap_or((None, None));
-        let has_sessions = paths.base_dir.join("agents").join("main").join("sessions").exists();
+    for entry in arr {
+        let id = entry.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
+        let name = entry.get("identityName").and_then(Value::as_str).map(|s| s.to_string());
+        let emoji = entry.get("identityEmoji").and_then(Value::as_str).map(|s| s.to_string());
+        let model = entry.get("model").and_then(Value::as_str).map(|s| s.to_string());
+        let workspace = entry.get("workspace").and_then(Value::as_str).map(|s| s.to_string());
+        let has_sessions = paths.base_dir.join("agents").join(&id).join("sessions").exists();
         agents.push(AgentOverview {
-            id: "main".into(),
+            id,
             name,
             emoji,
-            model: default_model,
+            model,
             channels: Vec::new(),
             online: has_sessions,
             workspace,
         });
     }
-
+    if agents.is_empty() {
+        agents.push(AgentOverview {
+            id: "main".into(),
+            name: None,
+            emoji: None,
+            model: None,
+            channels: Vec::new(),
+            online: false,
+            workspace: None,
+        });
+    }
     Ok(agents)
 }
 
@@ -4426,87 +4393,9 @@ pub async fn remote_check_openclaw_update(
 
 #[tauri::command]
 pub async fn remote_list_agents_overview(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Vec<AgentOverview>, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw).map_err(|e| format!("Failed to parse remote config: {e}"))?;
-
-    // Check if gateway process is running to determine online status
-    let gateway_running = pool.exec(&host_id, "pgrep -f openclaw-gateway >/dev/null 2>&1").await
-        .map(|r| r.exit_code == 0)
-        .unwrap_or(false);
-
-    let mut agents = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-    let default_model = cfg.pointer("/agents/defaults/model")
-        .and_then(read_model_value)
-        .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-    let default_workspace = cfg.pointer("/agents/defaults/workspace")
-        .and_then(Value::as_str)
-        .map(|s| s.to_string());
-    let channel_nodes = collect_channel_nodes(&cfg);
-
-    if let Some(list) = cfg.pointer("/agents/list").and_then(Value::as_array) {
-        for agent in list {
-            let id = agent.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
-
-            let workspace = agent.get("workspace").and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| default_workspace.clone());
-
-            // Read IDENTITY.md from remote workspace via SFTP
-            let (name, emoji) = if let Some(ref ws) = workspace {
-                let identity_path = format!("{}/IDENTITY.md", ws.trim_end_matches('/'));
-                match pool.sftp_read(&host_id, &identity_path).await {
-                    Ok(content) => parse_identity_content(&content),
-                    Err(_) => (None, None),
-                }
-            } else {
-                (None, None)
-            };
-
-            let model = agent.get("model").and_then(read_model_value)
-                .or_else(|| default_model.clone());
-            let channels: Vec<String> = channel_nodes.iter()
-                .map(|ch| ch.path.clone())
-                .collect();
-            agents.push(AgentOverview {
-                id,
-                name,
-                emoji,
-                model,
-                channels,
-                online: gateway_running,
-                workspace,
-            });
-        }
-    }
-
-    // Implicit "main" agent: when agents.list is missing/empty, synthesize from defaults
-    if agents.is_empty() {
-        let workspace = default_workspace.clone();
-        let (name, emoji) = if let Some(ref ws) = workspace {
-            let identity_path = format!("{}/IDENTITY.md", ws.trim_end_matches('/'));
-            match pool.sftp_read(&host_id, &identity_path).await {
-                Ok(content) => parse_identity_content(&content),
-                Err(_) => (None, None),
-            }
-        } else {
-            (None, None)
-        };
-        agents.push(AgentOverview {
-            id: "main".into(),
-            name,
-            emoji,
-            model: default_model,
-            channels: Vec::new(),
-            online: gateway_running,
-            workspace,
-        });
-    }
-
-    Ok(agents)
+    let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["agents", "list", "--json"]).await?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    parse_agents_cli_output(&json)
 }
 
 #[tauri::command]
@@ -4518,14 +4407,9 @@ pub async fn remote_list_channels_minimal(pool: State<'_, SshConnectionPool>, ho
 
 #[tauri::command]
 pub async fn remote_list_bindings(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Vec<Value>, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw).map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    let bindings = cfg
-        .get("bindings")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(bindings)
+    let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["config", "get", "bindings", "--json"]).await?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    Ok(json.as_array().cloned().unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------
