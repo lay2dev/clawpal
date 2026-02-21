@@ -1880,24 +1880,6 @@ fn collect_model_summary(cfg: &Value) -> ModelSummary {
     }
 }
 
-fn run_external_command_raw(parts: &[&str]) -> Result<OpenclawCommandOutput, String> {
-    if parts.is_empty() {
-        return Err("no command specified".into());
-    }
-    let mut command = Command::new(parts[0]);
-    if parts.len() > 1 {
-        command.args(&parts[1..]);
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("failed to run {}: {error}", parts[0]))?;
-    let exit_code = output.status.code().unwrap_or(-1);
-    Ok(OpenclawCommandOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).trim_end().to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).trim_end().to_string(),
-        exit_code,
-    })
-}
 
 fn run_openclaw_raw(args: &[&str]) -> Result<OpenclawCommandOutput, String> {
     run_openclaw_raw_timeout(args, None)
@@ -5760,6 +5742,41 @@ pub async fn remote_run_openclaw_upgrade(
 // Cron jobs
 // ---------------------------------------------------------------------------
 
+fn parse_cron_jobs(text: &str) -> Value {
+    let parsed: Value = serde_json::from_str(text).unwrap_or(Value::Array(vec![]));
+    // Handle { "version": N, "jobs": [...] } wrapper
+    let jobs = if let Some(arr) = parsed.pointer("/jobs") {
+        arr.clone()
+    } else {
+        parsed
+    };
+    match jobs {
+        Value::Array(arr) => {
+            let mapped: Vec<Value> = arr.into_iter().map(|mut v| {
+                // Map "id" → "jobId" for frontend compatibility
+                if let Value::Object(ref mut obj) = v {
+                    if let Some(id) = obj.get("id").cloned() {
+                        obj.entry("jobId".to_string()).or_insert(id);
+                    }
+                }
+                v
+            }).collect();
+            Value::Array(mapped)
+        }
+        Value::Object(map) => {
+            let arr: Vec<Value> = map.into_iter().map(|(k, mut v)| {
+                if let Value::Object(ref mut obj) = v {
+                    obj.entry("jobId".to_string()).or_insert(Value::String(k.clone()));
+                    obj.entry("id".to_string()).or_insert(Value::String(k));
+                }
+                v
+            }).collect();
+            Value::Array(arr)
+        }
+        _ => Value::Array(vec![]),
+    }
+}
+
 #[tauri::command]
 pub fn list_cron_jobs() -> Result<Value, String> {
     let paths = resolve_paths();
@@ -5768,20 +5785,7 @@ pub fn list_cron_jobs() -> Result<Value, String> {
         return Ok(Value::Array(vec![]));
     }
     let text = std::fs::read_to_string(&jobs_path).map_err(|e| e.to_string())?;
-    let jobs: Value = serde_json::from_str(&text).unwrap_or(Value::Array(vec![]));
-    match jobs {
-        Value::Object(map) => {
-            let arr: Vec<Value> = map.into_iter().map(|(k, mut v)| {
-                if let Value::Object(ref mut obj) = v {
-                    obj.entry("jobId".to_string()).or_insert(Value::String(k));
-                }
-                v
-            }).collect();
-            Ok(Value::Array(arr))
-        }
-        Value::Array(_) => Ok(jobs),
-        _ => Ok(Value::Array(vec![])),
-    }
+    Ok(parse_cron_jobs(&text))
 }
 
 #[tauri::command]
@@ -5803,9 +5807,26 @@ pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>,
 }
 
 #[tauri::command]
-pub fn trigger_cron_job(job_id: String) -> Result<String, String> {
+pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = std::process::Command::new("openclaw")
+            .args(["cron", "run", &job_id])
+            .output()
+            .map_err(|e| format!("Failed to run openclaw: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if output.status.success() {
+            Ok(stdout)
+        } else {
+            Err(format!("{stdout}\n{stderr}"))
+        }
+    }).await.map_err(|e| format!("Task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn delete_cron_job(job_id: String) -> Result<String, String> {
     let output = std::process::Command::new("openclaw")
-        .args(["cron", "run", &job_id])
+        .args(["cron", "remove", &job_id])
         .output()
         .map_err(|e| format!("Failed to run openclaw: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -5825,22 +5846,7 @@ pub fn trigger_cron_job(job_id: String) -> Result<String, String> {
 pub async fn remote_list_cron_jobs(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Value, String> {
     let raw = pool.sftp_read(&host_id, "~/.openclaw/cron/jobs.json").await;
     match raw {
-        Ok(text) => {
-            let jobs: Value = serde_json::from_str(&text).unwrap_or(Value::Array(vec![]));
-            match jobs {
-                Value::Object(map) => {
-                    let arr: Vec<Value> = map.into_iter().map(|(k, mut v)| {
-                        if let Value::Object(ref mut obj) = v {
-                            obj.entry("jobId".to_string()).or_insert(Value::String(k));
-                        }
-                        v
-                    }).collect();
-                    Ok(Value::Array(arr))
-                }
-                Value::Array(_) => Ok(jobs),
-                _ => Ok(Value::Array(vec![])),
-            }
-        }
+        Ok(text) => Ok(parse_cron_jobs(&text)),
         Err(_) => Ok(Value::Array(vec![])),
     }
 }
@@ -5867,6 +5873,16 @@ pub async fn remote_get_cron_runs(pool: State<'_, SshConnectionPool>, host_id: S
 #[tauri::command]
 pub async fn remote_trigger_cron_job(pool: State<'_, SshConnectionPool>, host_id: String, job_id: String) -> Result<String, String> {
     let result = pool.exec_login(&host_id, &format!("openclaw cron run {}", job_id)).await?;
+    if result.exit_code == 0 {
+        Ok(result.stdout)
+    } else {
+        Err(format!("{}\n{}", result.stdout, result.stderr))
+    }
+}
+
+#[tauri::command]
+pub async fn remote_delete_cron_job(pool: State<'_, SshConnectionPool>, host_id: String, job_id: String) -> Result<String, String> {
+    let result = pool.exec_login(&host_id, &format!("openclaw cron remove {}", job_id)).await?;
     if result.exit_code == 0 {
         Ok(result.stdout)
     } else {
@@ -5969,7 +5985,7 @@ pub fn start_watchdog() -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
     let log_err = log_file.try_clone().map_err(|e| e.to_string())?;
 
-    let child = std::process::Command::new("node")
+    let _child = std::process::Command::new("node")
         .arg(&script)
         .current_dir(&wd_dir)
         .stdout(log_file)
@@ -5978,7 +5994,7 @@ pub fn start_watchdog() -> Result<bool, String> {
         .spawn()
         .map_err(|e| format!("Failed to start watchdog: {e}"))?;
 
-    std::fs::write(&pid_path, child.id().to_string()).map_err(|e| e.to_string())?;
+    // PID file is written by watchdog.js itself via acquirePidFile()
     Ok(true)
 }
 
@@ -5999,6 +6015,27 @@ pub fn stop_watchdog() -> Result<bool, String> {
     }
 
     let _ = std::fs::remove_file(&pid_path);
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn uninstall_watchdog() -> Result<bool, String> {
+    let paths = resolve_paths();
+    let wd_dir = paths.base_dir.join("watchdog");
+
+    // Stop first if running
+    let pid_path = wd_dir.join("watchdog.pid");
+    if pid_path.exists() {
+        let pid_str = std::fs::read_to_string(&pid_path).unwrap_or_default();
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+        }
+    }
+
+    // Remove entire watchdog directory
+    if wd_dir.exists() {
+        std::fs::remove_dir_all(&wd_dir).map_err(|e| e.to_string())?;
+    }
     Ok(true)
 }
 
@@ -6075,5 +6112,17 @@ pub async fn remote_stop_watchdog(pool: State<'_, SshConnectionPool>, host_id: S
         let _ = pool.exec(&host_id, &format!("kill {} 2>/dev/null", pid_str.trim())).await;
     }
     let _ = pool.exec(&host_id, "rm -f ~/.openclaw/watchdog/watchdog.pid").await;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn remote_uninstall_watchdog(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<bool, String> {
+    // Stop first
+    let pid_raw = pool.sftp_read(&host_id, "~/.openclaw/watchdog/watchdog.pid").await;
+    if let Ok(pid_str) = pid_raw {
+        let _ = pool.exec(&host_id, &format!("kill {} 2>/dev/null", pid_str.trim())).await;
+    }
+    // Remove entire directory
+    let _ = pool.exec(&host_id, "rm -rf ~/.openclaw/watchdog").await;
     Ok(true)
 }

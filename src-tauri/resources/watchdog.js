@@ -290,8 +290,8 @@ function lastExpectedTrigger(schedule, now) {
 
   switch (schedule.kind) {
     case 'cron':
-      return schedule.expression
-        ? lastCronTrigger(schedule.expression, now)
+      return (schedule.expr || schedule.expression)
+        ? lastCronTrigger(schedule.expr || schedule.expression, now)
         : null;
     case 'every':
       return typeof schedule.everyMs === 'number'
@@ -336,8 +336,15 @@ function lastRunTime(jobId) {
 function normaliseJobs(raw) {
   if (!raw) return [];
 
+  // Unwrap { version, jobs: [...] } wrapper
+  if (raw.jobs && Array.isArray(raw.jobs)) {
+    raw = raw.jobs;
+  }
+
   if (Array.isArray(raw)) {
-    return raw.filter((j) => j && j.jobId);
+    return raw
+      .filter((j) => j && (j.jobId || j.id))
+      .map((j) => ({ ...j, jobId: j.jobId || j.id }));
   }
 
   if (typeof raw === 'object') {
@@ -400,8 +407,9 @@ async function runCheckCycle() {
     return;
   }
 
-  // Pre-probe gateway once per cycle (lazy; will probe on demand if needed)
-  let gatewayAlive = null; // null = not yet tested
+  // Always probe gateway once per cycle for status reporting
+  let gatewayAlive = await probePort(port);
+  log(`Gateway probe on port ${port}: ${gatewayAlive ? 'open' : 'closed'}`);
 
   const jobStatuses = {};
 
@@ -472,12 +480,6 @@ async function runCheckCycle() {
         await sleep(backoffMs);
       } else {
         state.status = 'pending';
-      }
-
-      // Probe gateway (once per cycle, cached)
-      if (gatewayAlive === null) {
-        gatewayAlive = await probePort(port);
-        log(`Gateway probe on port ${port}: ${gatewayAlive ? 'open' : 'closed'}`);
       }
 
       // Ensure gateway is up

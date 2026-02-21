@@ -9,444 +9,357 @@ import type {
   CronRun,
   CronSchedule,
   WatchdogStatus,
-  WatchdogJobStatus,
 } from "@/lib/types";
 import {
   Card,
-  CardHeader,
-  CardTitle,
   CardContent,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 /* ------------------------------------------------------------------ */
-/*  Helper functions                                                   */
+/*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function formatSchedule(schedule: CronSchedule, t: TFunction): string {
-  if (schedule.kind === "every" && schedule.everyMs) {
-    const mins = Math.round(schedule.everyMs / 60000);
-    if (mins >= 60)
-      return t("cron.every", { interval: `${Math.round(mins / 60)}h` });
-    return t("cron.every", { interval: `${mins}m` });
+const DOW_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+function cronToHuman(expr: string, t: TFunction, lang: string): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return expr;
+  const [min, hour, dom, mon, dow] = parts;
+  const time = `${hour.padStart(2, "0")}:${min.padStart(2, "0")}`;
+  const dowNames = lang.startsWith("zh") ? DOW_ZH : DOW_EN;
+
+  if (min.startsWith("*/") && hour === "*" && dom === "*" && mon === "*" && dow === "*")
+    return t("cron.every", { interval: `${min.slice(2)}m` });
+  if (min === "0" && hour.startsWith("*/") && dom === "*" && mon === "*" && dow === "*")
+    return t("cron.every", { interval: `${hour.slice(2)}h` });
+  if (dom === "*" && mon === "*" && dow !== "*" && !hour.includes("/") && !min.includes("/")) {
+    const days = dow.split(",").map(d => dowNames[parseInt(d)] || d).join(", ");
+    return `${days} ${time}`;
   }
-  if (schedule.kind === "at" && schedule.at) {
-    return t("cron.oneShot", {
-      time: new Date(schedule.at).toLocaleString(),
-    });
+  if (dom !== "*" && !dom.includes("/") && mon === "*" && dow === "*" && !hour.includes("/") && !min.includes("/"))
+    return t("cron.monthly", { day: dom, time });
+  if (dom === "*" && mon === "*" && dow === "*" && !hour.includes("/") && !min.includes("/")) {
+    const hours = hour.split(",");
+    if (hours.length === 1) return t("cron.daily", { time });
+    return t("cron.daily", { time: hours.map(h => `${h.padStart(2, "0")}:${min.padStart(2, "0")}`).join(", ") });
   }
-  if (schedule.kind === "cron" && schedule.expr) {
-    return schedule.expr;
-  }
-  return "\u2014";
+  return expr;
 }
 
-function formatRelativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+function formatSchedule(s: CronSchedule | undefined, t: TFunction, lang: string): string {
+  if (!s) return "—";
+  if (s.kind === "every" && s.everyMs) {
+    const mins = Math.round(s.everyMs / 60000);
+    return mins >= 60 ? t("cron.every", { interval: `${Math.round(mins / 60)}h` }) : t("cron.every", { interval: `${mins}m` });
+  }
+  if (s.kind === "at" && s.at) return fmtDate(new Date(s.at).getTime());
+  if (s.kind === "cron" && s.expr) return cronToHuman(s.expr, t, lang);
+  return "—";
+}
+
+/** YYYY-MM-DD HH:MM:SS */
+function fmtDate(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function fmtRelative(ms: number): string {
+  const diff = Date.now() - ms;
   const secs = Math.floor(diff / 1000);
+  if (secs < 0) return "just now";
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
-  return `${hours}h ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
-function formatDuration(start: string, end: string): string {
-  const ms = new Date(end).getTime() - new Date(start).getTime();
+function fmtDur(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
-  const secs = Math.round(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
+
 /* ------------------------------------------------------------------ */
-/*  StatusBadge                                                        */
+/*  Trash icon                                                         */
 /* ------------------------------------------------------------------ */
 
-function StatusBadge({ status }: { status: WatchdogJobStatus | undefined }) {
-  const { t } = useTranslation();
-  if (!status) return null;
-  const colors: Record<string, string> = {
-    ok: "bg-green-500/10 text-green-500",
-    pending: "bg-muted text-muted-foreground",
-    triggered: "bg-blue-500/10 text-blue-500",
-    retrying: "bg-yellow-500/10 text-yellow-500",
-    escalated: "bg-red-500/10 text-red-500",
-  };
-  return (
-    <Badge
-      variant="outline"
-      className={cn("text-xs", colors[status] || "")}
-    >
-      {t(`cron.status.${status}`)}
-    </Badge>
-  );
-}
+const TrashIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+    <line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
+  </svg>
+);
 
 /* ------------------------------------------------------------------ */
 /*  Cron page                                                          */
 /* ------------------------------------------------------------------ */
 
 export function Cron() {
-  const { t } = useTranslation();
-  const { instanceId, isRemote, isConnected } = useInstance();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language;
+  const { instanceId, isRemote } = useInstance();
 
-  // ---- state ----
   const [jobs, setJobs] = useState<CronJob[]>([]);
-  const [watchdog, setWatchdog] = useState<
-    (WatchdogStatus & { alive: boolean; deployed: boolean }) | null
-  >(null);
+  const [watchdog, setWatchdog] = useState<(WatchdogStatus & { alive: boolean; deployed: boolean }) | null>(null);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [runs, setRuns] = useState<Record<string, CronRun[]>>({});
   const [triggering, setTriggering] = useState<string | null>(null);
-  const [wdAction, setWdAction] = useState<string | null>(null); // "deploying" | "starting" | "stopping"
+  const [wdAction, setWdAction] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [lastSuccess, setLastSuccess] = useState<string | null>(null);
 
-  // ---- data loading ----
+  const loadJobs = () => { (isRemote ? api.remoteListCronJobs(instanceId) : api.listCronJobs()).then(setJobs).catch(() => {}); };
+  const loadWd = () => { (isRemote ? api.remoteGetWatchdogStatus(instanceId) : api.getWatchdogStatus()).then(setWatchdog).catch(() => setWatchdog(null)); };
+  const loadRuns = (id: string) => { (isRemote ? api.remoteGetCronRuns(instanceId, id, 10) : api.getCronRuns(id, 10)).then(r => setRuns(p => ({ ...p, [id]: r }))).catch(() => {}); };
 
-  const loadJobs = () => {
-    const p = isRemote
-      ? api.remoteListCronJobs(instanceId)
-      : api.listCronJobs();
-    p.then(setJobs).catch(() => {});
+  useEffect(() => { loadJobs(); loadWd(); const iv = setInterval(() => { loadJobs(); loadWd(); }, 10_000); return () => clearInterval(iv); }, [instanceId, isRemote]); // eslint-disable-line
+  useEffect(() => { if (expandedJob) loadRuns(expandedJob); }, [expandedJob]); // eslint-disable-line
+
+  const showErr = (e: unknown) => { const msg = e instanceof Error ? e.message : String(e); setLastError(msg); setLastSuccess(null); setTimeout(() => setLastError(null), 8000); };
+  const showOk = (msg: string) => { setLastSuccess(msg); setLastError(null); setTimeout(() => setLastSuccess(null), 5000); };
+
+  const doTrigger = (id: string) => {
+    setTriggering(id);
+    const p = isRemote ? api.remoteTriggerCronJob(instanceId, id) : api.triggerCronJob(id);
+    p.then(() => { loadJobs(); loadRuns(id); showOk(t("cron.triggerSuccess")); }).catch(showErr).finally(() => setTriggering(null));
   };
-
-  const loadWatchdog = () => {
-    const p = isRemote
-      ? api.remoteGetWatchdogStatus(instanceId)
-      : api.getWatchdogStatus();
-    p.then(setWatchdog).catch(() => setWatchdog(null));
+  const doDelete = async (id: string) => { try { if (isRemote) await api.remoteDeleteCronJob(instanceId, id); else await api.deleteCronJob(id); loadJobs(); } catch (e) { showErr(e); } };
+  const pollUntilAlive = () => {
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      (isRemote ? api.remoteGetWatchdogStatus(instanceId) : api.getWatchdogStatus())
+        .then(s => { setWatchdog(s); if (s?.alive || tries >= 15) { clearInterval(iv); setWdAction(null); } })
+        .catch(() => { if (tries >= 15) { clearInterval(iv); setWdAction(null); } });
+    }, 2000);
   };
-
-  const loadRuns = (jobId: string) => {
-    const p = isRemote
-      ? api.remoteGetCronRuns(instanceId, jobId, 10)
-      : api.getCronRuns(jobId, 10);
-    p.then((r) => setRuns((prev) => ({ ...prev, [jobId]: r }))).catch(
-      () => {},
-    );
-  };
-
-  useEffect(() => {
-    loadJobs();
-    loadWatchdog();
-    const interval = setInterval(() => {
-      loadJobs();
-      loadWatchdog();
-    }, 10_000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId, isRemote]);
-
-  // Load runs when a job is expanded
-  useEffect(() => {
-    if (expandedJob) loadRuns(expandedJob);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedJob]);
-
-  // ---- event handlers ----
-
-  const handleTrigger = async (jobId: string) => {
-    setTriggering(jobId);
-    try {
-      if (isRemote) {
-        await api.remoteTriggerCronJob(instanceId, jobId);
-      } else {
-        await api.triggerCronJob(jobId);
-      }
-      loadJobs();
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setTriggering(null);
-    }
-  };
-
-  const handleDeploy = async () => {
+  const doDeploy = async (andStart = false) => {
     setWdAction("deploying");
     try {
-      if (isRemote) {
-        await api.remoteDeployWatchdog(instanceId, ""); // TODO: pass script content
-      } else {
-        await api.deployWatchdog();
+      if (isRemote) await api.remoteDeployWatchdog(instanceId, ""); else await api.deployWatchdog();
+      if (andStart) {
+        setWdAction("starting");
+        if (isRemote) await api.remoteStartWatchdog(instanceId); else await api.startWatchdog();
+        pollUntilAlive();
+        return; // wdAction cleared by pollUntilAlive
       }
-      loadWatchdog();
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setWdAction(null);
-    }
+      loadWd();
+    } catch (e) { showErr(e); } finally { if (!andStart) setWdAction(null); }
   };
-
-  const handleStart = async () => {
+  const doStart = async () => {
     setWdAction("starting");
     try {
-      if (isRemote) {
-        await api.remoteStartWatchdog(instanceId);
-      } else {
-        await api.startWatchdog();
-      }
-      loadWatchdog();
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setWdAction(null);
-    }
+      if (isRemote) await api.remoteStartWatchdog(instanceId); else await api.startWatchdog();
+      pollUntilAlive(); // wdAction cleared when alive detected
+    } catch (e) { showErr(e); setWdAction(null); }
   };
+  const doStop = async () => { setWdAction("stopping"); try { if (isRemote) await api.remoteStopWatchdog(instanceId); else await api.stopWatchdog(); loadWd(); } catch (e) { showErr(e); } finally { setWdAction(null); } };
+  const doUninstall = async () => { setWdAction("uninstalling"); try { if (isRemote) await api.remoteUninstallWatchdog(instanceId); else await api.uninstallWatchdog(); loadWd(); } catch (e) { showErr(e); } finally { setWdAction(null); } };
 
-  const handleStop = async () => {
-    setWdAction("stopping");
-    try {
-      if (isRemote) {
-        await api.remoteStopWatchdog(instanceId);
-      } else {
-        await api.stopWatchdog();
-      }
-      loadWatchdog();
-    } catch (err: any) {
-      console.error(err);
-    } finally {
-      setWdAction(null);
-    }
-  };
-
-  // ---- watchdog status logic ----
-
-  let statusColor = "bg-gray-400";
-  let statusText = t("watchdog.notDeployed");
-  if (watchdog?.deployed && !watchdog?.alive) {
-    statusColor = "bg-gray-400";
-    statusText = t("watchdog.stopped");
-  } else if (watchdog?.alive && watchdog?.lastCheckAt) {
-    const lastCheckAge =
-      Date.now() - new Date(watchdog.lastCheckAt).getTime();
-    if (lastCheckAge <= 120_000) {
-      statusColor = "bg-green-500";
-      statusText = t("watchdog.running");
-    } else {
-      statusColor = "bg-red-500";
-      statusText = t("watchdog.crashed");
-    }
+  // watchdog status
+  let wdDot = "bg-gray-400", wdText = t("watchdog.notDeployed");
+  if (watchdog?.deployed && !watchdog?.alive) { wdDot = "bg-gray-400"; wdText = t("watchdog.stopped"); }
+  else if (watchdog?.alive && !watchdog?.lastCheckAt) { wdDot = "bg-yellow-500 animate-pulse"; wdText = t("watchdog.starting"); }
+  else if (watchdog?.alive && watchdog?.lastCheckAt) {
+    const age = Date.now() - new Date(watchdog.lastCheckAt).getTime();
+    if (age <= 120_000) { wdDot = "bg-green-500"; wdText = t("watchdog.running"); }
+    else { wdDot = "bg-red-500"; wdText = t("watchdog.crashed"); }
   }
-
-  // ---- helpers for job rows ----
-
-  const toggleExpand = (jobId: string) => {
-    setExpandedJob((prev) => (prev === jobId ? null : jobId));
-  };
-
-  const getMonitorStatus = (
-    job: CronJob,
-  ): WatchdogJobStatus | undefined => {
-    if (!watchdog?.jobs) return undefined;
-    return watchdog.jobs[job.jobId]?.status;
-  };
-
-  const getLastRunText = (job: CronJob): string => {
-    const jobRuns = runs[job.jobId];
-    if (!jobRuns || jobRuns.length === 0) {
-      const state = watchdog?.jobs?.[job.jobId];
-      if (state?.lastRunAt) return formatRelativeTime(state.lastRunAt);
-      return "\u2014";
-    }
-    return formatRelativeTime(jobRuns[0].startedAt);
-  };
-
-  // ---- render ----
 
   return (
     <section>
-      <h2 className="text-2xl font-bold mb-4">{t("cron.pageTitle")}</h2>
+      <h2 className="text-2xl font-bold mb-4">{t("cron.title")}</h2>
 
-      {/* Watchdog Control Bar */}
-      <Card className="mb-4">
-        <CardContent className="flex items-center gap-4 py-3">
-          {/* Status indicator */}
-          <div className="flex items-center gap-2">
-            <span className={cn("w-2.5 h-2.5 rounded-full", statusColor)} />
-            <span className="text-sm font-medium">{statusText}</span>
+      {lastError && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 mb-3 text-xs text-destructive break-words">
+          {lastError}
+        </div>
+      )}
+      {lastSuccess && (
+        <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 mb-3 text-xs text-green-700 dark:text-green-400">
+          {lastSuccess}
+        </div>
+      )}
+
+      {/* ---- Watchdog ---- */}
+      <div className="rounded-lg border bg-card text-card-foreground px-3 py-2 mb-4">
+        {/* Row 1: title + button */}
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">{t("watchdog.title")}</h3>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!watchdog?.deployed && <Button size="sm" disabled={!!wdAction} onClick={() => doDeploy(true)}>{wdAction ? t(`watchdog.${wdAction}`) : t("watchdog.deploy")}</Button>}
+            {watchdog?.deployed && !watchdog?.alive && !wdAction && (
+              <>
+                <Button size="sm" variant="ghost" className="text-muted-foreground text-xs" disabled={!!wdAction} onClick={doUninstall}>{t("watchdog.uninstall")}</Button>
+                <Button size="sm" variant="outline" disabled={!!wdAction} onClick={() => doDeploy(true)}>{t("watchdog.redeploy")}</Button>
+                <Button size="sm" disabled={!!wdAction} onClick={doStart}>{t("watchdog.start")}</Button>
+              </>
+            )}
+            {watchdog?.deployed && !watchdog?.alive && wdAction && (
+              <Button size="sm" disabled>{t(`watchdog.${wdAction}`)}</Button>
+            )}
+            {watchdog?.alive && <Button size="sm" variant="outline" disabled={!!wdAction} onClick={doStop}>{wdAction === "stopping" ? t("watchdog.stopping") : t("watchdog.stop")}</Button>}
           </div>
+        </div>
+        {/* Row 2: description/status + status indicator */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {!watchdog?.deployed && (
+              <span>{t("watchdog.notDeployedHint")}</span>
+            )}
+            {watchdog?.deployed && !watchdog?.alive && (
+              <span>{t("watchdog.stopped")}</span>
+            )}
+            {watchdog?.alive && !watchdog?.lastCheckAt && (
+              <span>{t("watchdog.startingHint")}</span>
+            )}
+            {watchdog?.alive && watchdog?.lastCheckAt && (
+              <span>{t("watchdog.lastCheck", { time: fmtRelative(new Date(watchdog.lastCheckAt).getTime()) })}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className={cn("w-2 h-2 rounded-full", wdDot)} />
+            <span className="text-xs text-muted-foreground">{wdText}</span>
+          </div>
+        </div>
+      </div>
 
-          {/* Last check time */}
-          {watchdog?.lastCheckAt && (
-            <span className="text-sm text-muted-foreground">
-              {t("watchdog.lastCheck", {
-                time: formatRelativeTime(watchdog.lastCheckAt),
-              })}
-            </span>
-          )}
+      {/* ---- Jobs ---- */}
+      {jobs.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <p className="text-sm">{t("cron.noJobs")}</p>
+            <p className="text-xs mt-1">{t("cron.noJobsHint")}</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-1">
+          {/* Legend */}
+          <div className="flex items-center gap-4 text-[10px] text-muted-foreground px-1 pb-1">
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" />{t("cron.legendOk")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />{t("cron.legendRetrying")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-500" />{t("cron.legendEscalated")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-400" />{t("cron.legendDisabled")}</span>
+          </div>
+          {jobs.map((job: any, idx: number) => {
+            const jobId = job.jobId || job.id || String(idx);
+            const st = job.state || {};
+            const expanded = expandedJob === jobId;
+            const jobName = job.name || jobId;
+            const wdStatus = watchdog?.jobs?.[jobId]?.status;
 
-          {/* Gateway health */}
-          {watchdog?.alive && (
-            <Badge
-              variant={
-                watchdog.gatewayHealthy ? "default" : "destructive"
-              }
-            >
-              {t("watchdog.gateway", {
-                status: watchdog.gatewayHealthy
-                  ? "healthy"
-                  : "unhealthy",
-              })}
-            </Badge>
-          )}
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Action buttons */}
-          {!watchdog?.deployed && (
-            <Button size="sm" disabled={!!wdAction} onClick={handleDeploy}>
-              {wdAction === "deploying"
-                ? t("watchdog.deploying")
-                : t("watchdog.deploy")}
-            </Button>
-          )}
-          {watchdog?.deployed && !watchdog?.alive && (
-            <Button size="sm" disabled={!!wdAction} onClick={handleStart}>
-              {wdAction === "starting"
-                ? t("watchdog.starting")
-                : t("watchdog.start")}
-            </Button>
-          )}
-          {watchdog?.alive && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!!wdAction}
-              onClick={handleStop}
-            >
-              {wdAction === "stopping"
-                ? t("watchdog.stopping")
-                : t("watchdog.stop")}
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Job Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t("cron.title")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {jobs.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <p>{t("cron.noJobs")}</p>
-              <p className="text-sm mt-1">{t("cron.noJobsHint")}</p>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {/* Header row */}
-              <div className="grid grid-cols-[1fr_1fr_80px_120px_100px_80px] gap-2 px-3 py-1.5 text-xs text-muted-foreground font-medium">
-                <span>{t("cron.name")}</span>
-                <span>{t("cron.schedule")}</span>
-                <span>{t("cron.agent")}</span>
-                <span>{t("cron.lastRun")}</span>
-                <span>{t("cron.monitor")}</span>
-                <span>{t("cron.actions")}</span>
-              </div>
-
-              {/* Job rows */}
-              {jobs.map((job) => (
-                <div key={job.jobId}>
+            return (
+              <div key={jobId} className={cn("rounded-lg border bg-card text-card-foreground px-3 transition-colors", expanded && "ring-1 ring-ring")}>
+                  {/* Single-line row */}
                   <div
-                    className="grid grid-cols-[1fr_1fr_80px_120px_100px_80px] gap-2 px-3 py-2 rounded hover:bg-muted/50 cursor-pointer items-center"
-                    onClick={() => toggleExpand(job.jobId)}
+                    className="flex items-center gap-3 cursor-pointer h-8"
+                    onClick={() => setExpandedJob(p => p === jobId ? null : jobId)}
                   >
-                    <span className="text-sm font-medium truncate">
-                      {job.name}
-                      {!job.enabled && (
-                        <Badge
-                          variant="outline"
-                          className="ml-2 text-xs"
-                        >
-                          {t("cron.disabled")}
-                        </Badge>
-                      )}
+                    {/* Status dot */}
+                    <span className={cn("w-2 h-2 rounded-full shrink-0",
+                      job.enabled === false ? "bg-gray-400"
+                        : wdStatus === "escalated" ? "bg-red-500"
+                        : wdStatus === "retrying" || wdStatus === "pending" ? "bg-yellow-500"
+                        : "bg-green-500"
+                    )} />
+
+                    {/* Name */}
+                    <span className="text-sm font-medium truncate min-w-0 flex-1">{jobName}</span>
+
+                    {/* Disabled badge */}
+                    {job.enabled === false && (
+                      <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground px-1 py-0 shrink-0">{t("cron.disabled")}</Badge>
+                    )}
+
+                    {/* Delivery error hint */}
+                    {job.enabled !== false && st.lastStatus === "error" && (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0" title={st.lastError || ""}>{t("cron.deliveryError")}</span>
+                    )}
+
+                    {/* Schedule */}
+                    <span className="text-xs text-muted-foreground shrink-0 w-32 text-right truncate">
+                      {formatSchedule(job.schedule, t, lang)}
                     </span>
-                    <span className="text-sm text-muted-foreground">
-                      {formatSchedule(job.schedule, t)}
+
+                    {/* Last run */}
+                    <span className="text-xs text-muted-foreground shrink-0 w-16 text-right">
+                      {st.lastRunAtMs ? fmtRelative(st.lastRunAtMs) : "—"}
                     </span>
-                    <span className="text-sm text-muted-foreground">
-                      {job.agentId || "main"}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {getLastRunText(job)}
-                    </span>
-                    <StatusBadge status={getMonitorStatus(job)} />
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={!!triggering}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleTrigger(job.jobId);
-                      }}
-                    >
-                      {triggering === job.jobId
-                        ? t("cron.triggering")
-                        : t("cron.trigger")}
-                    </Button>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                      <Button size="xs" variant="outline" disabled={!!triggering || job.enabled === false} onClick={() => doTrigger(jobId)}>
+                        {triggering === jobId ? t("cron.triggering") : t("cron.trigger")}
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button size="icon-xs" variant="ghost" className="text-muted-foreground hover:text-destructive"><TrashIcon /></Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>{t("cron.deleteTitle")}</AlertDialogTitle>
+                            <AlertDialogDescription>{t("cron.deleteDescription", { name: jobName })}</AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>{t("settings.cancel")}</AlertDialogCancel>
+                            <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={() => doDelete(jobId)}>{t("cron.delete")}</AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
                   </div>
 
                   {/* Expanded run history */}
-                  {expandedJob === job.jobId && (
-                    <div className="px-6 py-2 mb-2">
-                      <p className="text-xs font-medium text-muted-foreground mb-2">
-                        {t("cron.runHistory")}
-                      </p>
-                      {(runs[job.jobId] || []).length === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          {t("cron.noRuns")}
-                        </p>
+                  {expanded && (
+                    <div className="mt-2 pt-2 border-t border-border">
+                      <div className="mb-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">{t("cron.runHistory")}</span>
+                      </div>
+                      {(runs[jobId] || []).length === 0 ? (
+                        <p className="text-xs text-muted-foreground py-1">{t("cron.noRuns")}</p>
                       ) : (
-                        <div className="space-y-1">
-                          {(runs[job.jobId] || []).map((run, i) => (
-                            <div
-                              key={i}
-                              className="grid grid-cols-[120px_80px_80px_1fr] gap-2 text-xs"
-                            >
-                              <span>
-                                {new Date(
-                                  run.startedAt,
-                                ).toLocaleString()}
-                              </span>
-                              <Badge
-                                variant={
-                                  run.outcome === "ok"
-                                    ? "default"
-                                    : "destructive"
-                                }
-                                className="text-xs w-fit"
-                              >
-                                {run.outcome}
-                              </Badge>
-                              <span className="text-muted-foreground">
-                                {run.endedAt
-                                  ? formatDuration(
-                                      run.startedAt,
-                                      run.endedAt,
-                                    )
-                                  : "\u2014"}
-                              </span>
-                              {run.error && (
-                                <span className="text-destructive truncate">
-                                  {run.error}
+                        <div className="space-y-0.5">
+                          {(runs[jobId] || []).map((run: any, i: number) => {
+                            const ts = run.ts || run.runAtMs;
+                            return (
+                              <div key={i} className="flex items-start gap-3 text-xs py-0.5 min-w-0">
+                                <span className="text-muted-foreground w-[130px] shrink-0 tabular-nums">{ts ? fmtDate(ts) : "—"}</span>
+                                <span className="text-muted-foreground w-10 shrink-0 tabular-nums">{run.durationMs != null ? fmtDur(run.durationMs) : "—"}</span>
+                                <span className="text-muted-foreground min-w-0 break-words">
+                                  {run.summary || "—"}
                                 </span>
-                              )}
-                            </div>
-                          ))}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   )}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

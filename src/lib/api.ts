@@ -232,6 +232,8 @@ export const api = {
     invoke("get_cron_runs", { jobId, limit }),
   triggerCronJob: (jobId: string): Promise<string> =>
     invoke("trigger_cron_job", { jobId }),
+  deleteCronJob: (jobId: string): Promise<string> =>
+    invoke("delete_cron_job", { jobId }),
 
   // Watchdog
   getWatchdogStatus: (): Promise<WatchdogStatus & { alive: boolean; deployed: boolean }> =>
@@ -242,6 +244,8 @@ export const api = {
     invoke("start_watchdog", {}),
   stopWatchdog: (): Promise<boolean> =>
     invoke("stop_watchdog", {}),
+  uninstallWatchdog: (): Promise<boolean> =>
+    invoke("uninstall_watchdog", {}),
 
   // Remote cron
   remoteListCronJobs: (hostId: string): Promise<CronJob[]> =>
@@ -250,6 +254,8 @@ export const api = {
     invoke("remote_get_cron_runs", { hostId, jobId, limit }),
   remoteTriggerCronJob: (hostId: string, jobId: string): Promise<string> =>
     invoke("remote_trigger_cron_job", { hostId, jobId }),
+  remoteDeleteCronJob: (hostId: string, jobId: string): Promise<string> =>
+    invoke("remote_delete_cron_job", { hostId, jobId }),
 
   // Remote watchdog
   remoteGetWatchdogStatus: (hostId: string): Promise<WatchdogStatus & { alive: boolean; deployed: boolean }> =>
@@ -260,4 +266,6 @@ export const api = {
     invoke("remote_start_watchdog", { hostId }),
   remoteStopWatchdog: (hostId: string): Promise<boolean> =>
     invoke("remote_stop_watchdog", { hostId }),
+  remoteUninstallWatchdog: (hostId: string): Promise<boolean> =>
+    invoke("remote_uninstall_watchdog", { hostId }),
 };
