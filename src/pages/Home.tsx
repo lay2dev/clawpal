@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api } from "../lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +27,7 @@ import { RecipeCard } from "@/components/RecipeCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { InstanceStatus, AgentOverview, Recipe, BackupInfo, ModelProfile } from "../lib/types";
 import { formatTime, formatBytes } from "@/lib/utils";
-import { useInstance } from "@/lib/instance-context";
+import { useApi } from "@/lib/use-api";
 
 interface AgentGroup {
   identity: string;
@@ -61,7 +60,7 @@ export function Home({
   showToast?: (message: string, type?: "success" | "error") => void;
 }) {
   const { t } = useTranslation();
-  const { instanceId, isRemote, isConnected } = useInstance();
+  const ua = useApi();
   const [status, setStatus] = useState<InstanceStatus | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; latest?: string } | null>(null);
@@ -94,23 +93,14 @@ export function Home({
   const remoteErrorShownRef = useRef(false);
 
   const fetchStatus = useCallback(() => {
-    if (isRemote) {
-      if (!isConnected) return; // Wait for SSH connection
-      api.remoteGetInstanceStatus(instanceId).then((s) => {
-        setStatus(s);
+    if (ua.isRemote && !ua.isConnected) return; // Wait for SSH connection
+    ua.getInstanceStatus().then((s) => {
+      setStatus(s);
+      if (ua.isRemote) {
         setStatusSettled(true);
         remoteErrorShownRef.current = false;
         if (s.openclawVersion) setVersion(s.openclawVersion);
-      }).catch((e) => {
-        console.error("Failed to fetch remote status:", e);
-        if (!remoteErrorShownRef.current) {
-          remoteErrorShownRef.current = true;
-          showToast?.(t('home.remoteReadFailed', { error: String(e) }), "error");
-        }
-      });
-    } else {
-      api.getInstanceStatus().then((s) => {
-        setStatus(s);
+      } else {
         if (s.healthy) {
           setStatusSettled(true);
           retriesRef.current = 0;
@@ -119,9 +109,19 @@ export function Home({
         } else {
           setStatusSettled(true);
         }
-      }).catch((e) => console.error("Failed to fetch status:", e));
-    }
-  }, [isRemote, isConnected, instanceId, showToast, t]);
+      }
+    }).catch((e) => {
+      if (ua.isRemote) {
+        console.error("Failed to fetch remote status:", e);
+        if (!remoteErrorShownRef.current) {
+          remoteErrorShownRef.current = true;
+          showToast?.(t('home.remoteReadFailed', { error: String(e) }), "error");
+        }
+      } else {
+        console.error("Failed to fetch status:", e);
+      }
+    });
+  }, [ua, showToast, t]);
 
   useEffect(() => {
     remoteErrorShownRef.current = false;
@@ -132,22 +132,22 @@ export function Home({
   }, [fetchStatus, statusSettled]);
 
   const refreshAgents = useCallback(() => {
-    if (isRemote) {
-      if (!isConnected) return; // Wait for SSH connection
-      api.remoteListAgentsOverview(instanceId).then((a) => {
-        setAgents(a);
-        remoteErrorShownRef.current = false;
-      }).catch((e) => {
+    if (ua.isRemote && !ua.isConnected) return; // Wait for SSH connection
+    ua.listAgents().then((a) => {
+      setAgents(a);
+      if (ua.isRemote) remoteErrorShownRef.current = false;
+    }).catch((e) => {
+      if (ua.isRemote) {
         console.error("Failed to load remote agents:", e);
         if (!remoteErrorShownRef.current) {
           remoteErrorShownRef.current = true;
           showToast?.(t('home.remoteAgentsFailed', { error: String(e) }), "error");
         }
-      });
-      return;
-    }
-    api.listAgentsOverview().then(setAgents).catch((e) => console.error("Failed to load agents:", e));
-  }, [isRemote, isConnected, instanceId, showToast, t]);
+      } else {
+        console.error("Failed to load agents:", e);
+      }
+    });
+  }, [ua, showToast, t]);
 
   useEffect(() => {
     refreshAgents();
@@ -157,27 +157,19 @@ export function Home({
   }, [refreshAgents]);
 
   useEffect(() => {
-    api.listRecipes().then((r) => setRecipes(r.slice(0, 4))).catch((e) => console.error("Failed to load recipes:", e));
-  }, []);
+    ua.listRecipes().then((r) => setRecipes(r.slice(0, 4))).catch((e) => console.error("Failed to load recipes:", e));
+  }, [ua]);
 
   const refreshBackups = useCallback(() => {
-    if (isRemote) {
-      if (!isConnected) return;
-      api.remoteListBackups(instanceId).then(setBackups).catch((e) => console.error("Failed to load remote backups:", e));
-    } else {
-      api.listBackups().then(setBackups).catch((e) => console.error("Failed to load backups:", e));
-    }
-  }, [isRemote, isConnected, instanceId]);
+    if (ua.isRemote && !ua.isConnected) return;
+    ua.listBackups().then(setBackups).catch((e) => console.error("Failed to load backups:", e));
+  }, [ua]);
   useEffect(refreshBackups, [refreshBackups]);
 
   useEffect(() => {
-    if (isRemote) {
-      if (!isConnected) return;
-      api.remoteListModelProfiles(instanceId).then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load remote model profiles:", e));
-    } else {
-      api.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
-    }
-  }, [isRemote, isConnected, instanceId]);
+    if (ua.isRemote && !ua.isConnected) return;
+    ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
+  }, [ua]);
 
   // Match current global model value to a profile ID
   const currentModelProfileId = useMemo(() => {
@@ -200,14 +192,14 @@ export function Home({
     setCheckingUpdate(true);
     setUpdateInfo(null);
     const timer = setTimeout(() => {
-      if (isRemote) {
-        if (!isConnected) { setCheckingUpdate(false); return; }
-        api.remoteCheckOpenclawUpdate(instanceId).then((u) => {
+      if (ua.isRemote) {
+        if (!ua.isConnected) { setCheckingUpdate(false); return; }
+        ua.checkOpenclawUpdate().then((u) => {
           setUpdateInfo({ available: u.upgradeAvailable, latest: u.latestVersion ?? undefined });
         }).catch((e) => console.error("Failed to check remote update:", e))
           .finally(() => setCheckingUpdate(false));
       } else {
-        api.getSystemStatus().then((s) => {
+        ua.getSystemStatus().then((s) => {
           setVersion(s.openclawVersion);
           if (s.openclawUpdate) {
             setUpdateInfo({
@@ -220,15 +212,12 @@ export function Home({
       }
     }, 500);
     return () => clearTimeout(timer);
-  }, [isRemote, isConnected, instanceId]);
+  }, [ua]);
 
 
   const handleDeleteAgent = (agentId: string) => {
-    if (isRemote && !isConnected) return;
-    const deletePromise = isRemote
-      ? api.remoteDeleteAgent(instanceId, agentId)
-      : api.deleteAgent(agentId);
-    deletePromise
+    if (ua.isRemote && !ua.isConnected) return;
+    ua.deleteAgent(agentId)
       .then(() => refreshAgents())
       .catch((e) => showToast?.(String(e), "error"));
   };
@@ -267,7 +256,7 @@ export function Home({
                     size="sm"
                     className="text-xs h-6"
                     variant="outline"
-                    onClick={() => api.openUrl("https://github.com/openclaw/openclaw/releases")}
+                    onClick={() => ua.openUrl("https://github.com/openclaw/openclaw/releases")}
                   >
                     {t('home.view')}
                   </Button>
@@ -292,10 +281,7 @@ export function Home({
                     if (val === "__raw__") return;
                     setSavingModel(true);
                     const modelValue = resolveModelValue(val === "__none__" ? null : val);
-                    const setModelPromise = isRemote
-                      ? api.remoteSetGlobalModel(instanceId, modelValue)
-                      : api.setGlobalModel(modelValue);
-                    setModelPromise
+                    ua.setGlobalModel(modelValue)
                       .then(() => fetchStatus())
                       .catch((e) => showToast?.(String(e), "error"))
                       .finally(() => setSavingModel(false));
@@ -373,10 +359,7 @@ export function Home({
                             })()}
                             onValueChange={(val) => {
                               const modelValue = resolveModelValue(val === "__none__" ? null : val);
-                              const setModelPromise = isRemote
-                                ? api.remoteSetAgentModel(instanceId, agent.id, modelValue)
-                                : api.setAgentModel(agent.id, modelValue);
-                              setModelPromise
+                              ua.setAgentModel(agent.id, modelValue)
                                 .then(() => refreshAgents())
                                 .catch((e) => showToast?.(String(e), "error"));
                             }}
@@ -465,10 +448,7 @@ export function Home({
             onClick={() => {
               setBackingUp(true);
               setBackupMessage("");
-              const backupPromise = isRemote
-                ? api.remoteBackupBeforeUpgrade(instanceId)
-                : api.backupBeforeUpgrade();
-              backupPromise
+              ua.backupBeforeUpgrade()
                 .then((info) => {
                   setBackupMessage(t('home.backupCreated', { name: info.name }));
                   refreshBackups();
@@ -500,16 +480,16 @@ export function Home({
                     <div className="text-xs text-muted-foreground">
                       {formatTime(backup.createdAt)} — {formatBytes(backup.sizeBytes)}
                     </div>
-                    {isRemote && backup.path && (
+                    {ua.isRemote && backup.path && (
                       <div className="text-xs text-muted-foreground mt-0.5 font-mono">{backup.path}</div>
                     )}
                   </div>
                   <div className="flex gap-1.5">
-                    {!isRemote && (
+                    {!ua.isRemote && (
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => api.openUrl(backup.path)}
+                        onClick={() => ua.openUrl(backup.path)}
                       >
                         {t('home.show')}
                       </Button>
@@ -531,10 +511,7 @@ export function Home({
                           <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
                           <AlertDialogAction
                             onClick={() => {
-                              const restorePromise = isRemote
-                                ? api.remoteRestoreFromBackup(instanceId, backup.name)
-                                : api.restoreFromBackup(backup.name);
-                              restorePromise
+                              ua.restoreFromBackup(backup.name)
                                 .then((msg) => setBackupMessage(msg))
                                 .catch((e) => setBackupMessage(t('home.restoreFailed', { error: String(e) })));
                             }}
@@ -562,10 +539,7 @@ export function Home({
                           <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => {
-                              const deletePromise = isRemote
-                                ? api.remoteDeleteBackup(instanceId, backup.name)
-                                : api.deleteBackup(backup.name);
-                              deletePromise
+                              ua.deleteBackup(backup.name)
                                 .then(() => {
                                   setBackupMessage(t('home.deletedBackup', { name: backup.name }));
                                   refreshBackups();
@@ -597,8 +571,8 @@ export function Home({
       <UpgradeDialog
         open={showUpgradeDialog}
         onOpenChange={setShowUpgradeDialog}
-        isRemote={isRemote}
-        instanceId={instanceId}
+        isRemote={ua.isRemote}
+        instanceId={ua.instanceId}
         currentVersion={version || ""}
         latestVersion={updateInfo?.latest || ""}
       />
