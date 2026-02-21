@@ -101,11 +101,37 @@ pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
     }
 
     let raw = &output.stdout;
-    let start = raw
-        .find('{')
-        .or_else(|| raw.find('['))
-        .ok_or_else(|| format!("No JSON found in output: {raw}"))?;
-    let json_str = &raw[start..];
+    // CLI may emit non-JSON noise (e.g. Doctor warnings with brackets) before
+    // the actual JSON payload. Find the outermost JSON object/array by locating
+    // the last `}` or `]` (whichever comes later), then walking backwards to
+    // find its matching opener with correct nesting.
+    let last_brace = raw.rfind('}');
+    let last_bracket = raw.rfind(']');
+    let end = match (last_brace, last_bracket) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    let start = match end {
+        Some(e) => {
+            let closer = raw.as_bytes()[e];
+            let opener = if closer == b']' { b'[' } else { b'{' };
+            let mut depth = 0i32;
+            let mut pos = None;
+            for i in (0..=e).rev() {
+                let ch = raw.as_bytes()[i];
+                if ch == closer { depth += 1; }
+                else if ch == opener { depth -= 1; }
+                if depth == 0 { pos = Some(i); break; }
+            }
+            pos
+        }
+        None => None,
+    };
+    let start = start.ok_or_else(|| format!("No JSON found in output: {raw}"))?;
+    let end = end.unwrap();
+    let json_str = &raw[start..=end];
     serde_json::from_str(json_str).map_err(|e| format!("Failed to parse JSON: {e}"))
 }
 
