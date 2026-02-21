@@ -308,7 +308,7 @@ pub async fn preview_queued_commands(
         // Execute each command in sandbox
         let mut errors = Vec::new();
         for cmd in &commands {
-            if cmd.command.first().map(|s| s.as_str()) == Some("__config_write__") {
+            if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
                 // Internal command: write config content directly
                 if let Some(content) = cmd.command.get(1) {
                     if let Err(e) = std::fs::write(&preview_config, content) {
@@ -421,9 +421,9 @@ pub async fn apply_queued_commands(
             summary.truncate(80);
             summary.push_str("...");
         }
-        // Detect if this is a rollback operation (contains __config_write__ commands)
+        // Detect if this is a rollback operation
         let is_rollback = commands.iter()
-            .any(|c| c.command.first().map(|s| s.as_str()) == Some("__config_write__"));
+            .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
         let source = if is_rollback { "rollback" } else { "clawpal" };
         let can_rollback = !is_rollback;
         let _ = crate::history::add_snapshot(
@@ -439,7 +439,7 @@ pub async fn apply_queued_commands(
         // Execute each command for real
         let mut applied_count = 0;
         for cmd in &commands {
-            if cmd.command.first().map(|s| s.as_str()) == Some("__config_write__") {
+            if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
                 // Internal command: write config content directly
                 if let Some(content) = cmd.command.get(1) {
                     if let Err(e) = crate::config_io::write_text(&paths.config_path, content) {

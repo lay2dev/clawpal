@@ -125,7 +125,7 @@ export function History() {
                               try {
                                 const p = await ua.previewRollback(item.id);
                                 const label = `Rollback to ${item.recipeId || formatTime(item.createdAt)}`;
-                                await ua.queueCommand(label, ["__config_write__", p.configAfter]);
+                                await ua.queueCommand(label, ["__rollback__", p.configAfter]);
                                 setMessage(t('history.rollbackQueued'));
                               } catch (err) {
                                 setMessage(String(err));
