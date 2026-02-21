@@ -273,13 +273,27 @@ pub fn preview_queued_commands(
     // Read current config
     let config_before = crate::config_io::read_text(&paths.config_path)?;
 
-    // Set up sandbox directory: OPENCLAW_HOME points to the parent,
-    // so the CLI finds config at $OPENCLAW_HOME/.openclaw/openclaw.json
+    // Set up sandbox: symlink all entries from real .openclaw/ into sandbox,
+    // but copy openclaw.json so commands modify the copy, not the original.
+    // This ensures the CLI can find extensions, plugins, etc. for validation.
     let sandbox_root = paths.clawpal_dir.join("preview");
     let preview_dir = sandbox_root.join(".openclaw");
+    // Clean previous sandbox if any
+    let _ = std::fs::remove_dir_all(&sandbox_root);
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
 
-    // Copy current config to sandbox
+    // Symlink all sibling entries from real .openclaw/
+    if let Ok(entries) = std::fs::read_dir(&paths.base_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name == "openclaw.json" { continue; } // will be copied instead
+            let target = preview_dir.join(&name);
+            #[cfg(unix)]
+            { let _ = std::os::unix::fs::symlink(entry.path(), &target); }
+        }
+    }
+
+    // Copy config file (the one we want to modify in-place)
     let preview_config = preview_dir.join("openclaw.json");
     std::fs::copy(&paths.config_path, &preview_config).map_err(|e| e.to_string())?;
 
