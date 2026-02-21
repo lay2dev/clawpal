@@ -107,22 +107,6 @@ export function useApi() {
         api.applyConfigPatch,
         api.remoteApplyConfigPatch,
       ),
-      saveConfigBaseline: dispatch(
-        api.saveConfigBaseline,
-        api.remoteSaveConfigBaseline,
-      ),
-      checkConfigDirty: dispatch(
-        api.checkConfigDirty,
-        api.remoteCheckConfigDirty,
-      ),
-      discardConfigChanges: dispatch(
-        api.discardConfigChanges,
-        api.remoteDiscardConfigChanges,
-      ),
-      applyPendingChanges: dispatch(
-        api.applyPendingChanges,
-        api.remoteApplyPendingChanges,
-      ),
       restartGateway: dispatch(api.restartGateway, api.remoteRestartGateway),
 
       // Doctor
@@ -198,6 +182,15 @@ export function useApi() {
         api.uninstallWatchdog,
         api.remoteUninstallWatchdog,
       ),
+
+      // Queue
+      queueCommand: dispatch(api.queueCommand, api.remoteQueueCommand),
+      removeQueuedCommand: dispatch(api.removeQueuedCommand, api.remoteRemoveQueuedCommand),
+      listQueuedCommands: dispatch(api.listQueuedCommands, api.remoteListQueuedCommands),
+      discardQueuedCommands: dispatch(api.discardQueuedCommands, api.remoteDiscardQueuedCommands),
+      previewQueuedCommands: dispatch(api.previewQueuedCommands, api.remotePreviewQueuedCommands),
+      applyQueuedCommands: dispatch(api.applyQueuedCommands, api.remoteApplyQueuedCommands),
+      queuedCommandsCount: dispatch(api.queuedCommandsCount, api.remoteQueuedCommandsCount),
 
       // Logs
       readAppLog: dispatch(api.readAppLog, api.remoteReadAppLog),

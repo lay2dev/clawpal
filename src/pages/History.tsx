@@ -123,9 +123,10 @@ export function History() {
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={async () => {
                               try {
-                                await ua.rollback(item.id);
-                                setMessage(t('history.rollbackCompleted'));
-                                await refreshHistory();
+                                const p = await ua.previewRollback(item.id);
+                                const label = `Rollback to ${item.recipeId || formatTime(item.createdAt)}`;
+                                await ua.queueCommand(label, ["__rollback__", p.configAfter]);
+                                setMessage(t('history.rollbackQueued'));
                               } catch (err) {
                                 setMessage(String(err));
                               }

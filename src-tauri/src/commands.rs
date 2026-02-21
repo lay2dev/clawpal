@@ -12,20 +12,10 @@ use crate::doctor::{apply_auto_fixes, run_doctor, DoctorReport};
 use crate::history::{add_snapshot, list_snapshots, read_snapshot};
 use crate::models::resolve_paths;
 use crate::ssh::{SshConnectionPool, SshHostConfig, SshExecResult, SftpEntry};
-use std::sync::Mutex;
 
 /// Escape a string for safe inclusion in a single-quoted shell argument.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Stores remote config baselines keyed by host_id for dirty tracking.
-pub struct RemoteConfigBaselines(Mutex<HashMap<String, String>>);
-
-impl RemoteConfigBaselines {
-    pub fn new() -> Self {
-        Self(Mutex::new(HashMap::new()))
-    }
 }
 
 use crate::recipe::{
@@ -632,12 +622,14 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
 }
 
 #[tauri::command]
-pub fn list_channels() -> Result<Vec<ChannelNode>, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let mut nodes = collect_channel_nodes(&cfg);
-    enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
-    Ok(nodes)
+pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        let mut nodes = collect_channel_nodes(&cfg);
+        enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
+        Ok(nodes)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -831,15 +823,23 @@ pub fn update_channel_config(
 
 /// List current channel→agent bindings from config.
 #[tauri::command]
-pub fn list_bindings() -> Result<Vec<Value>, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let bindings = cfg
-        .get("bindings")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(bindings)
+pub async fn list_bindings(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<Value>, String> {
+    let cache_key = "local:bindings";
+    if let Some(cached) = cache.get(cache_key, None) {
+        return serde_json::from_str(&cached).map_err(|e| e.to_string());
+    }
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        let result = json.as_array().cloned().unwrap_or_default();
+        if let Ok(serialized) = serde_json::to_string(&result) {
+            cache.set(cache_key.to_string(), serialized);
+        }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Assign a Discord channel to an agent (modifies the `bindings` array).
@@ -975,73 +975,72 @@ pub fn list_model_bindings() -> Result<Vec<ModelBinding>, String> {
 }
 
 #[tauri::command]
-pub fn list_agents_overview() -> Result<Vec<AgentOverview>, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let mut agents = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-
-    let default_workspace = cfg.pointer("/agents/defaults/workspace")
-        .and_then(Value::as_str)
-        .map(|s| expand_tilde(s));
-
-    if let Some(list) = cfg.pointer("/agents/list").and_then(Value::as_array) {
-        let channel_nodes = collect_channel_nodes(&cfg);
-        for agent in list {
-            let id = agent.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
-
-            // Deduplicate by ID
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
-
-            // Read name/emoji from IDENTITY.md in the agent's workspace
-            let workspace = agent.get("workspace").and_then(Value::as_str)
-                .map(|s| expand_tilde(s))
-                .or_else(|| default_workspace.clone());
-            let (name, emoji) = workspace.as_ref()
-                .and_then(|ws| parse_identity_md(ws))
-                .unwrap_or((None, None));
-
-            let model = agent.get("model").and_then(read_model_value)
-                .or_else(|| cfg.pointer("/agents/defaults/model").and_then(read_model_value))
-                .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-            let channels: Vec<String> = channel_nodes.iter()
-                .map(|ch| ch.path.clone())
-                .collect();
-            let has_sessions = paths.base_dir.join("agents").join(&id).join("sessions").exists();
-            agents.push(AgentOverview {
-                id,
-                name,
-                emoji,
-                model,
-                channels,
-                online: has_sessions,
-                workspace,
-            });
-        }
+pub async fn list_agents_overview(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<AgentOverview>, String> {
+    let cache_key = "local:agents-list";
+    if let Some(cached) = cache.get(cache_key, None) {
+        return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        let result = parse_agents_cli_output(&json, None)?;
+        if let Ok(serialized) = serde_json::to_string(&result) {
+            cache.set(cache_key.to_string(), serialized);
+        }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
+}
 
-    // Implicit "main" agent: when agents.list is missing/empty, synthesize from defaults
-    if agents.is_empty() {
-        let default_model = cfg.pointer("/agents/defaults/model").and_then(read_model_value)
-            .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-        let workspace = default_workspace.clone();
-        let (name, emoji) = workspace.as_ref()
-            .and_then(|ws| parse_identity_md(ws))
-            .unwrap_or((None, None));
-        let has_sessions = paths.base_dir.join("agents").join("main").join("sessions").exists();
+/// Check if an agent has active sessions by examining sessions/sessions.json.
+/// Returns true if the file exists and is larger than 2 bytes (i.e. not just "{}").
+fn agent_has_sessions(base_dir: &std::path::Path, agent_id: &str) -> bool {
+    let sessions_file = base_dir.join("agents").join(agent_id).join("sessions").join("sessions.json");
+    match std::fs::metadata(&sessions_file) {
+        Ok(m) => m.len() > 2, // "{}" is 2 bytes = empty
+        Err(_) => false,
+    }
+}
+
+/// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
+/// `online_set`: if Some, use it to determine online status; if None, check local sessions.
+fn parse_agents_cli_output(json: &Value, online_set: Option<&std::collections::HashSet<String>>) -> Result<Vec<AgentOverview>, String> {
+    let arr = json.as_array().ok_or("agents list output is not an array")?;
+    let paths = if online_set.is_none() { Some(resolve_paths()) } else { None };
+    let mut agents = Vec::new();
+    for entry in arr {
+        let id = entry.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
+        let name = entry.get("identityName").and_then(Value::as_str).map(|s| s.to_string());
+        let emoji = entry.get("identityEmoji").and_then(Value::as_str).map(|s| s.to_string());
+        let model = entry.get("model").and_then(Value::as_str).map(|s| s.to_string());
+        let workspace = entry.get("workspace").and_then(Value::as_str).map(|s| s.to_string());
+        let online = match online_set {
+            Some(set) => set.contains(&id),
+            None => agent_has_sessions(paths.as_ref().unwrap().base_dir.as_path(), &id),
+        };
         agents.push(AgentOverview {
-            id: "main".into(),
+            id,
             name,
             emoji,
-            model: default_model,
+            model,
             channels: Vec::new(),
-            online: has_sessions,
+            online,
             workspace,
         });
     }
-
+    if agents.is_empty() {
+        agents.push(AgentOverview {
+            id: "main".into(),
+            name: None,
+            emoji: None,
+            model: None,
+            channels: Vec::new(),
+            online: false,
+            workspace: None,
+        });
+    }
     Ok(agents)
 }
 
@@ -1283,34 +1282,6 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
-}
-
-fn parse_identity_content(content: &str) -> (Option<String>, Option<String>) {
-    let mut name = None;
-    let mut emoji = None;
-    for line in content.lines() {
-        let trimmed = line.trim().trim_start_matches('-').trim();
-        // Handle both "Name: X" and "**Name:** X"
-        let trimmed = trimmed.replace("**", "");
-        if let Some(val) = trimmed.strip_prefix("Name:") {
-            let val = val.trim();
-            if !val.is_empty() {
-                name = Some(val.to_string());
-            }
-        } else if let Some(val) = trimmed.strip_prefix("Emoji:") {
-            let val = val.trim();
-            if !val.is_empty() {
-                emoji = Some(val.to_string());
-            }
-        }
-    }
-    (name, emoji)
-}
-
-fn parse_identity_md(workspace: &str) -> Option<(Option<String>, Option<String>)> {
-    let identity_path = std::path::Path::new(workspace).join("IDENTITY.md");
-    let content = fs::read_to_string(&identity_path).ok()?;
-    Some(parse_identity_content(&content))
 }
 
 #[tauri::command]
@@ -3651,93 +3622,6 @@ pub fn read_raw_config() -> Result<String, String> {
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
 
-// ---- Config baseline for dirty tracking ----
-
-fn baseline_path(paths: &crate::models::OpenClawPaths) -> std::path::PathBuf {
-    paths.clawpal_dir.join("config-baseline.json")
-}
-
-#[tauri::command]
-pub fn save_config_baseline() -> Result<bool, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let bp = baseline_path(&paths);
-    fs::create_dir_all(bp.parent().unwrap()).map_err(|e| e.to_string())?;
-    fs::write(&bp, text).map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigDirtyState {
-    pub dirty: bool,
-    pub baseline: String,
-    pub current: String,
-}
-
-#[tauri::command]
-pub fn check_config_dirty() -> Result<ConfigDirtyState, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let bp = baseline_path(&paths);
-    let baseline = if bp.exists() {
-        fs::read_to_string(&bp).map_err(|e| e.to_string())?
-    } else {
-        // No baseline yet — treat current as clean, save it
-        fs::create_dir_all(bp.parent().unwrap()).map_err(|e| e.to_string())?;
-        fs::write(&bp, &current).map_err(|e| e.to_string())?;
-        current.clone()
-    };
-    let dirty = baseline.trim() != current.trim();
-    Ok(ConfigDirtyState { dirty, baseline, current })
-}
-
-#[tauri::command]
-pub fn discard_config_changes() -> Result<bool, String> {
-    let paths = resolve_paths();
-    let bp = baseline_path(&paths);
-    if !bp.exists() {
-        return Err("No baseline config found".into());
-    }
-    let baseline_text = fs::read_to_string(&bp).map_err(|e| e.to_string())?;
-    let baseline: Value = serde_json::from_str(&baseline_text).map_err(|e| e.to_string())?;
-
-    // Save current as snapshot before discarding
-    let cfg = read_openclaw_config(&paths)?;
-    let current_text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let _ = add_snapshot(
-        &paths.history_dir,
-        &paths.metadata_path,
-        None,
-        "discard-changes",
-        true,
-        &current_text,
-        None,
-    );
-
-    write_json(&paths.config_path, &baseline)?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn apply_pending_changes() -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = resolve_paths();
-        // Save current config as new baseline
-        let cfg = read_openclaw_config(&paths)?;
-        let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-        let bp = baseline_path(&paths);
-        fs::create_dir_all(bp.parent().unwrap()).map_err(|e| e.to_string())?;
-        fs::write(&bp, &text).map_err(|e| e.to_string())?;
-
-        // Restart gateway (30s timeout to prevent indefinite hang)
-        run_openclaw_raw_timeout(&["gateway", "restart"], Some(30))?;
-        Ok(true)
-    }).await.map_err(|e| e.to_string())?
-}
-
 // resolve_full_api_key is intentionally not exposed as a Tauri command.
 // It returns raw API keys which should never be sent to the frontend.
 #[allow(dead_code)]
@@ -4426,87 +4310,23 @@ pub async fn remote_check_openclaw_update(
 
 #[tauri::command]
 pub async fn remote_list_agents_overview(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Vec<AgentOverview>, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw).map_err(|e| format!("Failed to parse remote config: {e}"))?;
-
-    // Check if gateway process is running to determine online status
-    let gateway_running = pool.exec(&host_id, "pgrep -f openclaw-gateway >/dev/null 2>&1").await
-        .map(|r| r.exit_code == 0)
-        .unwrap_or(false);
-
-    let mut agents = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-    let default_model = cfg.pointer("/agents/defaults/model")
-        .and_then(read_model_value)
-        .or_else(|| cfg.pointer("/agents/default/model").and_then(read_model_value));
-    let default_workspace = cfg.pointer("/agents/defaults/workspace")
-        .and_then(Value::as_str)
-        .map(|s| s.to_string());
-    let channel_nodes = collect_channel_nodes(&cfg);
-
-    if let Some(list) = cfg.pointer("/agents/list").and_then(Value::as_array) {
-        for agent in list {
-            let id = agent.get("id").and_then(Value::as_str).unwrap_or("main").to_string();
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
-
-            let workspace = agent.get("workspace").and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| default_workspace.clone());
-
-            // Read IDENTITY.md from remote workspace via SFTP
-            let (name, emoji) = if let Some(ref ws) = workspace {
-                let identity_path = format!("{}/IDENTITY.md", ws.trim_end_matches('/'));
-                match pool.sftp_read(&host_id, &identity_path).await {
-                    Ok(content) => parse_identity_content(&content),
-                    Err(_) => (None, None),
-                }
-            } else {
-                (None, None)
-            };
-
-            let model = agent.get("model").and_then(read_model_value)
-                .or_else(|| default_model.clone());
-            let channels: Vec<String> = channel_nodes.iter()
-                .map(|ch| ch.path.clone())
-                .collect();
-            agents.push(AgentOverview {
-                id,
-                name,
-                emoji,
-                model,
-                channels,
-                online: gateway_running,
-                workspace,
-            });
+    let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["agents", "list", "--json"]).await?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    // Check which agents have sessions remotely (single command, batch check)
+    // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
+    let online_set = match pool.exec_login(
+        &host_id,
+        "for d in ~/.openclaw/agents/*/sessions/sessions.json; do [ -f \"$d\" ] && [ $(wc -c < \"$d\") -gt 2 ] && basename $(dirname $(dirname \"$d\")); done",
+    ).await {
+        Ok(result) => {
+            result.stdout.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect::<std::collections::HashSet<String>>()
         }
-    }
-
-    // Implicit "main" agent: when agents.list is missing/empty, synthesize from defaults
-    if agents.is_empty() {
-        let workspace = default_workspace.clone();
-        let (name, emoji) = if let Some(ref ws) = workspace {
-            let identity_path = format!("{}/IDENTITY.md", ws.trim_end_matches('/'));
-            match pool.sftp_read(&host_id, &identity_path).await {
-                Ok(content) => parse_identity_content(&content),
-                Err(_) => (None, None),
-            }
-        } else {
-            (None, None)
-        };
-        agents.push(AgentOverview {
-            id: "main".into(),
-            name,
-            emoji,
-            model: default_model,
-            channels: Vec::new(),
-            online: gateway_running,
-            workspace,
-        });
-    }
-
-    Ok(agents)
+        Err(_) => std::collections::HashSet::new(), // fallback: all offline
+    };
+    parse_agents_cli_output(&json, Some(&online_set))
 }
 
 #[tauri::command]
@@ -4518,14 +4338,9 @@ pub async fn remote_list_channels_minimal(pool: State<'_, SshConnectionPool>, ho
 
 #[tauri::command]
 pub async fn remote_list_bindings(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<Vec<Value>, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw).map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    let bindings = cfg
-        .get("bindings")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(bindings)
+    let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["config", "get", "bindings", "--json"]).await?;
+    let json = crate::cli_runner::parse_json_output(&output)?;
+    Ok(json.as_array().cloned().unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------
@@ -4564,79 +4379,6 @@ pub async fn remote_restart_gateway(
     Ok(true)
 }
 
-#[tauri::command]
-pub async fn remote_save_config_baseline(
-    pool: State<'_, SshConnectionPool>,
-    baselines: State<'_, RemoteConfigBaselines>,
-    host_id: String,
-) -> Result<bool, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    baselines.0.lock().unwrap_or_else(|e| e.into_inner()).insert(host_id, text);
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn remote_check_config_dirty(
-    pool: State<'_, SshConnectionPool>,
-    baselines: State<'_, RemoteConfigBaselines>,
-    host_id: String,
-) -> Result<ConfigDirtyState, String> {
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let mut map = baselines.0.lock().unwrap_or_else(|e| e.into_inner());
-    let baseline = match map.get(&host_id) {
-        Some(b) => b.clone(),
-        None => {
-            // No baseline yet — treat current as clean, save it
-            map.insert(host_id, current.clone());
-            current.clone()
-        }
-    };
-    let dirty = baseline.trim() != current.trim();
-    Ok(ConfigDirtyState { dirty, baseline, current })
-}
-
-#[tauri::command]
-pub async fn remote_discard_config_changes(
-    pool: State<'_, SshConnectionPool>,
-    baselines: State<'_, RemoteConfigBaselines>,
-    host_id: String,
-) -> Result<bool, String> {
-    let baseline = {
-        let map = baselines.0.lock().unwrap_or_else(|e| e.into_inner());
-        map.get(&host_id).cloned()
-            .ok_or_else(|| "No baseline config found for this host".to_string())?
-    };
-    let baseline_val: Value = serde_json::from_str(&baseline)
-        .map_err(|e| format!("Failed to parse baseline: {e}"))?;
-    // Save current as snapshot before discarding
-    let current = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await
-        .unwrap_or_default();
-    remote_write_config_with_snapshot(&pool, &host_id, &current, &baseline_val, "discard-changes").await?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn remote_apply_pending_changes(
-    pool: State<'_, SshConnectionPool>,
-    baselines: State<'_, RemoteConfigBaselines>,
-    host_id: String,
-) -> Result<bool, String> {
-    // Save current config as new baseline
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    baselines.0.lock().unwrap_or_else(|e| e.into_inner()).insert(host_id.clone(), text);
-    // Restart gateway
-    pool.exec_login(&host_id, "openclaw gateway restart").await?;
-    Ok(true)
-}
 
 #[tauri::command]
 pub async fn remote_apply_config_patch(
@@ -4895,19 +4637,24 @@ pub async fn remote_list_history(
         if entry.name.starts_with('.') || entry.is_dir {
             continue;
         }
-        // Parse filename: {timestamp}-{source}.json
+        // Parse filename: {unix_ts}-{source}-{summary}.json
         let stem = entry.name.trim_end_matches(".json");
-        let (ts_str, source) = stem.split_once('-').unwrap_or((stem, "unknown"));
+        let parts: Vec<&str> = stem.splitn(3, '-').collect();
+        let ts_str = parts.first().unwrap_or(&"0");
+        let source = parts.get(1).unwrap_or(&"unknown");
+        let recipe_id = parts.get(2).map(|s| s.to_string());
         let created_at = ts_str.parse::<i64>().unwrap_or(0);
         // Convert Unix timestamp to ISO 8601 format for frontend compatibility
         let created_at_iso = chrono::DateTime::from_timestamp(created_at, 0)
             .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
             .unwrap_or_else(|| created_at.to_string());
+        let is_rollback = *source == "rollback";
         items.push(serde_json::json!({
             "id": entry.name,
+            "recipeId": recipe_id,
             "createdAt": created_at_iso,
             "source": source,
-            "canRollback": true,
+            "canRollback": !is_rollback,
         }));
     }
     // Sort newest first
@@ -5717,6 +5464,31 @@ pub async fn remote_run_openclaw_upgrade(
 // Cron jobs
 // ---------------------------------------------------------------------------
 
+/// Strip Doctor warning banners from CLI output to show only meaningful errors.
+/// Doctor banners look like: ╭─ ... ─╮ ... ╰─ ... ─╯
+fn strip_doctor_banner(text: &str) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut in_banner = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("Doctor warnings") && trimmed.contains('╮') {
+            in_banner = true;
+            continue;
+        }
+        if in_banner {
+            if trimmed.contains('╯') {
+                in_banner = false;
+            }
+            continue;
+        }
+        if !trimmed.is_empty() {
+            lines.push(line);
+        }
+    }
+    let result = lines.join("\n").trim().to_string();
+    if result.is_empty() { "Command failed".into() } else { result }
+}
+
 fn parse_cron_jobs(text: &str) -> Value {
     let parsed: Value = serde_json::from_str(text).unwrap_or(Value::Array(vec![]));
     // Handle { "version": N, "jobs": [...] } wrapper
@@ -5793,7 +5565,9 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
         if output.status.success() {
             Ok(stdout)
         } else {
-            Err(format!("{stdout}\n{stderr}"))
+            // Extract meaningful error lines, skip Doctor warning banners
+            let error_msg = strip_doctor_banner(&format!("{stdout}\n{stderr}"));
+            Err(error_msg)
         }
     }).await.map_err(|e| format!("Task failed: {e}"))?
 }

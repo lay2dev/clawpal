@@ -87,6 +87,15 @@ export function Home({
       : `${profile.provider}/${profile.model}`;
   };
 
+  // Skip polling refreshes while there are queued commands (to preserve optimistic UI)
+  const hasPendingRef = useRef(false);
+  useEffect(() => {
+    const check = () => { ua.queuedCommandsCount().then((n) => { hasPendingRef.current = n > 0; }).catch(() => {}); };
+    check();
+    const interval = setInterval(check, 3000);
+    return () => clearInterval(interval);
+  }, [ua]);
+
   // Health status with grace period: retry quickly when unhealthy, then slow-poll
   const [statusSettled, setStatusSettled] = useState(false);
   const retriesRef = useRef(0);
@@ -94,6 +103,7 @@ export function Home({
 
   const fetchStatus = useCallback(() => {
     if (ua.isRemote && !ua.isConnected) return; // Wait for SSH connection
+    if (hasPendingRef.current) return; // Don't overwrite optimistic UI
     ua.getInstanceStatus().then((s) => {
       setStatus(s);
       if (ua.isRemote) {
@@ -133,6 +143,7 @@ export function Home({
 
   const refreshAgents = useCallback(() => {
     if (ua.isRemote && !ua.isConnected) return; // Wait for SSH connection
+    if (hasPendingRef.current) return; // Don't overwrite optimistic UI
     ua.listAgents().then((a) => {
       setAgents(a);
       if (ua.isRemote) remoteErrorShownRef.current = false;
@@ -217,9 +228,13 @@ export function Home({
 
   const handleDeleteAgent = (agentId: string) => {
     if (ua.isRemote && !ua.isConnected) return;
-    ua.deleteAgent(agentId)
-      .then(() => refreshAgents())
-      .catch((e) => showToast?.(String(e), "error"));
+    ua.queueCommand(
+      `Delete agent: ${agentId}`,
+      ["openclaw", "agents", "delete", agentId, "--force"],
+    ).then(() => {
+      // Optimistic UI update
+      setAgents((prev) => prev?.filter((a) => a.id !== agentId) ?? null);
+    }).catch((e) => showToast?.(String(e), "error"));
   };
 
   return (
@@ -281,9 +296,19 @@ export function Home({
                     if (val === "__raw__") return;
                     setSavingModel(true);
                     const modelValue = resolveModelValue(val === "__none__" ? null : val);
-                    ua.setGlobalModel(modelValue)
-                      .then(() => fetchStatus())
-                      .catch((e) => showToast?.(String(e), "error"))
+                    const p = modelValue
+                      ? ua.queueCommand(
+                          `Set global model: ${modelValue}`,
+                          ["openclaw", "config", "set", "agents.defaults.model.primary", modelValue],
+                        )
+                      : ua.queueCommand(
+                          "Clear global model override",
+                          ["openclaw", "config", "unset", "agents.defaults.model.primary"],
+                        );
+                    p.then(() => {
+                      // Optimistic UI update
+                      setStatus((prev) => prev ? { ...prev, globalDefaultModel: modelValue ?? "" } : prev);
+                    }).catch((e) => showToast?.(String(e), "error"))
                       .finally(() => setSavingModel(false));
                   }}
                   disabled={savingModel}
@@ -357,11 +382,30 @@ export function Home({
                               }
                               return "__none__";
                             })()}
-                            onValueChange={(val) => {
+                            onValueChange={async (val) => {
                               const modelValue = resolveModelValue(val === "__none__" ? null : val);
-                              ua.setAgentModel(agent.id, modelValue)
-                                .then(() => refreshAgents())
-                                .catch((e) => showToast?.(String(e), "error"));
+                              try {
+                                const raw = await ua.readRawConfig();
+                                const cfg = JSON.parse(raw);
+                                const list: Record<string, unknown>[] = cfg?.agents?.list ?? [];
+                                const entry = list.find((a) => a.id === agent.id);
+                                if (entry) {
+                                  if (modelValue) entry.model = modelValue;
+                                  else delete entry.model;
+                                } else if (modelValue) {
+                                  list.push({ id: agent.id, model: modelValue });
+                                }
+                                const label = modelValue
+                                  ? `Set model for ${agent.id}: ${modelValue}`
+                                  : `Clear model override for ${agent.id}`;
+                                await ua.queueCommand(label, ["openclaw", "config", "set", "agents.list", JSON.stringify(list), "--json"]);
+                                // Optimistic UI update
+                                setAgents((prev) => prev?.map((a) =>
+                                  a.id === agent.id ? { ...a, model: modelValue ?? null } : a
+                                ) ?? null);
+                              } catch (e) {
+                                showToast?.(String(e), "error");
+                              }
                             }}
                           >
                             <SelectTrigger size="sm" className="text-xs h-6 w-auto min-w-[120px] max-w-[200px]">
@@ -381,9 +425,9 @@ export function Home({
                         </div>
                         <div className="flex items-center gap-2">
                           {agent.online ? (
-                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.online')}</Badge>
+                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.active')}</Badge>
                           ) : (
-                            <Badge className="bg-red-100 text-red-700 border-0 text-xs">{t('home.offline')}</Badge>
+                            <Badge className="bg-gray-100 text-gray-500 border-0 text-xs">{t('home.idle')}</Badge>
                           )}
                           {agent.id !== "main" && (
                             <AlertDialog>

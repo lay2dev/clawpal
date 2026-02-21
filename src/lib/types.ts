@@ -230,12 +230,6 @@ export interface Binding {
   match: { channel: string; peer?: { id: string; kind: string } };
 }
 
-export interface ConfigDirtyState {
-  dirty: boolean;
-  baseline: string;
-  current: string;
-}
-
 export interface BackupInfo {
   name: string;
   path: string;
@@ -322,4 +316,28 @@ export interface WatchdogStatus {
   lastCheckAt: string;
   gatewayHealthy: boolean;
   jobs: Record<string, WatchdogJobState>;
+}
+
+// Command Queue
+
+export interface PendingCommand {
+  id: string;
+  label: string;
+  command: string[];
+  createdAt: string;
+}
+
+export interface PreviewQueueResult {
+  commands: PendingCommand[];
+  configBefore: string;
+  configAfter: string;
+  errors: string[];
+}
+
+export interface ApplyQueueResult {
+  ok: boolean;
+  appliedCount: number;
+  totalCount: number;
+  error: string | null;
+  rolledBack: boolean;
 }

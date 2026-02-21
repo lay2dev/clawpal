@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
 import { initialState, reducer } from "@/lib/state";
 import { formatBytes } from "@/lib/utils";
-import type { AgentSessionAnalysis, BackupInfo, SessionFile } from "@/lib/types";
+import type { AgentSessionAnalysis, SessionFile } from "@/lib/types";
 import {
   Card,
   CardHeader,
@@ -38,7 +38,6 @@ export function Doctor() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [rawOutput, setRawOutput] = useState<string | null>(null);
   const [sessionFiles, setSessionFiles] = useState<SessionFile[]>([]);
-  const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [dataMessage, setDataMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
@@ -159,11 +158,6 @@ export function Doctor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ua.instanceId, ua.isRemote, ua.isConnected]);
 
-  useEffect(() => {
-    if (ua.isRemote) { setBackups([]); return; }
-    ua.listBackups().then(setBackups).catch((e: unknown) => console.error("Failed to load backups:", e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ua.instanceId, ua.isRemote]);
 
   return (
     <section>
@@ -710,97 +704,6 @@ export function Doctor() {
         </Card>
       </div>
 
-      {/* Backups — local only */}
-      {!ua.isRemote && (
-      <>
-      <h3 className="text-lg font-semibold mt-6 mb-3">{t('doctor.backups')}</h3>
-      {backups.length === 0 ? (
-        <p className="text-muted-foreground text-sm">{t('doctor.noBackups')}</p>
-      ) : (
-        <div className="space-y-2">
-          {backups.map((backup) => (
-            <Card key={backup.name}>
-              <CardContent className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium text-sm">{backup.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {backup.createdAt} — {formatBytes(backup.sizeBytes)}
-                  </div>
-                </div>
-                <div className="flex gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => ua.openUrl(backup.path)}
-                  >
-                    {t('doctor.show')}
-                  </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button size="sm" variant="outline">
-                        {t('doctor.restore')}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>{t('doctor.restoreTitle')}</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          {t('doctor.restoreDescription', { name: backup.name })}
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => {
-                            ua.restoreFromBackup(backup.name)
-                              .then((msg) => setDataMessage(msg))
-                              .catch(() => setDataMessage(t('doctor.restoreFailed')));
-                          }}
-                        >
-                          {t('doctor.restore')}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button size="sm" variant="destructive">
-                        {t('home.delete')}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>{t('doctor.deleteBackupTitle')}</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          {t('doctor.deleteBackupDescription', { name: backup.name })}
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>{t('config.cancel')}</AlertDialogCancel>
-                        <AlertDialogAction
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          onClick={() => {
-                            ua.deleteBackup(backup.name)
-                              .then(() => {
-                                setDataMessage(t('doctor.deletedBackup', { name: backup.name }));
-                                ua.listBackups().then(setBackups).catch(() => {});
-                              })
-                              .catch(() => setDataMessage(t('doctor.deleteBackupFailed')));
-                          }}
-                        >
-                          {t('home.delete')}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-      </>
-      )}
       {/* Session Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-2xl max-h-[70vh] flex flex-col">

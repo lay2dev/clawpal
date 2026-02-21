@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useInstance } from "@/lib/instance-context";
-import { api } from "../lib/api";
+import { useApi } from "@/lib/use-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,7 +39,7 @@ export function CreateAgentDialog({
   onCreated: (result: CreateAgentResult) => void;
 }) {
   const { t } = useTranslation();
-  const { instanceId, isRemote } = useInstance();
+  const ua = useApi();
   const [agentId, setAgentId] = useState("");
   const [model, setModel] = useState("");
   const [independent, setIndependent] = useState(false);
@@ -79,20 +78,37 @@ export function CreateAgentDialog({
           : `${profile.provider}/${profile.model}`;
       };
       const modelValue = resolveModelValue(model || undefined);
-      const created = isRemote && instanceId
-        ? await api.remoteCreateAgent(instanceId, id, modelValue)
-        : await api.createAgent(id, modelValue, independent || undefined);
-      // Set identity if name or emoji provided
-      const name = displayName.trim();
-      const emojiVal = emoji.trim();
-      if (independent && (name || emojiVal)) {
-        const identityFn = isRemote && instanceId
-          ? api.remoteSetupAgentIdentity(instanceId, id, name || id, emojiVal || undefined)
-          : api.setupAgentIdentity(id, name || id, emojiVal || undefined);
-        await identityFn.catch(() => {});
+
+      // Build CLI command for queue
+      // --non-interactive requires --workspace; for non-independent agents
+      // we must resolve the default workspace from config.
+      const command: string[] = ["openclaw", "agents", "add", id, "--non-interactive"];
+      if (modelValue) {
+        command.push("--model", modelValue);
       }
+      if (independent) {
+        command.push("--workspace", id);
+      } else {
+        // Resolve default workspace: from config, or from existing agents
+        let defaultWs: string | undefined;
+        try {
+          const rawConfig = await ua.readRawConfig();
+          const cfg = JSON.parse(rawConfig);
+          defaultWs = cfg?.agents?.defaults?.workspace ?? cfg?.agents?.default?.workspace;
+        } catch { /* ignore */ }
+        if (!defaultWs) {
+          // Fallback: use workspace of first existing agent
+          try {
+            const existingAgents = await ua.listAgents();
+            defaultWs = existingAgents.find((a) => a.workspace)?.workspace ?? undefined;
+          } catch { /* ignore */ }
+        }
+        if (defaultWs) command.push("--workspace", defaultWs);
+      }
+      await ua.queueCommand(`Create agent: ${id}`, command);
+
       onOpenChange(false);
-      const result: CreateAgentResult = { agentId: created.id };
+      const result: CreateAgentResult = { agentId: id };
       if (persona.trim()) result.persona = persona.trim();
       reset();
       onCreated(result);
