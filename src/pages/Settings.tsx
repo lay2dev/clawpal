@@ -562,6 +562,7 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
                 </Select>
               </CardContent>
             </Card>
+
             </div>
 
             {/* Profiles list */}
