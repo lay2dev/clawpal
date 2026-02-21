@@ -263,7 +263,6 @@ export function InstanceTabBar({
                     ...f,
                     authMethod: val as SshHost["authMethod"],
                     keyPath: val === "key" ? (f.authMethod === "key" ? f.keyPath : "") : undefined,
-                    password: val === "password" ? (f.authMethod === "password" ? f.password : "") : undefined,
                   }))
                 }
               >
@@ -273,7 +272,6 @@ export function InstanceTabBar({
                 <SelectContent>
                   <SelectItem value="ssh_config">{t('instance.authSshConfig')}</SelectItem>
                   <SelectItem value="key">{t('instance.authKey')}</SelectItem>
-                  <SelectItem value="password">{t('instance.authPassword')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -289,20 +287,6 @@ export function InstanceTabBar({
                   autoCorrect="off"
                   spellCheck={false}
                 />
-              </div>
-            )}
-            {form.authMethod === "password" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="ssh-password">{t('instance.password')}</Label>
-                <Input
-                  id="ssh-password"
-                  type="password"
-                  value={form.password || ""}
-                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                />
-                <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  {t('instance.passwordWarning')}
-                </p>
               </div>
             )}
           </div>
