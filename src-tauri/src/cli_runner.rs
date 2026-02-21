@@ -319,6 +319,7 @@ pub struct ApplyQueueResult {
 #[tauri::command]
 pub fn apply_queued_commands(
     queue: tauri::State<CommandQueue>,
+    cache: tauri::State<CliCache>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queue.list();
     if commands.is_empty() {
@@ -392,8 +393,9 @@ pub fn apply_queued_commands(
         }
     }
 
-    // All succeeded — clear queue and restart gateway
+    // All succeeded — clear queue, invalidate cache, restart gateway
     queue.clear();
+    cache.invalidate_all();
 
     // Restart gateway (best effort, don't fail the whole apply)
     let gateway_result = run_openclaw(&["gateway", "restart"]);
@@ -697,4 +699,48 @@ pub async fn remote_apply_queued_commands(
         error: None,
         rolled_back: false,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Read Cache — invalidated on Apply
+// ---------------------------------------------------------------------------
+
+pub struct CliCache {
+    cache: Mutex<HashMap<String, (std::time::Instant, String)>>,
+}
+
+impl CliCache {
+    pub fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Get cached value if still valid.
+    pub fn get(&self, key: &str, ttl: Option<std::time::Duration>) -> Option<String> {
+        let cache = self.cache.lock().unwrap();
+        cache.get(key).and_then(|(ts, val)| {
+            if let Some(ttl) = ttl {
+                if ts.elapsed() < ttl {
+                    Some(val.clone())
+                } else {
+                    None
+                }
+            } else {
+                Some(val.clone())
+            }
+        })
+    }
+
+    pub fn set(&self, key: String, value: String) {
+        self.cache
+            .lock()
+            .unwrap()
+            .insert(key, (std::time::Instant::now(), value));
+    }
+
+    /// Invalidate all cache entries (called after Apply).
+    pub fn invalidate_all(&self) {
+        self.cache.lock().unwrap().clear();
+    }
 }

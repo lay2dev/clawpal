@@ -49,6 +49,7 @@ use crate::cli_runner::{
     remote_queue_command, remote_remove_queued_command, remote_list_queued_commands,
     remote_discard_queued_commands, remote_queued_commands_count,
     remote_preview_queued_commands, remote_apply_queued_commands, RemoteCommandQueues,
+    CliCache,
 };
 use crate::ssh::SshConnectionPool;
 
@@ -70,6 +71,7 @@ pub fn run() {
         .manage(RemoteConfigBaselines::new())
         .manage(CommandQueue::new())
         .manage(RemoteCommandQueues::new())
+        .manage(CliCache::new())
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             get_status_light,

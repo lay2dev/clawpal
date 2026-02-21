@@ -831,10 +831,20 @@ pub fn update_channel_config(
 
 /// List current channel→agent bindings from config.
 #[tauri::command]
-pub fn list_bindings() -> Result<Vec<Value>, String> {
+pub fn list_bindings(
+    cache: tauri::State<crate::cli_runner::CliCache>,
+) -> Result<Vec<Value>, String> {
+    let cache_key = "local:bindings";
+    if let Some(cached) = cache.get(cache_key, None) {
+        return serde_json::from_str(&cached).map_err(|e| e.to_string());
+    }
     let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
     let json = crate::cli_runner::parse_json_output(&output)?;
-    Ok(json.as_array().cloned().unwrap_or_default())
+    let result = json.as_array().cloned().unwrap_or_default();
+    if let Ok(serialized) = serde_json::to_string(&result) {
+        cache.set(cache_key.to_string(), serialized);
+    }
+    Ok(result)
 }
 
 /// Assign a Discord channel to an agent (modifies the `bindings` array).
@@ -970,10 +980,20 @@ pub fn list_model_bindings() -> Result<Vec<ModelBinding>, String> {
 }
 
 #[tauri::command]
-pub fn list_agents_overview() -> Result<Vec<AgentOverview>, String> {
+pub fn list_agents_overview(
+    cache: tauri::State<crate::cli_runner::CliCache>,
+) -> Result<Vec<AgentOverview>, String> {
+    let cache_key = "local:agents-list";
+    if let Some(cached) = cache.get(cache_key, None) {
+        return serde_json::from_str(&cached).map_err(|e| e.to_string());
+    }
     let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
     let json = crate::cli_runner::parse_json_output(&output)?;
-    parse_agents_cli_output(&json)
+    let result = parse_agents_cli_output(&json)?;
+    if let Ok(serialized) = serde_json::to_string(&result) {
+        cache.set(cache_key.to_string(), serialized);
+    }
+    Ok(result)
 }
 
 /// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
