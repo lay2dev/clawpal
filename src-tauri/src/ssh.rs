@@ -1,16 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use async_trait::async_trait;
-use russh::client;
-use russh::keys::key;
-use russh::{ChannelMsg, Disconnect};
-use russh_sftp::client::SftpSession;
+use base64::Engine;
+use openssh::{KnownHosts, Session, SessionBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 // ---------------------------------------------------------------------------
-// Data types
+// Data types (unchanged — frontend compatibility)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,303 +40,97 @@ pub struct SftpEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Client handler (accepts all host keys for now)
-// ---------------------------------------------------------------------------
-
-struct SshHandler;
-
-#[async_trait]
-impl client::Handler for SshHandler {
-    type Error = russh::Error;
-
-    async fn check_server_key(
-        &mut self,
-        _server_public_key: &key::PublicKey,
-    ) -> Result<bool, Self::Error> {
-        // TODO (Phase 3): verify against known_hosts
-        Ok(true)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Connection wrapper
 // ---------------------------------------------------------------------------
 
-/// Holds a live SSH session handle plus resolved remote home directory
-/// and the original config for automatic reconnection.
 struct SshConnection {
-    handle: Arc<client::Handle<SshHandler>>,
+    session: Session,
     home_dir: String,
-    config: SshHostConfig,
 }
 
 // ---------------------------------------------------------------------------
 // Connection pool
 // ---------------------------------------------------------------------------
 
-/// A global pool of SSH connections keyed by instance ID.
 pub struct SshConnectionPool {
     connections: Mutex<HashMap<String, SshConnection>>,
-    /// Per-connection reconnect locks to prevent concurrent reconnect storms.
-    /// When multiple requests detect a dead connection simultaneously, only one
-    /// performs the reconnect while others wait.
-    reconnect_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl SshConnectionPool {
     pub fn new() -> Self {
         Self {
             connections: Mutex::new(HashMap::new()),
-            reconnect_locks: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Get or create a per-connection reconnect lock.
-    async fn reconnect_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = self.reconnect_locks.lock().await;
-        locks.entry(id.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
     }
 
     // -- connect ----------------------------------------------------------
 
-    /// Establish an SSH connection for the given host config and store it in
-    /// the pool under `config.id`.
     pub async fn connect(&self, config: &SshHostConfig) -> Result<(), String> {
-        // Resolve connection params from ~/.ssh/config when using ssh_config mode
-        let ssh_entry = if config.auth_method == "ssh_config" {
-            parse_ssh_config(&config.host)
-        } else {
-            None
-        };
-
-        let connect_host = ssh_entry
-            .as_ref()
-            .and_then(|e| e.hostname.as_deref())
-            .unwrap_or(&config.host);
-        let connect_port = ssh_entry
-            .as_ref()
-            .and_then(|e| e.port)
-            .unwrap_or(config.port);
-
-        let ssh_config = Arc::new(client::Config {
-            inactivity_timeout: Some(std::time::Duration::from_secs(300)),
-            keepalive_interval: Some(std::time::Duration::from_secs(30)),
-            keepalive_max: 5,
-            ..<_>::default()
-        });
-
-        let addr = (connect_host, connect_port);
-        let handler = SshHandler;
-
-        let mut session = client::connect(ssh_config, addr, handler)
-            .await
-            .map_err(|e| format!("SSH connect failed: {e}"))?;
-
-        // Resolve username: UI value > ssh config value > system user
-        let username = if !config.username.is_empty() {
-            config.username.clone()
-        } else if let Some(ref entry) = ssh_entry {
-            entry.user.clone().unwrap_or_else(|| {
-                std::env::var("USER")
-                    .or_else(|_| std::env::var("USERNAME"))
-                    .unwrap_or_else(|_| "root".to_string())
-            })
-        } else {
-            std::env::var("USER")
-                .or_else(|_| std::env::var("USERNAME"))
-                .unwrap_or_else(|_| "root".to_string())
-        };
-
-        // Authenticate
-        let authenticated = match config.auth_method.as_str() {
-            "key" => {
-                let key_path = config
-                    .key_path
-                    .as_deref()
-                    .unwrap_or("~/.ssh/id_rsa");
-                let expanded = shellexpand::tilde(key_path).to_string();
-                let key_pair = russh::keys::load_secret_key(&expanded, None)
-                    .map_err(|e| format!("Failed to load SSH key {expanded}: {e}"))?;
-                session
-                    .authenticate_publickey(&username, Arc::new(key_pair))
-                    .await
-                    .map_err(|e| format!("Public key auth failed: {e}"))?
-            }
-            "ssh_config" => {
-                // Try IdentityFile from ~/.ssh/config, then default key paths, then agent
-                let identity_file = parse_ssh_config_identity(&config.host);
-
-                // Build list of key paths to try
-                let mut key_paths: Vec<String> = Vec::new();
-                if let Some(ref p) = identity_file {
-                    key_paths.push(shellexpand::tilde(p).to_string());
-                }
-                // Default key paths (same order as OpenSSH)
-                let home = shellexpand::tilde("~").to_string();
-                for name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
-                    let p = format!("{home}/.ssh/{name}");
-                    if !key_paths.contains(&p) {
-                        key_paths.push(p);
-                    }
-                }
-
-                let mut authenticated = false;
-                for path in &key_paths {
-                    if let Ok(key_pair) = russh::keys::load_secret_key(path, None) {
-                        match session
-                            .authenticate_publickey(&username, Arc::new(key_pair))
-                            .await
-                        {
-                            Ok(true) => { authenticated = true; break; }
-                            _ => continue,
-                        }
-                    }
-                }
-
-                if !authenticated {
-                    // All key files failed, try SSH agent as last resort
-                    self.authenticate_with_agent(&mut session, &username).await?
-                } else {
-                    true
-                }
-            }
-            "password" => {
-                let password = config.password.as_deref()
-                    .or(config.key_path.as_deref()) // backwards compat
-                    .unwrap_or("");
-                session
-                    .authenticate_password(&username, password)
-                    .await
-                    .map_err(|e| format!("Password auth failed: {e}"))?
-            }
-            other => return Err(format!("Unknown auth_method: {other}")),
-        };
-
-        if !authenticated {
-            return Err("SSH authentication failed (rejected by server)".into());
+        if config.auth_method == "password" {
+            return Err(
+                "Password authentication is not supported with openssh. \
+                 Please use SSH Config or Private Key mode instead. \
+                 If your key is in ssh-agent, select SSH Config mode."
+                    .into(),
+            );
         }
 
-        // Resolve remote $HOME so we can build absolute SFTP paths
-        let home_dir = self.resolve_home(&session).await.unwrap_or_else(|_| "/root".to_string());
+        // Build destination string
+        let dest = if config.username.is_empty() {
+            config.host.clone()
+        } else {
+            format!("{}@{}", config.username, config.host)
+        };
+
+        let mut builder = SessionBuilder::default();
+        builder.known_hosts_check(KnownHosts::Accept);
+
+        if config.port != 22 {
+            builder.port(config.port);
+        }
+
+        // ServerAliveInterval to detect dead connections
+        builder.server_alive_interval(std::time::Duration::from_secs(30));
+
+        // Connect timeout
+        builder.connect_timeout(std::time::Duration::from_secs(15));
+
+        // If user specified an explicit key, pass it via -i
+        if config.auth_method == "key" {
+            if let Some(ref key_path) = config.key_path {
+                let expanded = shellexpand::tilde(key_path).to_string();
+                builder.keyfile(expanded);
+            }
+        }
+
+        let session = builder
+            .connect(&dest)
+            .await
+            .map_err(|e| format!("SSH connection failed: {e}"))?;
+
+        // Verify the connection is working
+        session
+            .check()
+            .await
+            .map_err(|e| format!("SSH connection check failed: {e}"))?;
+
+        // Resolve remote $HOME
+        let home_dir = Self::resolve_home_via_session(&session)
+            .await
+            .unwrap_or_else(|_| "/root".to_string());
 
         let mut pool = self.connections.lock().await;
-        pool.insert(
-            config.id.clone(),
-            SshConnection { handle: Arc::new(session), home_dir, config: config.clone() },
-        );
+        pool.insert(config.id.clone(), SshConnection { session, home_dir });
         Ok(())
-    }
-
-    /// Try all keys offered by the ssh-agent until one succeeds.
-    /// Only available on Unix (SSH agent uses a Unix domain socket).
-    #[cfg(unix)]
-    async fn authenticate_with_agent(
-        &self,
-        session: &mut client::Handle<SshHandler>,
-        username: &str,
-    ) -> Result<bool, String> {
-        let mut agent = match russh::keys::agent::client::AgentClient::connect_env().await {
-            Ok(a) => a,
-            Err(_) => {
-                // GUI apps may not have SSH_AUTH_SOCK; ask launchd for the socket path
-                let output = tokio::task::spawn_blocking(|| {
-                    std::process::Command::new("launchctl")
-                        .args(["getenv", "SSH_AUTH_SOCK"])
-                        .output()
-                }).await
-                    .map_err(|e| format!("Could not determine SSH agent socket: {e}"))?
-                    .map_err(|e| format!("Could not determine SSH agent socket: {e}"))?;
-                let sock_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if sock_path.is_empty() {
-                    return Err("Could not connect to SSH agent: SSH_AUTH_SOCK not set and launchctl lookup failed".into());
-                }
-                russh::keys::agent::client::AgentClient::connect(
-                    tokio::net::UnixStream::connect(&sock_path)
-                        .await
-                        .map_err(|e| format!("Could not connect to SSH agent at {sock_path}: {e}"))?
-                )
-            }
-        };
-
-        let identities = agent
-            .request_identities()
-            .await
-            .map_err(|e| format!("Failed to list agent identities: {e}"))?;
-
-        if identities.is_empty() {
-            return Err("SSH agent has no identities loaded".into());
-        }
-
-        for identity in &identities {
-            let (returned_agent, auth_result) = session
-                .authenticate_future(username, identity.clone(), agent)
-                .await;
-            agent = returned_agent;
-            match auth_result {
-                Ok(true) => return Ok(true),
-                Ok(false) => continue,
-                Err(e) => {
-                    // Log but try next key
-                    eprintln!("Agent auth attempt failed: {e:?}");
-                    continue;
-                }
-            }
-        }
-
-        Ok(false)
-    }
-
-    #[cfg(not(unix))]
-    async fn authenticate_with_agent(
-        &self,
-        _session: &mut client::Handle<SshHandler>,
-        _username: &str,
-    ) -> Result<bool, String> {
-        Err("SSH agent forwarding is not supported on Windows".into())
-    }
-
-    // -- resolve_home -----------------------------------------------------
-
-    /// Run `echo $HOME` over a fresh channel to discover the remote home dir.
-    async fn resolve_home(&self, handle: &client::Handle<SshHandler>) -> Result<String, String> {
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("Failed to open channel for home resolve: {e}"))?;
-        channel.exec(true, "echo $HOME").await.map_err(|e| format!("exec echo $HOME: {e}"))?;
-
-        let mut stdout = Vec::new();
-        loop {
-            let Some(msg) = channel.wait().await else { break };
-            if let ChannelMsg::Data { ref data } = msg {
-                stdout.extend_from_slice(data);
-            }
-        }
-        let home = String::from_utf8_lossy(&stdout).trim().to_string();
-        if home.is_empty() {
-            Err("Could not resolve remote $HOME".into())
-        } else {
-            Ok(home)
-        }
-    }
-
-    /// Return the cached home directory for a connection.
-    pub async fn get_home_dir(&self, id: &str) -> Result<String, String> {
-        let pool = self.connections.lock().await;
-        let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
-        Ok(conn.home_dir.clone())
     }
 
     // -- disconnect -------------------------------------------------------
 
-    /// Close and remove the connection for the given instance ID.
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
         let mut pool = self.connections.lock().await;
         if let Some(conn) = pool.remove(id) {
-            conn.handle
-                .disconnect(Disconnect::ByApplication, "", "")
+            conn.session
+                .close()
                 .await
                 .map_err(|e| format!("SSH disconnect failed: {e}"))?;
         }
@@ -349,144 +139,72 @@ impl SshConnectionPool {
 
     // -- is_connected -----------------------------------------------------
 
-    /// Check whether a connection exists (and the underlying handle is not
-    /// closed) for the given instance ID.
     pub async fn is_connected(&self, id: &str) -> bool {
         let pool = self.connections.lock().await;
         match pool.get(id) {
-            Some(conn) => !conn.handle.is_closed(),
+            Some(conn) => conn.session.check().await.is_ok(),
             None => false,
         }
     }
 
-    // -- ensure_alive / reconnect -----------------------------------------
+    // -- resolve_home (static helper) -------------------------------------
 
-    /// Check if the connection is alive. If stale, attempt to reconnect
-    /// automatically using the stored config. Returns an error only if
-    /// reconnection also fails.
-    /// Check if the connection is alive. If stale (or `force` is true),
-    /// attempt to reconnect using the stored config. Uses a per-connection
-    /// lock so concurrent callers wait for a single reconnect rather than
-    /// all racing to reconnect simultaneously.
-    async fn ensure_alive(&self, id: &str) -> Result<(), String> {
-        self.ensure_alive_inner(id, false).await
+    async fn resolve_home_via_session(session: &Session) -> Result<String, String> {
+        let output = session
+            .raw_command("echo $HOME")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to resolve $HOME: {e}"))?;
+        let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if home.is_empty() {
+            Err("Could not resolve remote $HOME".into())
+        } else {
+            Ok(home)
+        }
     }
 
-    async fn force_reconnect(&self, id: &str) -> Result<(), String> {
-        self.ensure_alive_inner(id, true).await
+    pub async fn get_home_dir(&self, id: &str) -> Result<String, String> {
+        let pool = self.connections.lock().await;
+        let conn = pool
+            .get(id)
+            .ok_or_else(|| format!("No connection for id: {id}"))?;
+        Ok(conn.home_dir.clone())
     }
 
-    async fn ensure_alive_inner(&self, id: &str, force: bool) -> Result<(), String> {
-        // Quick check: is reconnect needed?
-        let needs_reconnect = {
-            let pool = self.connections.lock().await;
-            match pool.get(id) {
-                Some(conn) => force || conn.handle.is_closed(),
-                None => return Err(format!("No connection for id: {id}")),
-            }
-        };
+    // -- resolve_path -----------------------------------------------------
 
-        if !needs_reconnect {
-            return Ok(());
+    pub async fn resolve_path(&self, id: &str, path: &str) -> Result<String, String> {
+        if path.starts_with("~/") || path == "~" {
+            let home = self.get_home_dir(id).await?;
+            Ok(path.replacen('~', &home, 1))
+        } else {
+            Ok(path.to_string())
         }
-
-        // Acquire per-connection reconnect lock so only one caller reconnects
-        let lock = self.reconnect_lock(id).await;
-        let _guard = lock.lock().await;
-
-        // Re-check under the lock — another caller may have already reconnected.
-        // IMPORTANT: Do NOT remove the connection from the pool here. Other
-        // concurrent callers need pool.get(id) to succeed while we reconnect.
-        // We clone the config and replace the entry atomically after reconnect.
-        let stale_config = {
-            let pool = self.connections.lock().await;
-            match pool.get(id) {
-                Some(conn) if force || conn.handle.is_closed() => {
-                    Some(conn.config.clone())
-                }
-                Some(_) => None, // another caller already reconnected
-                None => return Err(format!("No connection for id: {id}")),
-            }
-        };
-
-        if let Some(config) = stale_config {
-            eprintln!("[ssh] Connection {id} is stale, attempting reconnect...");
-            // connect() will insert the new connection, replacing the stale one
-            self.connect(&config).await.map_err(|e| {
-                format!("Connection lost and reconnect failed: {e}")
-            })?;
-            eprintln!("[ssh] Reconnected {id} successfully");
-        }
-        Ok(())
     }
 
     // -- exec -------------------------------------------------------------
 
-    /// Execute a command over SSH and return stdout, stderr and exit code.
     pub async fn exec(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
-        self.ensure_alive(id).await?;
+        let pool = self.connections.lock().await;
+        let conn = pool
+            .get(id)
+            .ok_or_else(|| format!("No connection for id: {id}"))?;
 
-        let handle = {
-            let pool = self.connections.lock().await;
-            let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
-            Arc::clone(&conn.handle)
-        };
-
-        let mut channel = match handle.channel_open_session().await {
-            Ok(ch) => ch,
-            Err(e) => {
-                // Channel open failed — force reconnect and retry once
-                eprintln!("[ssh] exec channel_open failed for {id}: {e}, forcing reconnect...");
-                self.force_reconnect(id).await?;
-                let handle = {
-                    let pool = self.connections.lock().await;
-                    let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
-                    Arc::clone(&conn.handle)
-                };
-                handle.channel_open_session().await
-                    .map_err(|e2| format!("Failed to open channel after reconnect: {e2}"))?
-            }
-        };
-
-        channel
-            .exec(true, command)
+        let output = conn
+            .session
+            .raw_command(command)
+            .output()
             .await
             .map_err(|e| format!("Failed to exec command: {e}"))?;
 
-        let mut stdout_bytes: Vec<u8> = Vec::new();
-        let mut stderr_bytes: Vec<u8> = Vec::new();
-        let mut exit_code: u32 = 1; // default to failure
-
-        loop {
-            let Some(msg) = channel.wait().await else {
-                break;
-            };
-            match msg {
-                ChannelMsg::Data { ref data } => {
-                    stdout_bytes.extend_from_slice(data);
-                }
-                ChannelMsg::ExtendedData { ref data, ext } => {
-                    if ext == 1 {
-                        // stderr
-                        stderr_bytes.extend_from_slice(data);
-                    }
-                }
-                ChannelMsg::ExitStatus { exit_status } => {
-                    exit_code = exit_status;
-                }
-                _ => {}
-            }
-        }
-
         Ok(SshExecResult {
-            stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
-            exit_code,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or(1) as u32,
         })
     }
 
     /// Execute a command with login shell setup (sources profile for PATH).
-    /// Also probes common Node version manager paths for Linux compatibility.
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
         let target_bin = command.split_whitespace().next().unwrap_or("");
         let wrapped = format!(
@@ -510,144 +228,95 @@ impl SshConnectionPool {
         self.exec(id, &wrapped).await
     }
 
-    /// Resolve a remote path, replacing leading `~/` with the cached home dir.
-    pub async fn resolve_path(&self, id: &str, path: &str) -> Result<String, String> {
-        if path.starts_with("~/") || path == "~" {
-            let home = self.get_home_dir(id).await?;
-            Ok(path.replacen('~', &home, 1))
-        } else {
-            Ok(path.to_string())
-        }
-    }
+    // -- SFTP-equivalent operations via exec ------------------------------
 
-    // -- SFTP helpers (private) -------------------------------------------
-
-    /// Open an SFTP session on the given connection. The caller is responsible
-    /// for calling `sftp.close()` when done.
-    async fn open_sftp(&self, id: &str) -> Result<SftpSession, String> {
-        self.ensure_alive(id).await?;
-
-        // Arc-clone the handle so we don't hold the pool lock across network .await
-        let handle = {
-            let pool = self.connections.lock().await;
-            let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
-            Arc::clone(&conn.handle)
-        };
-
-        let channel = match handle.channel_open_session().await {
-            Ok(ch) => ch,
-            Err(e) => {
-                // Channel open failed — force reconnect and retry once
-                eprintln!("[ssh] SFTP channel_open failed for {id}: {e}, forcing reconnect...");
-                self.force_reconnect(id).await?;
-                let handle = {
-                    let pool = self.connections.lock().await;
-                    let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
-                    Arc::clone(&conn.handle)
-                };
-                handle.channel_open_session().await
-                    .map_err(|e2| format!("Failed to open SFTP channel after reconnect: {e2}"))?
-            }
-        };
-
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| format!("Failed to request SFTP subsystem: {e}"))?;
-
-        let sftp = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            SftpSession::new(channel.into_stream()),
-        )
-        .await
-        .map_err(|_| "SFTP session initialization timed out (15s)".to_string())?
-        .map_err(|e| format!("Failed to initialize SFTP session: {e}"))?;
-
-        Ok(sftp)
-    }
-
-    // -- sftp_read --------------------------------------------------------
-
-    /// Read a remote file and return its contents as a String.
+    /// Read a remote file via `cat`.
     pub async fn sftp_read(&self, id: &str, path: &str) -> Result<String, String> {
         let resolved = self.resolve_path(id, path).await?;
-        let sftp = self.open_sftp(id).await?;
-        let result = sftp.read(&resolved).await;
-        if let Err(e) = sftp.close().await {
-            eprintln!("[ssh] SFTP close error (non-fatal): {e}");
+        let cmd = format!("cat '{}'", resolved.replace('\'', "'\\''"));
+        let result = self.exec(id, &cmd).await?;
+        if result.exit_code != 0 {
+            return Err(format!(
+                "Failed to read {resolved}: {}",
+                result.stderr.trim()
+            ));
         }
-        let data = result.map_err(|e| format!("SFTP read failed for {resolved}: {e}"))?;
-        String::from_utf8(data).map_err(|e| format!("File is not valid UTF-8: {e}"))
+        Ok(result.stdout)
     }
 
-    // -- sftp_write -------------------------------------------------------
-
-    /// Write a String to a remote file (creates or truncates).
+    /// Write content to a remote file via base64 encoding.
     pub async fn sftp_write(&self, id: &str, path: &str, content: &str) -> Result<(), String> {
         let resolved = self.resolve_path(id, path).await?;
-        let sftp = self.open_sftp(id).await?;
-
-        let result = async {
-            let mut file = sftp
-                .create(&resolved)
-                .await
-                .map_err(|e| format!("SFTP create failed for {resolved}: {e}"))?;
-
-            use tokio::io::AsyncWriteExt;
-            file.write_all(content.as_bytes())
-                .await
-                .map_err(|e| format!("SFTP write failed for {resolved}: {e}"))?;
-            file.flush()
-                .await
-                .map_err(|e| format!("SFTP flush failed for {resolved}: {e}"))?;
-            file.shutdown()
-                .await
-                .map_err(|e| format!("SFTP shutdown failed for {resolved}: {e}"))?;
-            Ok::<(), String>(())
+        let escaped_path = resolved.replace('\'', "'\\''");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+        let cmd = format!(
+            "mkdir -p \"$(dirname '{}')\" && printf '%s' '{}' | base64 -d > '{}'",
+            escaped_path, b64, escaped_path
+        );
+        let result = self.exec(id, &cmd).await?;
+        if result.exit_code != 0 {
+            return Err(format!(
+                "Failed to write {resolved}: {}",
+                result.stderr.trim()
+            ));
         }
-        .await;
-
-        if let Err(e) = sftp.close().await {
-            eprintln!("[ssh] SFTP close error (non-fatal): {e}");
-        }
-        result
+        Ok(())
     }
 
-    // -- sftp_list --------------------------------------------------------
-
-    /// List the entries in a remote directory.
+    /// List a remote directory via `stat`.
     pub async fn sftp_list(&self, id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
         let resolved = self.resolve_path(id, path).await?;
-        let sftp = self.open_sftp(id).await?;
-        let result = sftp.read_dir(&resolved).await;
-        if let Err(e) = sftp.close().await {
-            eprintln!("[ssh] SFTP close error (non-fatal): {e}");
-        }
-        let read_dir = result.map_err(|e| format!("SFTP read_dir failed for {resolved}: {e}"))?;
+        let escaped_path = resolved.replace('\'', "'\\''");
+        // Use stat to get name, type, and size in a parseable format.
+        // --format is GNU stat (Linux). Output: full_path\tfile_type\tsize
+        let cmd = format!(
+            "stat --format='%n\t%F\t%s' '{}'/* 2>/dev/null || true",
+            escaped_path
+        );
+        let result = self.exec(id, &cmd).await?;
 
-        Ok(read_dir
-            .map(|entry| {
-                let metadata = entry.metadata();
-                SftpEntry {
-                    name: entry.file_name(),
-                    is_dir: metadata.is_dir(),
-                    size: metadata.size.unwrap_or(0),
-                }
-            })
-            .collect())
+        let mut entries = Vec::new();
+        for line in result.stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let full_path = parts[0];
+            let file_type = parts[1];
+            let size: u64 = parts[2].parse().unwrap_or(0);
+
+            // Extract basename from full path
+            let name = full_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(full_path)
+                .to_string();
+
+            if name == "." || name == ".." || name.is_empty() {
+                continue;
+            }
+
+            entries.push(SftpEntry {
+                name,
+                is_dir: file_type == "directory",
+                size,
+            });
+        }
+        Ok(entries)
     }
 
-    // -- sftp_remove ------------------------------------------------------
-
-    /// Delete a remote file.
+    /// Delete a remote file via `rm`.
     pub async fn sftp_remove(&self, id: &str, path: &str) -> Result<(), String> {
         let resolved = self.resolve_path(id, path).await?;
-        let sftp = self.open_sftp(id).await?;
-        let result = sftp.remove_file(&resolved).await;
-        if let Err(e) = sftp.close().await {
-            eprintln!("[ssh] SFTP close error (non-fatal): {e}");
+        let cmd = format!("rm '{}'", resolved.replace('\'', "'\\''"));
+        let result = self.exec(id, &cmd).await?;
+        if result.exit_code != 0 {
+            return Err(format!(
+                "Failed to remove {resolved}: {}",
+                result.stderr.trim()
+            ));
         }
-        result.map_err(|e| format!("SFTP remove failed for {resolved}: {e}"))
+        Ok(())
     }
 }
 
@@ -655,84 +324,4 @@ impl Default for SshConnectionPool {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ---------------------------------------------------------------------------
-// SSH config parser
-// ---------------------------------------------------------------------------
-
-/// Parsed fields from an SSH config Host block.
-struct SshConfigEntry {
-    hostname: Option<String>,
-    user: Option<String>,
-    port: Option<u16>,
-    identity_file: Option<String>,
-}
-
-/// Parse `~/.ssh/config` and return the resolved entry for a given host alias.
-fn parse_ssh_config(host_alias: &str) -> Option<SshConfigEntry> {
-    let home = dirs::home_dir()?;
-    let config_path = home.join(".ssh").join("config");
-    let content = std::fs::read_to_string(&config_path).ok()?;
-
-    let mut current_hosts: Vec<String> = Vec::new();
-    let mut entries: Vec<(Vec<String>, SshConfigEntry)> = Vec::new();
-    let mut entry = SshConfigEntry {
-        hostname: None,
-        user: None,
-        port: None,
-        identity_file: None,
-    };
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        // Split on first whitespace or '='
-        let (key, value) = match trimmed.split_once(|c: char| c.is_whitespace() || c == '=') {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => continue,
-        };
-
-        if key.eq_ignore_ascii_case("Host") {
-            // Save previous block
-            if !current_hosts.is_empty() {
-                entries.push((current_hosts, entry));
-            }
-            current_hosts = value.split_whitespace().map(|s| s.to_string()).collect();
-            entry = SshConfigEntry {
-                hostname: None,
-                user: None,
-                port: None,
-                identity_file: None,
-            };
-        } else if key.eq_ignore_ascii_case("HostName") {
-            entry.hostname = Some(value.to_string());
-        } else if key.eq_ignore_ascii_case("User") {
-            entry.user = Some(value.to_string());
-        } else if key.eq_ignore_ascii_case("Port") {
-            entry.port = value.parse().ok();
-        } else if key.eq_ignore_ascii_case("IdentityFile") {
-            entry.identity_file = Some(value.to_string());
-        }
-    }
-    // Save last block
-    if !current_hosts.is_empty() {
-        entries.push((current_hosts, entry));
-    }
-
-    // Find matching entry (exact match, no glob support for now)
-    for (hosts, e) in entries {
-        if hosts.iter().any(|h| h == host_alias || h == "*") {
-            return Some(e);
-        }
-    }
-    None
-}
-
-/// Convenience: extract just the IdentityFile for a host.
-fn parse_ssh_config_identity(host_alias: &str) -> Option<String> {
-    parse_ssh_config(host_alias).and_then(|e| e.identity_file)
 }
