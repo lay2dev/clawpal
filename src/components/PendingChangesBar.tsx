@@ -181,6 +181,9 @@ export function PendingChangesBar({ onApplied, showToast }: PendingChangesBarPro
           onClick={handlePreview}
           disabled={previewing}
         >
+          {previewing && (
+            <span className="mr-1.5 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          )}
           {previewing ? t("queue.previewing") : t("queue.preview")}
         </Button>
         <Button

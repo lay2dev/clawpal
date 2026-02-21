@@ -273,8 +273,10 @@ pub fn preview_queued_commands(
     // Read current config
     let config_before = crate::config_io::read_text(&paths.config_path)?;
 
-    // Set up sandbox directory
-    let preview_dir = paths.clawpal_dir.join("preview").join(".openclaw");
+    // Set up sandbox directory: OPENCLAW_HOME points to the parent,
+    // so the CLI finds config at $OPENCLAW_HOME/.openclaw/openclaw.json
+    let sandbox_root = paths.clawpal_dir.join("preview");
+    let preview_dir = sandbox_root.join(".openclaw");
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
 
     // Copy current config to sandbox
@@ -284,7 +286,7 @@ pub fn preview_queued_commands(
     let mut env = HashMap::new();
     env.insert(
         "OPENCLAW_HOME".to_string(),
-        preview_dir.to_string_lossy().to_string(),
+        sandbox_root.to_string_lossy().to_string(),
     );
 
     // Execute each command in sandbox
@@ -300,7 +302,7 @@ pub fn preview_queued_commands(
                     output.stdout.clone()
                 };
                 errors.push(format!("{}: {}", cmd.label, detail));
-                break;
+                // Don't break — continue to show cumulative diff even with errors
             }
             Err(e) => {
                 errors.push(format!("{}: {}", cmd.label, e));
@@ -310,12 +312,9 @@ pub fn preview_queued_commands(
         }
     }
 
-    // Read result config from sandbox
-    let config_after = if errors.is_empty() {
-        crate::config_io::read_text(&preview_config)?
-    } else {
-        config_before.clone()
-    };
+    // Always read result config from sandbox (commands may have partially succeeded)
+    let config_after = crate::config_io::read_text(&preview_config)
+        .unwrap_or_else(|_| config_before.clone());
 
     // Cleanup sandbox
     let _ = std::fs::remove_dir_all(paths.clawpal_dir.join("preview"));
