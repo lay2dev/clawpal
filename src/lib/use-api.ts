@@ -199,6 +199,15 @@ export function useApi() {
         api.remoteUninstallWatchdog,
       ),
 
+      // Queue
+      queueCommand: dispatch(api.queueCommand, api.remoteQueueCommand),
+      removeQueuedCommand: dispatch(api.removeQueuedCommand, api.remoteRemoveQueuedCommand),
+      listQueuedCommands: dispatch(api.listQueuedCommands, api.remoteListQueuedCommands),
+      discardQueuedCommands: dispatch(api.discardQueuedCommands, api.remoteDiscardQueuedCommands),
+      previewQueuedCommands: dispatch(api.previewQueuedCommands, api.remotePreviewQueuedCommands),
+      applyQueuedCommands: dispatch(api.applyQueuedCommands, api.remoteApplyQueuedCommands),
+      queuedCommandsCount: dispatch(api.queuedCommandsCount, api.remoteQueuedCommandsCount),
+
       // Logs
       readAppLog: dispatch(api.readAppLog, api.remoteReadAppLog),
       readErrorLog: dispatch(api.readErrorLog, api.remoteReadErrorLog),

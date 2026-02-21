@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyResult, BackupInfo, Binding, ChannelNode, ConfigDirtyState, CronJob, CronRun, DiscordGuildChannel, HistoryItem, InstanceStatus, ModelCatalogProvider, ModelProfile, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, ConfigDirtyState, CronJob, CronRun, DiscordGuildChannel, HistoryItem, InstanceStatus, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
 
 export const api = {
   getSystemStatus: (): Promise<SystemStatus> =>
@@ -250,6 +250,38 @@ export const api = {
     invoke("remote_stop_watchdog", { hostId }),
   remoteUninstallWatchdog: (hostId: string): Promise<boolean> =>
     invoke("remote_uninstall_watchdog", { hostId }),
+
+  // Queue management
+  queueCommand: (label: string, command: string[]): Promise<PendingCommand> =>
+    invoke("queue_command", { label, command }),
+  removeQueuedCommand: (id: string): Promise<boolean> =>
+    invoke("remove_queued_command", { id }),
+  listQueuedCommands: (): Promise<PendingCommand[]> =>
+    invoke("list_queued_commands", {}),
+  discardQueuedCommands: (): Promise<boolean> =>
+    invoke("discard_queued_commands", {}),
+  previewQueuedCommands: (): Promise<PreviewQueueResult> =>
+    invoke("preview_queued_commands", {}),
+  applyQueuedCommands: (): Promise<ApplyQueueResult> =>
+    invoke("apply_queued_commands", {}),
+  queuedCommandsCount: (): Promise<number> =>
+    invoke("queued_commands_count", {}),
+
+  // Remote queue management
+  remoteQueueCommand: (hostId: string, label: string, command: string[]): Promise<PendingCommand> =>
+    invoke("remote_queue_command", { hostId, label, command }),
+  remoteRemoveQueuedCommand: (hostId: string, id: string): Promise<boolean> =>
+    invoke("remote_remove_queued_command", { hostId, id }),
+  remoteListQueuedCommands: (hostId: string): Promise<PendingCommand[]> =>
+    invoke("remote_list_queued_commands", { hostId }),
+  remoteDiscardQueuedCommands: (hostId: string): Promise<boolean> =>
+    invoke("remote_discard_queued_commands", { hostId }),
+  remotePreviewQueuedCommands: (hostId: string): Promise<PreviewQueueResult> =>
+    invoke("remote_preview_queued_commands", { hostId }),
+  remoteApplyQueuedCommands: (hostId: string): Promise<ApplyQueueResult> =>
+    invoke("remote_apply_queued_commands", { hostId }),
+  remoteQueuedCommandsCount: (hostId: string): Promise<number> =>
+    invoke("remote_queued_commands_count", { hostId }),
 
   // Logs
   readAppLog: (lines?: number): Promise<string> =>
