@@ -1,8 +1,25 @@
 import { api } from "./api";
+import type { ModelProfile } from "./types";
 
 export interface ActionContext {
   instanceId: string;
   isRemote: boolean;
+}
+
+/** Resolve a profile ID to a "provider/model" string by loading profiles from local or remote. */
+async function resolveProfileToModelValue(
+  profileId: string | undefined,
+  ctx?: ActionContext,
+): Promise<string | undefined> {
+  if (!profileId || profileId === "__default__") return undefined;
+  const profiles: ModelProfile[] = ctx?.isRemote
+    ? await api.remoteListModelProfiles(ctx.instanceId)
+    : await api.listModelProfiles();
+  const profile = profiles.find((p) => p.id === profileId);
+  if (!profile) return profileId; // fallback: use raw string
+  return profile.model.includes("/")
+    ? profile.model
+    : `${profile.provider}/${profile.model}`;
 }
 
 export interface ActionDef {
@@ -40,15 +57,17 @@ function renderArgs(
 
 const registry: Record<string, ActionDef> = {
   create_agent: {
-    execute: (args, ctx) => {
-      const model = args.modelProfileId as string | undefined;
-      const cleanModel = model === "__default__" ? undefined : model;
+    execute: async (args, ctx) => {
+      const modelValue = await resolveProfileToModelValue(
+        args.modelProfileId as string | undefined,
+        ctx,
+      );
       if (ctx?.isRemote) {
-        return api.remoteCreateAgent(ctx.instanceId, args.agentId as string, cleanModel);
+        return api.remoteCreateAgent(ctx.instanceId, args.agentId as string, modelValue);
       }
       return api.createAgent(
         args.agentId as string,
-        cleanModel,
+        modelValue,
         args.independent as boolean | undefined,
       );
     },
@@ -108,11 +127,15 @@ const registry: Record<string, ActionDef> = {
     describe: () => "",
   },
   set_global_model: {
-    execute: (args, ctx) => {
+    execute: async (args, ctx) => {
+      const modelValue = await resolveProfileToModelValue(
+        args.profileId as string | undefined,
+        ctx,
+      ) ?? null;
       if (ctx?.isRemote) {
-        return api.remoteSetGlobalModel(ctx.instanceId, args.profileId as string);
+        return api.remoteSetGlobalModel(ctx.instanceId, modelValue);
       }
-      return api.setGlobalModel(args.profileId as string);
+      return api.setGlobalModel(modelValue);
     },
     describe: (args) => `Set default model to ${args.profileId}`,
   },

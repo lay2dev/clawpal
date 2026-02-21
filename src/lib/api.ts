@@ -34,8 +34,8 @@ export const api = {
     invoke("resolve_api_keys", {}),
   listAgentsOverview: (): Promise<AgentOverview[]> =>
     invoke("list_agents_overview", {}),
-  createAgent: (agentId: string, modelProfileId?: string, independent?: boolean): Promise<AgentOverview> =>
-    invoke("create_agent", { agentId, modelProfileId, independent }),
+  createAgent: (agentId: string, modelValue?: string, independent?: boolean): Promise<AgentOverview> =>
+    invoke("create_agent", { agentId, modelValue, independent }),
   deleteAgent: (agentId: string): Promise<boolean> =>
     invoke("delete_agent", { agentId }),
   setupAgentIdentity: (agentId: string, name: string, emoji?: string): Promise<boolean> =>
@@ -76,10 +76,10 @@ export const api = {
     invoke("refresh_discord_guild_channels", {}),
   restartGateway: (): Promise<boolean> =>
     invoke("restart_gateway", {}),
-  setGlobalModel: (profileId: string | null): Promise<boolean> =>
-    invoke("set_global_model", { profileId }),
-  setAgentModel: (agentId: string, profileId: string | null): Promise<boolean> =>
-    invoke("set_agent_model", { agentId, profileId }),
+  setGlobalModel: (modelValue: string | null): Promise<boolean> =>
+    invoke("set_global_model", { modelValue }),
+  setAgentModel: (agentId: string, modelValue: string | null): Promise<boolean> =>
+    invoke("set_agent_model", { agentId, modelValue }),
   listBindings: (): Promise<Binding[]> =>
     invoke("list_bindings", {}),
   assignChannelAgent: (channelType: string, peerId: string, agentId: string | null): Promise<boolean> =>
@@ -124,8 +124,8 @@ export const api = {
     invoke("remote_restart_gateway", { hostId }),
   remoteApplyConfigPatch: (hostId: string, patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("remote_apply_config_patch", { hostId, patchTemplate, params }),
-  remoteCreateAgent: (hostId: string, agentId: string, model?: string): Promise<AgentOverview> =>
-    invoke("remote_create_agent", { hostId, agentId, model }),
+  remoteCreateAgent: (hostId: string, agentId: string, modelValue?: string): Promise<AgentOverview> =>
+    invoke("remote_create_agent", { hostId, agentId, modelValue }),
   remoteDeleteAgent: (hostId: string, agentId: string): Promise<boolean> =>
     invoke("remote_delete_agent", { hostId, agentId }),
   remoteAssignChannelAgent: (hostId: string, channelType: string, peerId: string, agentId: string | null): Promise<boolean> =>

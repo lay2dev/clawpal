@@ -69,9 +69,19 @@ export function CreateAgentDialog({
     setCreating(true);
     setError("");
     try {
+      // Resolve profile ID to "provider/model" value
+      const resolveModelValue = (profileId: string | undefined): string | undefined => {
+        if (!profileId || profileId === "__default__") return undefined;
+        const profile = modelProfiles.find((p) => p.id === profileId);
+        if (!profile) return profileId;
+        return profile.model.includes("/")
+          ? profile.model
+          : `${profile.provider}/${profile.model}`;
+      };
+      const modelValue = resolveModelValue(model || undefined);
       const created = isRemote && instanceId
-        ? await api.remoteCreateAgent(instanceId, id, model || undefined)
-        : await api.createAgent(id, model || undefined, independent || undefined);
+        ? await api.remoteCreateAgent(instanceId, id, modelValue)
+        : await api.createAgent(id, modelValue, independent || undefined);
       // Set identity if name or emoji provided
       const name = displayName.trim();
       const emojiVal = emoji.trim();

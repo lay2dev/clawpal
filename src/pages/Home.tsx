@@ -79,6 +79,15 @@ export function Home({
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
 
+  const resolveModelValue = (profileId: string | null): string | null => {
+    if (!profileId) return null;
+    const profile = modelProfiles.find((p) => p.id === profileId);
+    if (!profile) return profileId;
+    return profile.model.includes("/")
+      ? profile.model
+      : `${profile.provider}/${profile.model}`;
+  };
+
   // Health status with grace period: retry quickly when unhealthy, then slow-poll
   const [statusSettled, setStatusSettled] = useState(false);
   const retriesRef = useRef(0);
@@ -282,13 +291,10 @@ export function Home({
                   onValueChange={(val) => {
                     if (val === "__raw__") return;
                     setSavingModel(true);
+                    const modelValue = resolveModelValue(val === "__none__" ? null : val);
                     const setModelPromise = isRemote
-                      ? (() => {
-                          const profile = modelProfiles.find((p) => p.id === val);
-                          const modelValue = profile ? `${profile.provider}/${profile.model}` : null;
-                          return api.remoteSetGlobalModel(instanceId, modelValue);
-                        })()
-                      : api.setGlobalModel(val === "__none__" ? null : val);
+                      ? api.remoteSetGlobalModel(instanceId, modelValue)
+                      : api.setGlobalModel(modelValue);
                     setModelPromise
                       .then(() => fetchStatus())
                       .catch((e) => showToast?.(String(e), "error"))
@@ -366,13 +372,10 @@ export function Home({
                               return "__none__";
                             })()}
                             onValueChange={(val) => {
+                              const modelValue = resolveModelValue(val === "__none__" ? null : val);
                               const setModelPromise = isRemote
-                                ? (() => {
-                                    const profile = modelProfiles.find((p) => p.id === val);
-                                    const modelValue = profile ? `${profile.provider}/${profile.model}` : null;
-                                    return api.remoteSetAgentModel(instanceId, agent.id, modelValue);
-                                  })()
-                                : api.setAgentModel(agent.id, val === "__none__" ? null : val);
+                                ? api.remoteSetAgentModel(instanceId, agent.id, modelValue)
+                                : api.setAgentModel(agent.id, modelValue);
                               setModelPromise
                                 .then(() => refreshAgents())
                                 .catch((e) => showToast?.(String(e), "error"));

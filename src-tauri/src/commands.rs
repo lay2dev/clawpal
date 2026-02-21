@@ -918,11 +918,11 @@ pub fn delete_channel_node(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn set_global_model(profile_id: Option<String>) -> Result<bool, String> {
+pub fn set_global_model(model_value: Option<String>) -> Result<bool, String> {
     let paths = resolve_paths();
     let mut cfg = read_openclaw_config(&paths)?;
     let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let model = resolve_profile_model_value(&paths, profile_id)?;
+    let model = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     set_nested_value(
         &mut cfg,
         "agents.defaults.model",
@@ -933,28 +933,28 @@ pub fn set_global_model(profile_id: Option<String>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn set_agent_model(agent_id: String, profile_id: Option<String>) -> Result<bool, String> {
+pub fn set_agent_model(agent_id: String, model_value: Option<String>) -> Result<bool, String> {
     if agent_id.trim().is_empty() {
         return Err("agent id is required".into());
     }
     let paths = resolve_paths();
     let mut cfg = read_openclaw_config(&paths)?;
     let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let value = resolve_profile_model_value(&paths, profile_id)?;
+    let value = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     set_agent_model_value(&mut cfg, &agent_id, value)?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-agent-model")?;
     Ok(true)
 }
 
 #[tauri::command]
-pub fn set_channel_model(path: String, profile_id: Option<String>) -> Result<bool, String> {
+pub fn set_channel_model(path: String, model_value: Option<String>) -> Result<bool, String> {
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
     let paths = resolve_paths();
     let mut cfg = read_openclaw_config(&paths)?;
     let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    let value = resolve_profile_model_value(&paths, profile_id)?;
+    let value = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     set_nested_value(&mut cfg, &format!("{path}.model"), value.map(Value::String))?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-channel-model")?;
     Ok(true)
@@ -1042,7 +1042,7 @@ pub fn list_agents_overview() -> Result<Vec<AgentOverview>, String> {
 #[tauri::command]
 pub fn create_agent(
     agent_id: String,
-    model_profile_id: Option<String>,
+    model_value: Option<String>,
     independent: Option<bool>,
 ) -> Result<AgentOverview, String> {
     let agent_id = agent_id.trim().to_string();
@@ -1062,14 +1062,7 @@ pub fn create_agent(
         return Err(format!("Agent '{}' already exists", agent_id));
     }
 
-    // Resolve model value from profile if provided
-    let model_value = if let Some(ref pid) = model_profile_id {
-        let pid = pid.trim();
-        if pid.is_empty() { None } else {
-            Some(resolve_profile_model_value(&paths, Some(pid.to_string()))?)
-        }
-    } else { None };
-    let model_display = model_value.flatten();
+    let model_display = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
 
     // If independent, create a dedicated workspace directory;
     // otherwise inherit the default workspace so the gateway doesn't auto-create one.
@@ -2679,30 +2672,7 @@ fn model_profiles_path(paths: &crate::models::OpenClawPaths) -> std::path::PathB
     paths.clawpal_dir.join("model-profiles.json")
 }
 
-fn resolve_profile_model_value(
-    paths: &crate::models::OpenClawPaths,
-    profile_id: Option<String>,
-) -> Result<Option<String>, String> {
-    let profile_id = profile_id.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    });
-    if profile_id.is_none() {
-        return Ok(None);
-    }
-    let target = profile_id.expect("checked");
-    let profiles = load_model_profiles(paths);
-    for profile in profiles {
-        if profile.id == target {
-            return Ok(Some(profile_to_model_value(&profile)));
-        }
-    }
-    Err(format!("model profile not found: {target}"))
-}
+
 
 fn profile_to_model_value(profile: &ModelProfile) -> String {
     if profile.model.contains('/') {
@@ -4688,7 +4658,7 @@ pub async fn remote_create_agent(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     agent_id: String,
-    model: Option<String>,
+    model_value: Option<String>,
 ) -> Result<Value, String> {
     let agent_id = agent_id.trim().to_string();
     if agent_id.is_empty() {
@@ -4704,28 +4674,7 @@ pub async fn remote_create_agent(
         return Err(format!("Agent '{}' already exists", agent_id));
     }
 
-    // Resolve model value from profile ID (convert UUID to "provider/model" string)
-    let model_value = if let Some(ref profile_id) = model {
-        let pid = profile_id.trim();
-        if pid.is_empty() {
-            None
-        } else {
-            // Load remote model profiles and find matching one
-            let profiles_raw = pool.sftp_read(&host_id, "~/.clawpal/model-profiles.json").await
-                .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
-            let profiles: Vec<ModelProfile> = serde_json::from_str::<Value>(&profiles_raw)
-                .ok()
-                .and_then(|v| v.get("profiles")?.as_array().cloned())
-                .map(|arr| arr.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
-                .unwrap_or_default();
-            profiles.iter()
-                .find(|p| p.id == pid)
-                .map(|p| profile_to_model_value(p))
-                .or_else(|| Some(pid.to_string()))
-        }
-    } else {
-        None
-    };
+    let model_value = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
 
     let mut agent_obj = serde_json::Map::new();
     agent_obj.insert("id".into(), Value::String(agent_id.clone()));
