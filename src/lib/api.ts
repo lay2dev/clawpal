@@ -196,6 +196,12 @@ export const api = {
     invoke("remote_delete_backup", { hostId, backupName }),
 
   // Upgrade
+  checkOpenclawUpdate: (): Promise<{ upgradeAvailable: boolean; latestVersion: string | null; installedVersion: string }> =>
+    invoke<SystemStatus>("get_system_status").then((s) => ({
+      upgradeAvailable: s.openclawUpdate?.upgradeAvailable ?? false,
+      latestVersion: s.openclawUpdate?.latestVersion ?? null,
+      installedVersion: s.openclawVersion ?? "",
+    })),
   runOpenclawUpgrade: (): Promise<string> =>
     invoke("run_openclaw_upgrade", {}),
   remoteRunOpenclawUpgrade: (hostId: string): Promise<string> =>
