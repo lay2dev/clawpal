@@ -40,10 +40,11 @@ use crate::commands::{
     read_app_log, read_error_log, read_gateway_log, read_gateway_error_log,
     remote_read_app_log, remote_read_error_log, remote_read_gateway_log, remote_read_gateway_error_log,
 };
+use crate::bridge_client::BridgeClient;
 use crate::doctor_commands::{
     doctor_connect, doctor_disconnect, doctor_start_diagnosis, doctor_send_message,
     doctor_approve_invoke, doctor_reject_invoke, collect_doctor_context,
-    collect_doctor_context_remote,
+    collect_doctor_context_remote, doctor_bridge_connect, doctor_bridge_disconnect,
 };
 use crate::cli_runner::{
     queue_command, remove_queued_command, list_queued_commands,
@@ -57,6 +58,7 @@ use crate::cli_runner::{
 use crate::node_client::NodeClient;
 use crate::ssh::SshConnectionPool;
 
+pub mod bridge_client;
 pub mod cli_runner;
 pub mod commands;
 pub mod config_io;
@@ -75,6 +77,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(SshConnectionPool::new())
         .manage(NodeClient::new())
+        .manage(BridgeClient::new())
         .manage(CommandQueue::new())
         .manage(RemoteCommandQueues::new())
         .manage(CliCache::new())
@@ -219,6 +222,8 @@ pub fn run() {
             doctor_reject_invoke,
             collect_doctor_context,
             collect_doctor_context_remote,
+            doctor_bridge_connect,
+            doctor_bridge_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run app");
