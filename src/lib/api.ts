@@ -266,6 +266,8 @@ export const api = {
     invoke("remote_queued_commands_count", { hostId }),
 
   // Doctor Agent
+  doctorPortForward: (hostId: string): Promise<number> =>
+    invoke("doctor_port_forward", { hostId }),
   doctorConnect: (url: string): Promise<void> =>
     invoke("doctor_connect", { url }),
   doctorDisconnect: (): Promise<void> =>

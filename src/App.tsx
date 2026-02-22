@@ -371,7 +371,7 @@ export function App() {
         )}
         {route === "cron" && <Cron key={`${activeInstance}`} />}
         {route === "history" && <History key={`${activeInstance}-${configVersion}`} />}
-        <div className={route === "doctor" ? undefined : "hidden"}><Doctor /></div>
+        <div className={route === "doctor" ? undefined : "hidden"}><Doctor sshHosts={sshHosts} /></div>
         {route === "sessions" && <Sessions />}
         {route === "settings" && (
           <Settings

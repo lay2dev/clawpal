@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { api } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
-import type { DoctorReport } from "@/lib/types";
+import type { DoctorReport, SshHost } from "@/lib/types";
 import {
   Card,
   CardHeader,
@@ -20,9 +21,11 @@ import {
 } from "@/components/ui/dialog";
 import { DoctorChat } from "@/components/DoctorChat";
 
-type AgentSource = "local" | "hosted";
+interface DoctorProps {
+  sshHosts: SshHost[];
+}
 
-export function Doctor() {
+export function Doctor({ sshHosts }: DoctorProps) {
   const { t } = useTranslation();
   const ua = useApi();
   const { instanceId, isRemote, isConnected } = useInstance();
@@ -33,8 +36,8 @@ export function Doctor() {
   const [message, setMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Agent source state
-  const [agentSource, setAgentSource] = useState<AgentSource>("hosted");
+  // Agent source: an instance id ("local" / host uuid) or "remote" (hosted doctor)
+  const [agentSource, setAgentSource] = useState("remote");
   const [diagnosing, setDiagnosing] = useState(false);
 
   // Logs state
@@ -84,9 +87,16 @@ export function Doctor() {
   const handleStartDiagnosis = async () => {
     setDiagnosing(true);
     try {
-      const url = agentSource === "local"
-        ? "ws://localhost:18789"
-        : "wss://doctor.openclaw.ai";
+      let url: string;
+      if (agentSource === "remote") {
+        url = "wss://doctor.openclaw.ai";
+      } else if (agentSource === "local") {
+        url = "ws://localhost:18789";
+      } else {
+        // Remote gateway: SSH tunnel to its port 18789
+        const localPort = await api.doctorPortForward(agentSource);
+        url = `ws://localhost:${localPort}`;
+      }
 
       await doctor.connect(url);
 
@@ -236,30 +246,47 @@ export function Doctor() {
 
           {!doctor.connected ? (
             <>
-              {/* Source radio */}
+              {/* Source radio — instance gateways (excluding current target) + remote doctor */}
               <div className="text-sm text-muted-foreground mb-2">{t("doctor.agentSourceHint")}</div>
-              <div className="flex items-center gap-4 mb-4">
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+              <div className="flex items-center gap-4 mb-4 flex-wrap">
+                {doctor.target !== "local" && (
+                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="agentSource"
+                      value="local"
+                      checked={agentSource === "local"}
+                      onChange={() => setAgentSource("local")}
+                      className="accent-primary"
+                    />
+                    {t("instance.local")}
+                  </label>
+                )}
+                {sshHosts
+                  .filter((h) => h.id !== doctor.target)
+                  .map((h) => (
+                    <label key={h.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        name="agentSource"
+                        value={h.id}
+                        checked={agentSource === h.id}
+                        onChange={() => setAgentSource(h.id)}
+                        className="accent-primary"
+                      />
+                      {h.label || h.host}
+                    </label>
+                  ))}
+                <label className="flex items-center gap-1.5 text-sm cursor-not-allowed text-muted-foreground">
                   <input
                     type="radio"
                     name="agentSource"
-                    value="local"
-                    checked={agentSource === "local"}
-                    onChange={() => setAgentSource("local")}
+                    value="remote"
+                    disabled
                     className="accent-primary"
                   />
-                  {t("doctor.localGateway")}
-                </label>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="agentSource"
-                    value="hosted"
-                    checked={agentSource === "hosted"}
-                    onChange={() => setAgentSource("hosted")}
-                    className="accent-primary"
-                  />
-                  {t("doctor.hostedService")}
+                  {t("doctor.remoteDoctor")}
+                  <span className="text-xs">(coming soon)</span>
                 </label>
               </div>
               {doctor.error && (
@@ -274,7 +301,11 @@ export function Doctor() {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="text-xs">
-                    {agentSource === "local" ? t("doctor.localGateway") : t("doctor.hostedService")}
+                    {agentSource === "remote"
+                      ? t("doctor.remoteDoctor")
+                      : agentSource === "local"
+                        ? t("instance.local")
+                        : sshHosts.find((h) => h.id === agentSource)?.label || agentSource}
                   </Badge>
                   <Badge variant="outline" className="text-xs">
                     {doctor.bridgeConnected ? t("doctor.bridgeConnected") : t("doctor.bridgeDisconnected")}

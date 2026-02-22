@@ -51,7 +51,7 @@ fn shell_quote(s: &str) -> String {
 mod inner {
     use super::*;
     use std::sync::Arc;
-    use openssh::{KnownHosts, Session, SessionBuilder};
+    use openssh::{ForwardType, KnownHosts, Session, SessionBuilder, Socket};
 
     struct SshConnection {
         session: Arc<Session>,
@@ -146,6 +146,28 @@ mod inner {
                 }
             };
             session.check().await.is_ok()
+        }
+
+        /// Create a local port forward: localhost:<local_port> → remote 127.0.0.1:<remote_port>.
+        /// Binds to a random local port (port 0) and returns the actual port assigned.
+        pub async fn request_port_forward(&self, id: &str, remote_port: u16) -> Result<u16, String> {
+            let session = {
+                let pool = self.connections.lock().await;
+                let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
+                Arc::clone(&conn.session)
+            };
+            // Bind to port 0 = OS picks a free port
+            let local_port = portpicker::pick_unused_port()
+                .ok_or_else(|| "Could not find a free local port".to_string())?;
+            session
+                .request_port_forward(
+                    ForwardType::Local,
+                    Socket::TcpSocket { host: "127.0.0.1".into(), port: local_port },
+                    Socket::TcpSocket { host: "127.0.0.1".into(), port: remote_port },
+                )
+                .await
+                .map_err(|e| format!("SSH port forward failed: {e}"))?;
+            Ok(local_port)
         }
 
         async fn resolve_home_via_session(session: &Session) -> Result<String, String> {
@@ -453,6 +475,36 @@ mod inner {
                 .await
                 .map(|o| o.status.success())
                 .unwrap_or(false)
+        }
+
+        /// Create a local port forward via `ssh -L -N`. Returns the local port.
+        /// The ssh process runs in the background (spawned, not awaited).
+        pub async fn request_port_forward(&self, id: &str, remote_port: u16) -> Result<u16, String> {
+            let args = {
+                let pool = self.connections.lock().await;
+                let conn = pool.get(id).ok_or_else(|| format!("No connection for id: {id}"))?;
+                conn.ssh_args()
+            };
+            let local_port = portpicker::pick_unused_port()
+                .ok_or_else(|| "Could not find a free local port".to_string())?;
+            // -L: local forward, -N: no remote command (just forward)
+            // No -f: Windows OpenSSH doesn't support it; we spawn detached instead.
+            let mut cmd_args = vec![
+                "-L".into(),
+                format!("{}:127.0.0.1:{}", local_port, remote_port),
+                "-N".into(),
+            ];
+            cmd_args.extend(args);
+            ssh_command()
+                .args(&cmd_args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("SSH port forward failed: {e}"))?;
+            // Give the tunnel a moment to establish
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            Ok(local_port)
         }
 
         pub async fn get_home_dir(&self, id: &str) -> Result<String, String> {

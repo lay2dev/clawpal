@@ -6,6 +6,16 @@ use crate::bridge_client::{BridgeClient, extract_shell_command};
 use crate::models::resolve_paths;
 use crate::ssh::SshConnectionPool;
 
+/// Create an SSH local port forward to a remote host's gateway (port 18789).
+/// Returns the local port to connect to.
+#[tauri::command]
+pub async fn doctor_port_forward(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<u16, String> {
+    pool.request_port_forward(&host_id, 18789).await
+}
+
 #[tauri::command]
 pub async fn doctor_connect(
     client: State<'_, NodeClient>,
