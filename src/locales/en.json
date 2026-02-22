@@ -186,6 +186,8 @@
   "doctor.hostedService": "Hosted Service",
   "doctor.startDiagnosis": "Start Diagnosis",
   "doctor.stopDiagnosis": "Disconnect",
+  "doctor.bridgeConnected": "Bridge Connected",
+  "doctor.bridgeDisconnected": "Bridge Disconnected",
   "doctor.connecting": "Connecting...",
   "doctor.connected": "Connected",
   "doctor.disconnected": "Disconnected",

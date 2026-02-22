@@ -390,6 +390,9 @@ export function Doctor() {
                   {agentSource === "local" ? t("doctor.localGateway")
                     : t("doctor.hostedService")}
                 </Badge>
+                <Badge variant={doctor.bridgeConnected ? "outline" : "destructive"} className="text-xs">
+                  {doctor.bridgeConnected ? t("doctor.bridgeConnected") : t("doctor.bridgeDisconnected")}
+                </Badge>
                 <Button variant="outline" size="sm" onClick={handleStopDiagnosis}>
                   {t("doctor.stopDiagnosis")}
                 </Button>

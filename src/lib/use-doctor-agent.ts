@@ -16,6 +16,7 @@ function extractApprovalPattern(invoke: DoctorInvoke): string {
 
 export function useDoctorAgent() {
   const [connected, setConnected] = useState(false);
+  const [bridgeConnected, setBridgeConnected] = useState(false);
   const [messages, setMessages] = useState<DoctorChatMessage[]>([]);
   const [pendingInvokes, setPendingInvokes] = useState<Map<string, DoctorInvoke>>(new Map());
   const [loading, setLoading] = useState(false);
@@ -100,6 +101,12 @@ export function useDoctorAgent() {
         // Reset streaming for next assistant message
         streamingRef.current = "";
       }),
+      listen("doctor:bridge-connected", () => {
+        setBridgeConnected(true);
+      }),
+      listen<{ reason: string }>("doctor:bridge-disconnected", () => {
+        setBridgeConnected(false);
+      }),
       listen<{ message: string }>("doctor:error", (e) => {
         setError(e.payload.message);
         setLoading(false);
@@ -133,6 +140,14 @@ export function useDoctorAgent() {
   const connect = useCallback(async (url: string) => {
     setError(null);
     try {
+      // Extract host from WebSocket URL for bridge TCP connection
+      const wsUrl = new URL(url);
+      const bridgeAddr = `${wsUrl.hostname}:18790`;
+
+      // Connect bridge first (registers as node)
+      await api.doctorBridgeConnect(bridgeAddr);
+
+      // Then connect operator (for agent method)
       await api.doctorConnect(url);
     } catch (err) {
       const msg = `Connection failed: ${err}`;
@@ -143,11 +158,12 @@ export function useDoctorAgent() {
 
   const disconnect = useCallback(async () => {
     try {
-      await api.doctorDisconnect();
+      await api.doctorDisconnect(); // Tauri command now closes both
     } catch (err) {
       setError(`Disconnect failed: ${err}`);
     }
     setConnected(false);
+    setBridgeConnected(false);
     setLoading(false);
   }, []);
 
@@ -220,12 +236,14 @@ export function useDoctorAgent() {
     setPendingInvokes(new Map());
     setLoading(false);
     setError(null);
+    setBridgeConnected(false);
     setApprovedPatterns(new Set());
     streamingRef.current = "";
   }, []);
 
   return {
     connected,
+    bridgeConnected,
     messages,
     pendingInvokes,
     loading,

@@ -207,6 +207,8 @@ export function useApi() {
       doctorRejectInvoke: api.doctorRejectInvoke,
       collectDoctorContext: api.collectDoctorContext,
       collectDoctorContextRemote: api.collectDoctorContextRemote,
+      doctorBridgeConnect: api.doctorBridgeConnect,
+      doctorBridgeDisconnect: api.doctorBridgeDisconnect,
 
       // Local-only (no remote equivalent needed)
       openUrl: api.openUrl,

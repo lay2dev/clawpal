@@ -186,6 +186,8 @@
   "doctor.hostedService": "托管服务",
   "doctor.startDiagnosis": "开始诊断",
   "doctor.stopDiagnosis": "断开连接",
+  "doctor.bridgeConnected": "桥接已连接",
+  "doctor.bridgeDisconnected": "桥接未连接",
   "doctor.connecting": "连接中...",
   "doctor.connected": "已连接",
   "doctor.disconnected": "未连接",

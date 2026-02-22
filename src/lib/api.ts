@@ -282,6 +282,10 @@ export const api = {
     invoke("collect_doctor_context"),
   collectDoctorContextRemote: (hostId: string): Promise<string> =>
     invoke("collect_doctor_context_remote", { hostId }),
+  doctorBridgeConnect: (addr: string): Promise<void> =>
+    invoke("doctor_bridge_connect", { addr }),
+  doctorBridgeDisconnect: (): Promise<void> =>
+    invoke("doctor_bridge_disconnect"),
 
   // Logs
   readAppLog: (lines?: number): Promise<string> =>
