@@ -348,7 +348,7 @@ impl NodeClient {
             },
             "client": {
                 "id": "clawpal",
-                "platform": "macos",
+                "platform": std::env::consts::OS,
                 "mode": "cli",
                 "version": version,
             },
