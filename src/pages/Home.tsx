@@ -149,11 +149,20 @@ export function Home({
       if (ua.isRemote) remoteErrorShownRef.current = false;
     }).catch((e) => {
       if (ua.isRemote) {
-        console.error("Failed to load remote agents:", e);
-        if (!remoteErrorShownRef.current) {
-          remoteErrorShownRef.current = true;
-          showToast?.(t('home.remoteAgentsFailed', { error: String(e) }), "error");
-        }
+        // SSH sessions can be transiently unavailable during tab switch;
+        // retry once after a short delay before surfacing the error.
+        setTimeout(() => {
+          ua.listAgents().then((a) => {
+            setAgents(a);
+            remoteErrorShownRef.current = false;
+          }).catch((e2) => {
+            console.error("Failed to load remote agents:", e2);
+            if (!remoteErrorShownRef.current) {
+              remoteErrorShownRef.current = true;
+              showToast?.(t('home.remoteAgentsFailed', { error: String(e2) }), "error");
+            }
+          });
+        }, 1500);
       } else {
         console.error("Failed to load agents:", e);
       }
