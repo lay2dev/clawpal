@@ -51,8 +51,10 @@ pub async fn doctor_send_message(
 #[tauri::command]
 pub async fn doctor_approve_invoke(
     client: State<'_, NodeClient>,
+    pool: State<'_, SshConnectionPool>,
     app: AppHandle,
     invoke_id: String,
+    target: String,
 ) -> Result<Value, String> {
     let invoke = client.take_invoke(&invoke_id).await
         .ok_or_else(|| format!("No pending invoke with id: {invoke_id}"))?;
@@ -60,8 +62,12 @@ pub async fn doctor_approve_invoke(
     let command = invoke.get("command").and_then(|v| v.as_str()).unwrap_or("");
     let args = invoke.get("args").cloned().unwrap_or(Value::Null);
 
-    // Execute the command locally
-    let result = execute_local_command(command, &args).await?;
+    // Route to local or remote execution
+    let result = if target == "local" {
+        execute_local_command(command, &args).await?
+    } else {
+        execute_remote_command(&pool, &target, command, &args).await?
+    };
 
     // Send result back to gateway
     client.send_response(&invoke_id, result.clone()).await?;
