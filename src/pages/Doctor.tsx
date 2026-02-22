@@ -373,6 +373,9 @@ export function Doctor() {
                   {t("doctor.hostedService")}
                 </label>
               </div>
+              {doctor.error && (
+                <div className="mb-3 text-sm text-destructive">{doctor.error}</div>
+              )}
               <Button
                 onClick={handleStartDiagnosis}
                 disabled={diagnosing}

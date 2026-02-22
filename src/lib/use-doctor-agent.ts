@@ -135,7 +135,9 @@ export function useDoctorAgent() {
     try {
       await api.doctorConnect(url);
     } catch (err) {
-      setError(`Connection failed: ${err}`);
+      const msg = `Connection failed: ${err}`;
+      setError(msg);
+      throw new Error(msg);
     }
   }, []);
 
