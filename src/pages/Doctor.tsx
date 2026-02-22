@@ -1,6 +1,8 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
+import { useDoctorAgent } from "@/lib/use-doctor-agent";
 import { initialState, reducer } from "@/lib/state";
 import type { DoctorReport } from "@/lib/types";
 import {
@@ -18,14 +20,69 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SessionAnalysisPanel } from "@/components/SessionAnalysisPanel";
+import { DoctorChat } from "@/components/DoctorChat";
+
+type AgentSource = "local" | "hosted";
 
 export function Doctor() {
   const { t } = useTranslation();
   const ua = useApi();
+  const { instanceId, isRemote, isConnected } = useInstance();
+  const doctor = useDoctorAgent();
   const [state, dispatch] = useReducer(reducer, initialState);
   const [rawOutput, setRawOutput] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+
+  // Agent source state
+  const [agentSource, setAgentSource] = useState<AgentSource>("hosted");
+  const [diagnosing, setDiagnosing] = useState(false);
+
+  // Reset doctor agent when switching instances
+  useEffect(() => {
+    doctor.reset();
+    doctor.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  // Auto-infer target from active instance tab
+  useEffect(() => {
+    if (isRemote && isConnected) {
+      doctor.setTarget(instanceId);
+    } else {
+      doctor.setTarget("local");
+    }
+  }, [instanceId, isRemote, isConnected, doctor.setTarget]);
+
+  const handleStartDiagnosis = async () => {
+    setDiagnosing(true);
+    try {
+      let url: string;
+      if (agentSource === "local") {
+        url = "ws://localhost:18789";
+      } else {
+        url = "wss://doctor.openclaw.ai";
+      }
+
+      await doctor.connect(url);
+
+      // Collect context based on target (not source)
+      const context = doctor.target === "local"
+        ? await ua.collectDoctorContext()
+        : await ua.collectDoctorContextRemote(doctor.target);
+
+      await doctor.startDiagnosis(context);
+    } catch {
+      // Error is surfaced via doctor.error state from the hook
+    } finally {
+      setDiagnosing(false);
+    }
+  };
+
+  const handleStopDiagnosis = async () => {
+    await doctor.disconnect();
+    doctor.reset();
+  };
 
   // Logs state
   const [logsOpen, setLogsOpen] = useState(false);
@@ -276,6 +333,77 @@ export function Doctor() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Doctor Agent Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>{t("doctor.agentSource")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!doctor.connected ? (
+            <>
+              {/* Target display */}
+              <div className="flex items-center gap-2 mb-3 text-sm">
+                <span className="text-muted-foreground">{t("doctor.target")}:</span>
+                <span className="font-medium">
+                  {doctor.target === "local" ? t("doctor.localMachine") : doctor.target}
+                </span>
+              </div>
+              <div className="flex items-center gap-4 mb-4">
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="agentSource"
+                    value="local"
+                    checked={agentSource === "local"}
+                    onChange={() => setAgentSource("local")}
+                    className="accent-primary"
+                  />
+                  {t("doctor.localGateway")}
+                </label>
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="agentSource"
+                    value="hosted"
+                    checked={agentSource === "hosted"}
+                    onChange={() => setAgentSource("hosted")}
+                    className="accent-primary"
+                  />
+                  {t("doctor.hostedService")}
+                </label>
+              </div>
+              <Button
+                onClick={handleStartDiagnosis}
+                disabled={diagnosing}
+              >
+                {diagnosing ? t("doctor.connecting") : t("doctor.startDiagnosis")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <Badge variant="outline" className="text-xs">
+                  {agentSource === "local" ? t("doctor.localGateway")
+                    : t("doctor.hostedService")}
+                </Badge>
+                <Button variant="outline" size="sm" onClick={handleStopDiagnosis}>
+                  {t("doctor.stopDiagnosis")}
+                </Button>
+              </div>
+              <DoctorChat
+                messages={doctor.messages}
+                loading={doctor.loading}
+                error={doctor.error}
+                connected={doctor.connected}
+                onSendMessage={doctor.sendMessage}
+                onApproveInvoke={doctor.approveInvoke}
+                onRejectInvoke={doctor.rejectInvoke}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <SessionAnalysisPanel />
     </section>

@@ -198,6 +198,16 @@ export function useApi() {
       readGatewayLog: dispatch(api.readGatewayLog, api.remoteReadGatewayLog),
       readGatewayErrorLog: dispatch(api.readGatewayErrorLog, api.remoteReadGatewayErrorLog),
 
+      // Doctor Agent (local-only, no remote dispatch)
+      doctorConnect: api.doctorConnect,
+      doctorDisconnect: api.doctorDisconnect,
+      doctorStartDiagnosis: api.doctorStartDiagnosis,
+      doctorSendMessage: api.doctorSendMessage,
+      doctorApproveInvoke: api.doctorApproveInvoke,
+      doctorRejectInvoke: api.doctorRejectInvoke,
+      collectDoctorContext: api.collectDoctorContext,
+      collectDoctorContextRemote: api.collectDoctorContextRemote,
+
       // Local-only (no remote equivalent needed)
       openUrl: api.openUrl,
       resolveProviderAuth: api.resolveProviderAuth,
