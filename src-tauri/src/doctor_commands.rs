@@ -98,6 +98,7 @@ pub async fn doctor_start_diagnosis(
     client: State<'_, NodeClient>,
     context: String,
     session_key: String,
+    agent_id: String,
 ) -> Result<(), String> {
     let idempotency_key = uuid::Uuid::new_v4().to_string();
 
@@ -105,7 +106,7 @@ pub async fn doctor_start_diagnosis(
     client.send_request_fire("agent", json!({
         "message": context,
         "idempotencyKey": idempotency_key,
-        "agentId": "main",
+        "agentId": agent_id,
         "sessionKey": session_key,
     })).await
 }
@@ -115,6 +116,7 @@ pub async fn doctor_send_message(
     client: State<'_, NodeClient>,
     message: String,
     session_key: String,
+    agent_id: String,
 ) -> Result<(), String> {
     let idempotency_key = uuid::Uuid::new_v4().to_string();
 
@@ -122,7 +124,7 @@ pub async fn doctor_send_message(
     client.send_request_fire("agent", json!({
         "message": message,
         "idempotencyKey": idempotency_key,
-        "agentId": "main",
+        "agentId": agent_id,
         "sessionKey": session_key,
     })).await
 }

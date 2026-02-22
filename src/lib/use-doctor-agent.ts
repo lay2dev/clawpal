@@ -33,6 +33,7 @@ export function useDoctorAgent() {
 
   // Unique session key per diagnosis — avoids inheriting stale state
   const sessionKeyRef = useRef("");
+  const agentIdRef = useRef("main");
 
   // Gate: only process invokes after startDiagnosis has been called.
   // Prevents stale invokes (replayed by the gateway on node reconnect)
@@ -215,14 +216,15 @@ export function useDoctorAgent() {
     setLoading(false);
   }, []);
 
-  const startDiagnosis = useCallback(async (context: string) => {
+  const startDiagnosis = useCallback(async (context: string, agentId = "main") => {
+    agentIdRef.current = agentId;
     setLoading(true);
     setMessages([]);
     setPendingInvokes(new Map());
     streamingRef.current = "";
     streamEndedRef.current = false;
     // Fresh session key per diagnosis — no inherited stale state
-    sessionKeyRef.current = `agent:main:clawpal-doctor:${target}:${crypto.randomUUID()}`;
+    sessionKeyRef.current = `agent:${agentId}:clawpal-doctor:${target}:${crypto.randomUUID()}`;
     sessionActiveRef.current = true;
     try {
       const isRemote = target !== "local";
@@ -249,7 +251,7 @@ export function useDoctorAgent() {
         "Analyze the system context below, then use system.run to gather more info and diagnose. Be concise and actionable.\n",
         context,
       ].join("\n");
-      await api.doctorStartDiagnosis(prompt, sessionKeyRef.current);
+      await api.doctorStartDiagnosis(prompt, sessionKeyRef.current, agentId);
     } catch (err) {
       setError(`Start diagnosis failed: ${err}`);
       setLoading(false);
@@ -261,7 +263,7 @@ export function useDoctorAgent() {
     streamingRef.current = "";
     setMessages((prev) => [...prev, { id: nextMsgId(), role: "user", content: message }]);
     try {
-      await api.doctorSendMessage(message, sessionKeyRef.current);
+      await api.doctorSendMessage(message, sessionKeyRef.current, agentIdRef.current);
     } catch (err) {
       setError(`Send message failed: ${err}`);
       setLoading(false);

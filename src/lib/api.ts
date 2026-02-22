@@ -274,10 +274,10 @@ export const api = {
     invoke("doctor_connect", { url, credentials: credentials ?? null }),
   doctorDisconnect: (): Promise<void> =>
     invoke("doctor_disconnect"),
-  doctorStartDiagnosis: (context: string, sessionKey: string): Promise<void> =>
-    invoke("doctor_start_diagnosis", { context, sessionKey }),
-  doctorSendMessage: (message: string, sessionKey: string): Promise<void> =>
-    invoke("doctor_send_message", { message, sessionKey }),
+  doctorStartDiagnosis: (context: string, sessionKey: string, agentId?: string): Promise<void> =>
+    invoke("doctor_start_diagnosis", { context, sessionKey, agentId: agentId ?? "main" }),
+  doctorSendMessage: (message: string, sessionKey: string, agentId?: string): Promise<void> =>
+    invoke("doctor_send_message", { message, sessionKey, agentId: agentId ?? "main" }),
   doctorApproveInvoke: (invokeId: string, target: string): Promise<Record<string, unknown>> =>
     invoke("doctor_approve_invoke", { invokeId, target }),
   doctorRejectInvoke: (invokeId: string, reason: string): Promise<void> =>

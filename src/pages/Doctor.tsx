@@ -89,13 +89,23 @@ export function Doctor({ sshHosts }: DoctorProps) {
     try {
       let url: string;
       let credentials;
+      let agentId = "main";
       if (agentSource === "remote") {
         url = "wss://doctor.openclaw.ai";
       } else if (agentSource === "local") {
         url = "ws://localhost:18789";
       } else {
-        // Remote gateway: read its credentials, then SSH tunnel to its port 18789
+        // Remote gateway: ensure SSH connected, read credentials, tunnel
+        const status = await api.sshStatus(agentSource);
+        if (status !== "connected") {
+          await api.sshConnect(agentSource);
+        }
         credentials = await api.doctorReadRemoteCredentials(agentSource);
+        // Get the first agent ID from the remote gateway
+        const agents = await api.remoteListAgentsOverview(agentSource);
+        if (agents.length > 0) {
+          agentId = agents[0].id;
+        }
         const localPort = await api.doctorPortForward(agentSource);
         url = `ws://localhost:${localPort}`;
       }
@@ -106,7 +116,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
         ? await ua.collectDoctorContext()
         : await ua.collectDoctorContextRemote(doctor.target);
 
-      await doctor.startDiagnosis(context);
+      await doctor.startDiagnosis(context, agentId);
     } catch {
       // Error is surfaced via doctor.error state from the hook
     } finally {
