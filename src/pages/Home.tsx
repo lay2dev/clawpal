@@ -112,7 +112,13 @@ export function Home({
     if (statusInFlightRef.current) return; // Prevent overlapping polls
     statusInFlightRef.current = true;
     ua.getInstanceStatus().then((s) => {
-      setStatus(s);
+      // If remote config fetch failed (agents=0, no model), keep previous good data
+      // rather than flashing "unset" — only update health which is independent.
+      if (ua.isRemote && s.activeAgents === 0 && !s.globalDefaultModel) {
+        setStatus((prev) => prev ? { ...prev, healthy: s.healthy } : s);
+      } else {
+        setStatus(s);
+      }
       if (ua.isRemote) {
         setStatusSettled(true);
         remoteErrorShownRef.current = false;

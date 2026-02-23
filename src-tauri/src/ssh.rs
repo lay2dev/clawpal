@@ -155,36 +155,36 @@ mod inner {
                 .await
                 .unwrap_or_else(|_| "/root".to_string());
 
-            // Close any existing connection for this id before inserting the new one.
-            // This prevents leaking ControlMaster processes on the remote.
-            {
+            // Atomically swap old connection for new one — the pool always has an
+            // entry for this id, so parallel exec_once() never sees "No connection".
+            let old = {
                 let mut pool = self.connections.lock().await;
-                if let Some(old) = pool.remove(&config.id) {
-                    // Best-effort close — don't fail the new connection if old close fails
-                    match Arc::try_unwrap(old.session) {
-                        Ok(old_session) => {
-                            let _ = old_session.close().await;
-                        }
-                        Err(arc) => {
-                            // In-flight commands hold references — spawn background cleanup
-                            tokio::spawn(async move {
-                                for _ in 0..120 {
-                                    if Arc::strong_count(&arc) <= 1 {
-                                        break;
-                                    }
-                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let old = pool.remove(&config.id);
+                pool.insert(config.id.clone(), SshConnection { session: Arc::new(session), home_dir, config: config.clone() });
+                old
+            };
+            // Best-effort cleanup of old session outside the lock
+            if let Some(old) = old {
+                match Arc::try_unwrap(old.session) {
+                    Ok(old_session) => {
+                        let _ = old_session.close().await;
+                    }
+                    Err(arc) => {
+                        // In-flight commands hold references — spawn background cleanup
+                        tokio::spawn(async move {
+                            for _ in 0..120 {
+                                if Arc::strong_count(&arc) <= 1 {
+                                    break;
                                 }
-                                if let Ok(session) = Arc::try_unwrap(arc) {
-                                    let _ = session.close().await;
-                                }
-                            });
-                        }
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            }
+                            if let Ok(session) = Arc::try_unwrap(arc) {
+                                let _ = session.close().await;
+                            }
+                        });
                     }
                 }
             }
-
-            let mut pool = self.connections.lock().await;
-            pool.insert(config.id.clone(), SshConnection { session: Arc::new(session), home_dir, config: config.clone() });
             Ok(())
         }
 
