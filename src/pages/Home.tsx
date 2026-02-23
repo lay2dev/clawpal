@@ -719,7 +719,16 @@ export function Home({
       {/* Upgrade Dialog */}
       <UpgradeDialog
         open={showUpgradeDialog}
-        onOpenChange={setShowUpgradeDialog}
+        onOpenChange={(open) => {
+          setShowUpgradeDialog(open);
+          if (!open) {
+            // Refresh version + update status after closing upgrade dialog
+            fetchStatus();
+            ua.checkOpenclawUpdate()
+              .then((u) => setUpdateInfo({ available: u.upgradeAvailable, latest: u.latestVersion ?? undefined }))
+              .catch(() => {});
+          }
+        }}
         isRemote={ua.isRemote}
         instanceId={ua.instanceId}
         currentVersion={version || ""}
