@@ -63,7 +63,7 @@ export function Channels({
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
   const [channelNodes, setChannelNodes] = useState<ChannelNode[]>([]);
-  const [discordChannels, setDiscordChannels] = useState<DiscordGuildChannel[] | null>(null);
+  const [discordChannels, setDiscordChannels] = useState<DiscordGuildChannel[] | null>(ua.discordGuildChannels || null);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
@@ -87,17 +87,18 @@ export function Channels({
     ua.listChannels().then(setChannelNodes).catch((e) => console.error("Failed to load channel nodes:", e));
   }, [ua]);
 
-  const refreshDiscordCache = useCallback(() => {
-    ua.listDiscordGuildChannels().then(setDiscordChannels).catch((e) => console.error("Failed to load Discord channels:", e));
-  }, [ua]);
-
   useEffect(() => {
     refreshAgents();
     refreshBindings();
     ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
     refreshChannelNodes();
-    refreshDiscordCache();
-  }, [ua, refreshAgents, refreshBindings, refreshChannelNodes, refreshDiscordCache]);
+  }, [ua, refreshAgents, refreshBindings, refreshChannelNodes]);
+
+  // Reuse app-level cached Discord channels to avoid duplicate heavy remote fetches
+  // when entering the Channels tab (especially expensive on Windows remote SSH).
+  useEffect(() => {
+    setDiscordChannels(ua.discordGuildChannels || []);
+  }, [ua.discordGuildChannels]);
 
   const handleRefreshDiscord = () => {
     setRefreshing("discord");

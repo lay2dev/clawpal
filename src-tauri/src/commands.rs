@@ -456,10 +456,12 @@ pub fn get_status_extra() -> Result<StatusExtra, String> {
 pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
     let paths = resolve_paths();
     let cache_path = model_catalog_cache_path(&paths);
-    if let Some(cached) = read_model_catalog_cache(&cache_path) {
-        if cached.error.is_none() && !cached.providers.is_empty() {
-            return Ok(cached.providers);
-        }
+    let current_version = resolve_openclaw_version();
+    if let Some(catalog) = select_catalog_from_cache(
+        read_model_catalog_cache(&cache_path).as_ref(),
+        &current_version,
+    ) {
+        return Ok(catalog);
     }
     Ok(Vec::new())
 }
@@ -468,8 +470,7 @@ pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
 #[tauri::command]
 pub fn refresh_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
     let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    load_model_catalog(&paths, &cfg)
+    load_model_catalog(&paths)
 }
 
 #[tauri::command]
@@ -2194,6 +2195,23 @@ fn model_catalog_cache_path(paths: &crate::models::OpenClawPaths) -> PathBuf {
     paths.clawpal_dir.join("model-catalog-cache.json")
 }
 
+fn remote_model_catalog_cache_path(paths: &crate::models::OpenClawPaths, host_id: &str) -> PathBuf {
+    let safe_host_id: String = host_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    paths
+        .clawpal_dir
+        .join("remote-model-catalog")
+        .join(format!("{safe_host_id}.json"))
+}
+
 fn normalize_model_ref(raw: &str) -> String {
     raw.trim().to_lowercase().replace('\\', "/")
 }
@@ -2369,7 +2387,10 @@ fn query_openclaw_latest_npm() -> Result<Option<String>, String> {
 /// Fetch a Discord guild name via the Discord REST API using a bot token.
 fn fetch_discord_guild_name(bot_token: &str, guild_id: &str) -> Result<String, String> {
     let url = format!("https://discord.com/api/v10/guilds/{guild_id}");
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Discord HTTP client error: {e}"))?;
     let resp = client
         .get(&url)
         .header("Authorization", format!("Bot {bot_token}"))
@@ -2991,35 +3012,19 @@ fn set_agent_model_value(
 
 fn load_model_catalog(
     paths: &crate::models::OpenClawPaths,
-    cfg: &Value,
 ) -> Result<Vec<ModelCatalogProvider>, String> {
-    let now = unix_timestamp_secs();
     let cache_path = model_catalog_cache_path(paths);
     let current_version = resolve_openclaw_version();
-    let ttl_seconds = 60 * 60 * 12;
-    if let Some(cached) = read_model_catalog_cache(&cache_path)
-        .filter(|cache| cache.cli_version == current_version)
-    {
-        if now.saturating_sub(cached.updated_at) < ttl_seconds && cached.error.is_none() {
-            return Ok(cached.providers);
-        }
-        if cached.error.is_none() {
-            if let Some(fresh) = extract_model_catalog_from_cli(paths) {
-                if !fresh.is_empty() {
-                    return Ok(fresh);
-                }
-            }
-            if !cached.providers.is_empty() {
-                return Ok(cached.providers);
-            }
-        }
+    let cached = read_model_catalog_cache(&cache_path);
+    if let Some(selected) = select_catalog_from_cache(cached.as_ref(), &current_version) {
+        return Ok(selected);
     }
 
     if let Some(catalog) = extract_model_catalog_from_cli(paths) {
         if !catalog.is_empty() {
             let cache = ModelCatalogProviderCache {
                 cli_version: current_version,
-                updated_at: now,
+                updated_at: unix_timestamp_secs(),
                 providers: catalog.clone(),
                 source: "openclaw models list --all --json".into(),
                 error: None,
@@ -3029,18 +3034,27 @@ fn load_model_catalog(
         }
     }
 
-    let fallback = collect_model_catalog(cfg);
-    if let Some(cached) = read_model_catalog_cache(&cache_path) {
-        if !cached.providers.is_empty() {
-            let catalog = if fallback.is_empty() {
-                cached.providers
-            } else {
-                fallback
-            };
-            return Ok(catalog);
+    if let Some(previous) = cached {
+        if !previous.providers.is_empty() && previous.error.is_none() {
+            return Ok(previous.providers);
         }
     }
-    Ok(fallback)
+
+    Err("Failed to load model catalog from openclaw CLI".into())
+}
+
+fn select_catalog_from_cache(
+    cached: Option<&ModelCatalogProviderCache>,
+    current_version: &str,
+) -> Option<Vec<ModelCatalogProvider>> {
+    let cache = cached?;
+    if cache.cli_version != current_version {
+        return None;
+    }
+    if cache.error.is_some() || cache.providers.is_empty() {
+        return None;
+    }
+    Some(cache.providers.clone())
 }
 
 /// Parse CLI output from `openclaw models list --all --json` into grouped providers.
@@ -3179,86 +3193,49 @@ fn cache_model_catalog(paths: &crate::models::OpenClawPaths, providers: Vec<Mode
     Some(())
 }
 
-fn collect_model_catalog(cfg: &Value) -> Vec<ModelCatalogProvider> {
-    let mut providers: BTreeMap<String, ModelCatalogProvider> = BTreeMap::new();
+#[cfg(test)]
+mod model_catalog_cache_tests {
+    use super::*;
 
-    if let Some(configured) = cfg.pointer("/models/providers").and_then(Value::as_object) {
-        for (provider_name, provider_cfg) in configured {
-            let provider_model_map = extract_catalog_models(provider_cfg).unwrap_or_default();
-            let base_url = provider_cfg
-                .get("baseUrl")
-                .or_else(|| provider_cfg.get("base_url"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
-
-            providers.entry(provider_name.clone())
-                .and_modify(|entry| {
-                    if entry.base_url.is_none() {
-                        entry.base_url = base_url.clone();
-                    }
-                    for model in provider_model_map.iter() {
-                        if !entry.models.iter().any(|item| item.id == model.id) {
-                            entry.models.push(model.clone());
-                        }
-                    }
-                })
-                .or_insert(ModelCatalogProvider {
-                    provider: provider_name.clone(),
-                    base_url,
-                    models: provider_model_map,
-                });
-        }
+    #[test]
+    fn test_select_cached_catalog_same_version() {
+        let cached = ModelCatalogProviderCache {
+            cli_version: "1.2.3".into(),
+            updated_at: 123,
+            providers: vec![ModelCatalogProvider {
+                provider: "openrouter".into(),
+                base_url: None,
+                models: vec![ModelCatalogModel {
+                    id: "moonshotai/kimi-k2.5".into(),
+                    name: Some("Kimi".into()),
+                }],
+            }],
+            source: "openclaw models list --all --json".into(),
+            error: None,
+        };
+        let selected = select_catalog_from_cache(Some(&cached), "1.2.3");
+        assert!(selected.is_some(), "same version should use cache");
     }
 
-    if let Some(auth_profiles) = cfg.pointer("/auth/profiles").and_then(Value::as_object) {
-        for profile in auth_profiles.values() {
-            if let Some(provider_name) = profile
-                .get("provider")
-                .or_else(|| profile.get("name"))
-                .and_then(Value::as_str)
-            {
-                providers.entry(provider_name.to_string())
-                    .or_insert(ModelCatalogProvider {
-                        provider: provider_name.to_string(),
-                        base_url: None,
-                        models: Vec::new(),
-                    });
-            }
-        }
+    #[test]
+    fn test_select_cached_catalog_version_mismatch_requires_refresh() {
+        let cached = ModelCatalogProviderCache {
+            cli_version: "1.2.2".into(),
+            updated_at: 123,
+            providers: vec![ModelCatalogProvider {
+                provider: "openrouter".into(),
+                base_url: None,
+                models: vec![ModelCatalogModel {
+                    id: "moonshotai/kimi-k2.5".into(),
+                    name: Some("Kimi".into()),
+                }],
+            }],
+            source: "openclaw models list --all --json".into(),
+            error: None,
+        };
+        let selected = select_catalog_from_cache(Some(&cached), "1.2.3");
+        assert!(selected.is_none(), "version mismatch must force CLI refresh");
     }
-
-    providers.into_values().collect()
-}
-
-fn extract_catalog_models(provider_cfg: &Value) -> Option<Vec<ModelCatalogModel>> {
-    let mut model_items: BTreeMap<String, String> = BTreeMap::new();
-    let raw_models = provider_cfg.get("models")?.as_array()?;
-    for model in raw_models {
-        let id = model.as_str().map(str::to_string).or_else(|| {
-            model
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-        if let Some(id) = id {
-            let name = model
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            model_items.entry(id).or_insert(name.unwrap_or_default());
-        }
-    }
-    if model_items.is_empty() {
-        return None;
-    }
-    let models = model_items
-        .into_iter()
-        .map(|(id, name)| ModelCatalogModel {
-            id,
-            name: (!name.is_empty()).then_some(name),
-        })
-        .collect();
-    Some(models)
 }
 
 fn collect_channel_nodes(cfg: &Value) -> Vec<ChannelNode> {
@@ -5395,19 +5372,40 @@ pub async fn remote_refresh_model_catalog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ModelCatalogProvider>, String> {
+    let paths = resolve_paths();
+    let cache_path = remote_model_catalog_cache_path(&paths, &host_id);
+    let remote_version = match pool.exec_login(&host_id, "openclaw --version").await {
+        Ok(r) => extract_version_from_text(&r.stdout)
+            .unwrap_or_else(|| r.stdout.trim().to_string()),
+        Err(_) => "unknown".into(),
+    };
+    let cached = read_model_catalog_cache(&cache_path);
+    if let Some(selected) = select_catalog_from_cache(cached.as_ref(), &remote_version) {
+        return Ok(selected);
+    }
+
     let result = pool.exec_login(&host_id, "openclaw models list --all --json --no-color").await;
     if let Ok(r) = result {
         if r.exit_code == 0 && !r.stdout.trim().is_empty() {
             if let Some(catalog) = parse_model_catalog_from_cli_output(&r.stdout) {
+                let cache = ModelCatalogProviderCache {
+                    cli_version: remote_version,
+                    updated_at: unix_timestamp_secs(),
+                    providers: catalog.clone(),
+                    source: "openclaw models list --all --json".into(),
+                    error: None,
+                };
+                let _ = save_model_catalog_cache(&cache_path, &cache);
                 return Ok(catalog);
             }
         }
     }
-
-    // Fallback: extract from remote config
-    let raw = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
-    let cfg: Value = serde_json::from_str(&raw).map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    Ok(collect_model_catalog(&cfg))
+    if let Some(previous) = cached {
+        if !previous.providers.is_empty() && previous.error.is_none() {
+            return Ok(previous.providers);
+        }
+    }
+    Err("Failed to load remote model catalog from openclaw CLI".into())
 }
 
 #[tauri::command]
