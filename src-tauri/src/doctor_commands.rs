@@ -203,19 +203,36 @@ pub async fn doctor_approve_invoke(
                 v["executedOn"] = json!("local");
                 v
             } else {
-                // If SSH fails, return the error as a command result so the agent
-                // knows what went wrong instead of getting no response and guessing.
+                // If SSH fails, try reconnecting once before giving up.
                 match run_command_remote(&pool, &target, &shell_cmd).await {
                     Ok(mut v) => {
                         v["executedOn"] = json!(format!("{target} (remote)"));
                         v
                     }
-                    Err(e) => json!({
-                        "stdout": "",
-                        "stderr": format!("Remote execution failed on '{target}': {e}. Ask the user to reconnect in the Instance tab."),
-                        "exitCode": 255,
-                        "executedOn": format!("{target} (connection lost)"),
-                    }),
+                    Err(e) => {
+                        // Retry: reconnect SSH and try again
+                        if let Ok(()) = pool.reconnect(&target).await {
+                            match run_command_remote(&pool, &target, &shell_cmd).await {
+                                Ok(mut v) => {
+                                    v["executedOn"] = json!(format!("{target} (remote, reconnected)"));
+                                    v
+                                }
+                                Err(e2) => json!({
+                                    "stdout": "",
+                                    "stderr": format!("Remote execution failed on '{target}' after reconnect: {e2}"),
+                                    "exitCode": 255,
+                                    "executedOn": format!("{target} (connection lost)"),
+                                }),
+                            }
+                        } else {
+                            json!({
+                                "stdout": "",
+                                "stderr": format!("Remote execution failed on '{target}': {e}. Ask the user to reconnect in the Instance tab."),
+                                "exitCode": 255,
+                                "executedOn": format!("{target} (connection lost)"),
+                            })
+                        }
+                    }
                 }
             }
         }

@@ -56,6 +56,7 @@ mod inner {
     struct SshConnection {
         session: Arc<Session>,
         home_dir: String,
+        config: SshHostConfig,
     }
 
     pub struct SshConnectionPool {
@@ -117,8 +118,20 @@ mod inner {
                 .unwrap_or_else(|_| "/root".to_string());
 
             let mut pool = self.connections.lock().await;
-            pool.insert(config.id.clone(), SshConnection { session: Arc::new(session), home_dir });
+            pool.insert(config.id.clone(), SshConnection { session: Arc::new(session), home_dir, config: config.clone() });
             Ok(())
+        }
+
+        /// Reconnect an existing SSH connection by re-using its stored config.
+        pub async fn reconnect(&self, id: &str) -> Result<(), String> {
+            let config = {
+                let pool = self.connections.lock().await;
+                pool.get(id)
+                    .map(|c| c.config.clone())
+                    .ok_or_else(|| format!("No connection for id: {id}"))?
+            };
+            let _ = self.disconnect(id).await;
+            self.connect(&config).await
         }
 
         pub async fn disconnect(&self, id: &str) -> Result<(), String> {
@@ -463,6 +476,18 @@ mod inner {
                 let _ = child.kill().await;
             }
             Ok(())
+        }
+
+        /// Reconnect an existing SSH connection by re-using its stored config.
+        pub async fn reconnect(&self, id: &str) -> Result<(), String> {
+            let config = {
+                let pool = self.connections.lock().await;
+                pool.get(id)
+                    .map(|c| c.config.clone())
+                    .ok_or_else(|| format!("No connection for id: {id}"))?
+            };
+            let _ = self.disconnect(id).await;
+            self.connect(&config).await
         }
 
         pub async fn is_connected(&self, id: &str) -> bool {
