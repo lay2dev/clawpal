@@ -1041,12 +1041,16 @@ pub fn set_global_model(model_value: Option<String>) -> Result<bool, String> {
             return Ok(true);
         }
     }
-    // Fallback: plain string or missing — set the whole value
-    set_nested_value(
-        &mut cfg,
-        "agents.defaults.model",
-        model.map(Value::String),
-    )?;
+    // Fallback: plain string or missing — always promote to object format to preserve fallbacks
+    match model {
+        Some(v) => {
+            let model_obj = serde_json::json!({ "primary": v });
+            set_nested_value(&mut cfg, "agents.defaults.model", Some(model_obj))?;
+        }
+        None => {
+            set_nested_value(&mut cfg, "agents.defaults.model", None)?;
+        }
+    }
     write_config_with_snapshot(&paths, &current, &cfg, "set-global-model")?;
     Ok(true)
 }
