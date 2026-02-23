@@ -1,20 +1,20 @@
 import type { DoctorReport } from "./types";
 
-export interface AppState {
+export interface DoctorState {
   doctor: DoctorReport | null;
   message: string;
 }
 
-export const initialState: AppState = {
+export const initialDoctorState: DoctorState = {
   doctor: null,
   message: "",
 };
 
-export type Action =
+export type DoctorAction =
   | { type: "setDoctor"; doctor: DoctorReport }
   | { type: "setMessage"; message: string };
 
-export function reducer(state: AppState, action: Action): AppState {
+export function doctorReducer(state: DoctorState, action: DoctorAction): DoctorState {
   switch (action.type) {
     case "setDoctor":
       return { ...state, doctor: action.doctor };
