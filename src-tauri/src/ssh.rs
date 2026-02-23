@@ -301,11 +301,13 @@ mod inner {
                 Arc::clone(&conn.session)
             };
 
-            let output = session
-                .raw_command(command)
-                .output()
-                .await
-                .map_err(|e| format!("Failed to exec command: {e}"))?;
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                session.raw_command(command).output(),
+            )
+            .await
+            .map_err(|_| "Command timed out after 120s".to_string())?
+            .map_err(|e| format!("Failed to exec command: {e}"))?;
 
             Ok(SshExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

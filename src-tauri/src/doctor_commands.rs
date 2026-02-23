@@ -606,7 +606,7 @@ async fn run_command_local(cmd: &str) -> Result<Value, String> {
 
 /// Run a shell command on a remote host via SSH (user-approved, no validate_command).
 async fn run_command_remote(pool: &SshConnectionPool, host_id: &str, cmd: &str) -> Result<Value, String> {
-    let result = pool.exec(host_id, cmd).await?;
+    let result = pool.exec_login(host_id, cmd).await?;
     Ok(json!({
         "stdout": truncate_output(result.stdout.as_bytes()),
         "stderr": truncate_output(result.stderr.as_bytes()),
