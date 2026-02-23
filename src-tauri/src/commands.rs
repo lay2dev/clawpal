@@ -949,6 +949,14 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
     }).await.map_err(|e| e.to_string())?
 }
 
+/// Load config for mutation, returning (paths, config, snapshot of pre-mutation state).
+fn load_config_for_mutation() -> Result<(crate::models::OpenClawPaths, Value, String), String> {
+    let paths = resolve_paths();
+    let cfg = read_openclaw_config(&paths)?;
+    let snapshot = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    Ok((paths, cfg, snapshot))
+}
+
 #[tauri::command]
 pub fn update_channel_config(
     path: String,
@@ -960,9 +968,7 @@ pub fn update_channel_config(
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
     set_nested_value(&mut cfg, &format!("{path}.type"), channel_type.map(Value::String))?;
     set_nested_value(&mut cfg, &format!("{path}.mode"), mode.map(Value::String))?;
     let allowlist_values = allowlist
@@ -1008,9 +1014,7 @@ pub fn delete_channel_node(path: String) -> Result<bool, String> {
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
     let before = cfg.to_string();
     set_nested_value(&mut cfg, &path, None)?;
     if cfg.to_string() == before {
@@ -1022,9 +1026,7 @@ pub fn delete_channel_node(path: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn set_global_model(model_value: Option<String>) -> Result<bool, String> {
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
     let model = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     // If existing model is an object (has fallbacks etc.), only update "primary" inside it
     if let Some(existing) = cfg.pointer_mut("/agents/defaults/model") {
@@ -1056,9 +1058,7 @@ pub fn set_agent_model(agent_id: String, model_value: Option<String>) -> Result<
     if agent_id.trim().is_empty() {
         return Err("agent id is required".into());
     }
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
     let value = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     set_agent_model_value(&mut cfg, &agent_id, value)?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-agent-model")?;
@@ -1070,9 +1070,7 @@ pub fn set_channel_model(path: String, model_value: Option<String>) -> Result<bo
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
     let value = model_value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     set_nested_value(&mut cfg, &format!("{path}.model"), value.map(Value::String))?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-channel-model")?;
@@ -1171,9 +1169,7 @@ pub fn create_agent(
         return Err("Agent ID may only contain letters, numbers, hyphens, and underscores".into());
     }
 
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
 
     let existing_ids = collect_agent_ids(&cfg);
     if existing_ids.iter().any(|id| id.eq_ignore_ascii_case(&agent_id)) {
@@ -1242,9 +1238,7 @@ pub fn delete_agent(agent_id: String) -> Result<bool, String> {
         return Err("Cannot delete the main agent".into());
     }
 
-    let paths = resolve_paths();
-    let mut cfg = read_openclaw_config(&paths)?;
-    let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let (paths, mut cfg, current) = load_config_for_mutation()?;
 
     let list = cfg
         .pointer_mut("/agents/list")
