@@ -60,5 +60,13 @@ where
 
 pub fn read_openclaw_config(paths: &OpenClawPaths) -> Result<Value, String> {
     ensure_dirs(paths)?;
-    read_json::<Value>(&paths.config_path).or_else(|_| Ok(Value::Object(Default::default())))
+    match read_json::<Value>(&paths.config_path) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            // Config may be mid-write by another process — retry once after short delay
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            read_json::<Value>(&paths.config_path)
+                .or_else(|_| Ok(Value::Object(Default::default())))
+        }
+    }
 }
