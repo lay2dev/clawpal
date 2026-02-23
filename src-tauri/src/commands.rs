@@ -3022,14 +3022,6 @@ fn load_model_catalog(
 
     if let Some(catalog) = extract_model_catalog_from_cli(paths) {
         if !catalog.is_empty() {
-            let cache = ModelCatalogProviderCache {
-                cli_version: current_version,
-                updated_at: unix_timestamp_secs(),
-                providers: catalog.clone(),
-                source: "openclaw models list --all --json".into(),
-                error: None,
-            };
-            let _ = save_model_catalog_cache(&cache_path, &cache);
             return Ok(catalog);
         }
     }
