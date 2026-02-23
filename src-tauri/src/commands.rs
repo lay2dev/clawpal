@@ -4279,16 +4279,9 @@ pub async fn sftp_remove_file(pool: State<'_, SshConnectionPool>, host_id: Strin
 
 #[tauri::command]
 pub async fn remote_read_raw_config(pool: State<'_, SshConnectionPool>, host_id: String) -> Result<String, String> {
-    let output = crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["config", "get", "--json"]).await?;
-    if output.exit_code != 0 {
-        // Fallback: sftp_read for cases where openclaw binary isn't available
-        return pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await;
-    }
-    // Re-format as pretty JSON for display
-    match serde_json::from_str::<serde_json::Value>(&output.stdout) {
-        Ok(val) => serde_json::to_string_pretty(&val).map_err(|e| e.to_string()),
-        Err(_) => Ok(output.stdout),
-    }
+    // openclaw config get requires a path — there's no way to dump the full config via CLI.
+    // Use sftp_read directly since this function's purpose is returning the entire raw config.
+    pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await
 }
 
 #[tauri::command]
