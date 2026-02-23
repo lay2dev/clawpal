@@ -5384,33 +5384,35 @@ pub async fn remote_run_openclaw_upgrade(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<String, String> {
-    // Try direct npm upgrade first (works reliably in non-interactive SSH).
-    // install.sh can fail in SSH: tries brew install on macOS (needs sudo),
-    // runs --probe (nonexistent flag), and reads /dev/tty.
-    let npm_cmd = concat!(
-        "if command -v npm >/dev/null 2>&1 && npm list -g openclaw >/dev/null 2>&1; then ",
-            "npm install -g openclaw@latest 2>&1 && ",
-            "echo '--- npm upgrade complete ---' && ",
-            "openclaw doctor 2>&1 || true; ",
-        "else ",
-            "curl -fsSL https://openclaw.ai/install.sh | bash 2>&1; ",
-        "fi"
-    );
-    let result = pool.exec_login(&host_id, npm_cmd).await?;
+    // Use the official install script with --no-prompt for non-interactive SSH.
+    // The script handles npm prefix/permissions, bin links, and PATH fixups
+    // that plain `npm install -g` misses (e.g. stale /usr/bin/openclaw symlinks).
+    let version_before = pool.exec_login(&host_id, "openclaw --version 2>/dev/null || true").await
+        .map(|r| r.stdout.trim().to_string()).unwrap_or_default();
+
+    let install_cmd = "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard 2>&1";
+    let result = pool.exec_login(&host_id, install_cmd).await?;
     let combined = if result.stderr.is_empty() {
         result.stdout.clone()
     } else {
         format!("{}\n{}", result.stdout, result.stderr)
     };
 
-    // Restart gateway after upgrade (best-effort)
+    if result.exit_code != 0 {
+        return Err(combined);
+    }
+
+    // Restart gateway after successful upgrade (best-effort)
     let _ = pool.exec_login(&host_id, "openclaw gateway restart 2>/dev/null || true").await;
 
-    if result.exit_code == 0 {
-        Ok(combined)
-    } else {
-        Err(combined)
+    // Verify version actually changed
+    let version_after = pool.exec_login(&host_id, "openclaw --version 2>/dev/null || true").await
+        .map(|r| r.stdout.trim().to_string()).unwrap_or_default();
+    if !version_before.is_empty() && !version_after.is_empty() && version_before == version_after {
+        return Err(format!("{combined}\n\nWarning: version unchanged after upgrade ({version_before}). Check PATH or npm prefix."));
     }
+
+    Ok(combined)
 }
 
 // ---------------------------------------------------------------------------
