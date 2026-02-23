@@ -213,7 +213,7 @@ export function Channels({
         onValueChange={(val) => handleAssign(platform, peerId, val)}
         disabled={saving === key}
       >
-        <SelectTrigger size="sm" className="text-xs">
+        <SelectTrigger size="sm" className="text-xs max-w-full overflow-hidden">
           <SelectValue>
             {currentAgent ? agentDisplayLabel(currentAgent) : t('channels.mainDefault')}
           </SelectValue>

@@ -248,45 +248,48 @@ export function Home({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-4">{t('home.title')}</h2>
+      <h2 className="text-2xl font-bold mb-6">{t('home.title')}</h2>
 
         {/* Status Summary */}
-        <h3 className="text-lg font-semibold mt-6 mb-3">{t('home.status')}</h3>
+        <h3 className="text-lg font-semibold mt-8 mb-4">{t('home.status')}</h3>
         <Card>
-          <CardContent className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 items-center">
-            <span className="text-sm text-muted-foreground">{t('home.health')}</span>
+          <CardContent className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-4 items-center">
+            <span className="text-sm text-muted-foreground font-medium">{t('home.health')}</span>
             <span className="text-sm font-medium">
-              {!status ? "..." : status.healthy ? (
-                <Badge className="bg-green-100 text-green-700 border-0">{t('home.healthy')}</Badge>
+              {!status ? (
+                <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/30 animate-pulse" />
+                  ...
+                </span>
+              ) : status.healthy ? (
+                <Badge className="bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">{t('home.healthy')}</Badge>
               ) : !statusSettled ? (
-                <Badge className="bg-amber-100 text-amber-700 border-0">{t('home.checking')}</Badge>
+                <Badge className="bg-amber-500/10 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">{t('home.checking')}</Badge>
               ) : (
-                <Badge className="bg-red-100 text-red-700 border-0">{t('home.unhealthy')}</Badge>
+                <Badge className="bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400">{t('home.unhealthy')}</Badge>
               )}
             </span>
 
-            <span className="text-sm text-muted-foreground">{t('home.version')}</span>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium">{version || "..."}</span>
+            <span className="text-sm text-muted-foreground font-medium">{t('home.version')}</span>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="text-sm font-semibold font-mono">{version || "..."}</span>
               {checkingUpdate && (
                 <Badge variant="outline" className="text-muted-foreground">{t('home.checkingUpdates')}</Badge>
               )}
               {!checkingUpdate && updateInfo?.available && updateInfo.latest && updateInfo.latest !== version && (
                 <>
-                  <Badge variant="outline" className="text-primary border-primary">
+                  <Badge className="bg-primary/10 text-primary border border-primary/20">
                     {t('home.available', { version: updateInfo.latest })}
                   </Badge>
                   <Button
-                    size="sm"
-                    className="text-xs h-6"
+                    size="xs"
                     variant="outline"
                     onClick={() => ua.openUrl("https://github.com/openclaw/openclaw/releases")}
                   >
                     {t('home.view')}
                   </Button>
                   <Button
-                    size="sm"
-                    className="text-xs h-6"
+                    size="xs"
                     onClick={() => setShowUpgradeDialog(true)}
                   >
                     {t('home.upgrade')}
@@ -295,8 +298,7 @@ export function Home({
               )}
             </div>
 
-
-            <span className="text-sm text-muted-foreground">{t('home.defaultModel')}</span>
+            <span className="text-sm text-muted-foreground font-medium">{t('home.defaultModel')}</span>
             <div className="max-w-xs">
               {status ? (
                 <Select
@@ -349,7 +351,7 @@ export function Home({
         </Card>
 
         {/* Agents Overview -- grouped by identity */}
-        <div className="flex items-center justify-between mt-6 mb-3">
+        <div className="flex items-center justify-between mt-8 mb-4">
           <h3 className="text-lg font-semibold">{t('home.agents')}</h3>
           <Button size="sm" variant="outline" onClick={() => setShowCreateAgent(true)}>
             {t('home.newAgent')}
@@ -434,9 +436,9 @@ export function Home({
                         </div>
                         <div className="flex items-center gap-2">
                           {agent.online ? (
-                            <Badge className="bg-green-100 text-green-700 border-0 text-xs">{t('home.active')}</Badge>
+                            <Badge className="bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400 text-xs">{t('home.active')}</Badge>
                           ) : (
-                            <Badge className="bg-gray-100 text-gray-500 border-0 text-xs">{t('home.idle')}</Badge>
+                            <Badge className="bg-muted text-muted-foreground border border-border text-xs">{t('home.idle')}</Badge>
                           )}
                           {agent.id !== "main" && (
                             <AlertDialog>
@@ -475,11 +477,11 @@ export function Home({
         )}
 
         {/* Recommended Recipes */}
-        <h3 className="text-lg font-semibold mt-6 mb-3">{t('home.recommendedRecipes')}</h3>
+        <h3 className="text-lg font-semibold mt-8 mb-4">{t('home.recommendedRecipes')}</h3>
         {recipes.length === 0 ? (
           <p className="text-muted-foreground">{t('home.noRecipes')}</p>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
             {recipes.map((recipe) => (
               <RecipeCard
                 key={recipe.id}
@@ -492,7 +494,7 @@ export function Home({
         )}
 
         {/* Backups */}
-        <div className="flex items-center justify-between mt-6 mb-3">
+        <div className="flex items-center justify-between mt-8 mb-4">
           <h3 className="text-lg font-semibold">{t('home.backups')}</h3>
           <Button
             size="sm"

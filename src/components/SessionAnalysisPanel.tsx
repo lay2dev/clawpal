@@ -240,7 +240,7 @@ export function SessionAnalysisPanel() {
                           </Badge>
                         )}
                         {agentData.valuableCount > 0 && (
-                          <Badge variant="secondary" className="text-xs bg-green-500/15 text-green-700 dark:text-green-400">
+                          <Badge variant="secondary" className="text-xs bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
                             {t('doctor.valuable', { count: agentData.valuableCount })}
                           </Badge>
                         )}
@@ -409,10 +409,10 @@ export function SessionAnalysisPanel() {
                                   : "text-green-500";
                             const categoryDot =
                               session.category === "empty"
-                                ? "bg-red-500"
+                                ? "bg-red-400"
                                 : session.category === "low_value"
                                   ? "bg-yellow-500"
-                                  : "bg-green-500";
+                                  : "bg-emerald-500";
 
                             const ageLabel = session.ageDays < 1
                               ? "< 1d"

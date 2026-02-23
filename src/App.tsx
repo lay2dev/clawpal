@@ -2,6 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
+import {
+  HomeIcon,
+  BookOpenIcon,
+  HashIcon,
+  ClockIcon,
+  HistoryIcon,
+  StethoscopeIcon,
+  LayersIcon,
+  SettingsIcon,
+  MessageCircleIcon,
+  XIcon,
+} from "lucide-react";
 import { Home } from "./pages/Home";
 import { Recipes } from "./pages/Recipes";
 import { Cook } from "./pages/Cook";
@@ -18,7 +30,6 @@ import { InstanceTabBar } from "./components/InstanceTabBar";
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { DiscordGuildChannel, SshHost } from "./lib/types";
 
@@ -190,9 +201,29 @@ export function App() {
   }, []);
 
 
+  const navItems: { route: Route | Route[]; icon: React.ReactNode; label: string; badge?: React.ReactNode }[] = [
+    { route: "home", icon: <HomeIcon className="size-4" />, label: t('nav.home') },
+    { route: ["recipes", "cook"] as Route[], icon: <BookOpenIcon className="size-4" />, label: t('nav.recipes') },
+    { route: "channels", icon: <HashIcon className="size-4" />, label: t('nav.channels') },
+    {
+      route: "cron",
+      icon: <ClockIcon className="size-4" />,
+      label: t('nav.cron'),
+      badge: hasEscalatedCron ? <span className="ml-auto w-2 h-2 rounded-full bg-red-500 animate-pulse" /> : undefined,
+    },
+    { route: "history", icon: <HistoryIcon className="size-4" />, label: t('nav.history') },
+    { route: "doctor", icon: <StethoscopeIcon className="size-4" />, label: t('nav.doctor') },
+    { route: "sessions", icon: <LayersIcon className="size-4" />, label: t('nav.sessions') },
+  ];
+
+  const isRouteActive = (item: typeof navItems[0]) => {
+    if (Array.isArray(item.route)) return item.route.includes(route);
+    return route === item.route;
+  };
+
   return (
     <>
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen bg-background text-foreground">
       <InstanceTabBar
         hosts={sshHosts}
         activeId={activeInstance}
@@ -202,113 +233,69 @@ export function App() {
       />
       <InstanceContext.Provider value={{ instanceId: activeInstance, isRemote, isConnected, discordGuildChannels }}>
       <div className="flex flex-1 overflow-hidden">
-      <aside className="w-[200px] min-w-[200px] bg-muted border-r border-border flex flex-col py-4">
-        <h1 className="px-4 text-lg font-bold mb-4 flex items-center gap-2">
-          <img src={logoUrl} alt="" className="w-9 h-9 rounded-lg" />
-          ClawPal
-        </h1>
-        <nav className="flex flex-col gap-1 px-2 flex-1">
-          <Button
-            variant="ghost"
+
+      {/* ── Sidebar ── */}
+      <aside className="w-[220px] min-w-[220px] bg-sidebar border-r border-sidebar-border flex flex-col py-5">
+        <div className="px-5 mb-6 flex items-center gap-2.5">
+          <img src={logoUrl} alt="" className="w-9 h-9 rounded-xl shadow-sm" />
+          <h1 className="text-xl font-bold tracking-tight" style={{ fontFamily: "'Fraunces', Georgia, serif" }}>
+            ClawPal
+          </h1>
+        </div>
+
+        <nav className="flex flex-col gap-0.5 px-3 flex-1">
+          {navItems.map((item) => {
+            const active = isRouteActive(item);
+            const targetRoute = Array.isArray(item.route) ? item.route[0] : item.route;
+            return (
+              <button
+                key={targetRoute}
+                className={cn(
+                  "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer",
+                  active
+                    ? "bg-primary/10 text-primary shadow-sm"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}
+                onClick={() => setRoute(targetRoute)}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+                {item.badge}
+              </button>
+            );
+          })}
+
+          <div className="my-3 h-px bg-border/60" />
+
+          <button
             className={cn(
-              "justify-start hover:bg-accent",
-              (route === "home") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("home")}
-          >
-            {t('nav.home')}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "recipes" || route === "cook") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("recipes")}
-          >
-            {t('nav.recipes')}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "channels") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("channels")}
-          >
-            {t('nav.channels')}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "cron") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("cron")}
-          >
-            {t('nav.cron')}
-            {hasEscalatedCron && (
-              <span className="ml-auto w-2 h-2 rounded-full bg-red-500" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "history") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("history")}
-          >
-            {t('nav.history')}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "doctor") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("doctor")}
-          >
-            {t('nav.doctor')}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "sessions") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
-            )}
-            onClick={() => setRoute("sessions")}
-          >
-            {t('nav.sessions')}
-          </Button>
-          <Separator className="my-2" />
-          <Button
-            variant="ghost"
-            className={cn(
-              "justify-start hover:bg-accent",
-              (route === "settings") && "bg-accent text-accent-foreground border-l-[3px] border-primary"
+              "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer",
+              route === "settings"
+                ? "bg-primary/10 text-primary shadow-sm"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             )}
             onClick={() => setRoute("settings")}
           >
-            {t('nav.settings')}
+            <SettingsIcon className="size-4" />
+            <span>{t('nav.settings')}</span>
             {appUpdateAvailable && (
-              <span className="ml-1.5 w-2 h-2 rounded-full bg-destructive inline-block" />
+              <span className="ml-auto w-2 h-2 rounded-full bg-destructive animate-pulse" />
             )}
-          </Button>
+          </button>
         </nav>
 
-        <div className="px-4 pb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="px-5 pb-3 flex items-center gap-2 text-xs text-muted-foreground/70">
           <a
             href="#"
-            className="hover:text-foreground transition-colors"
+            className="hover:text-foreground transition-colors duration-200"
             onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.zhixian.io"); }}
           >
             {t('nav.website')}
           </a>
-          <span>·</span>
+          <span className="text-border">·</span>
           <a
             href="#"
-            className="hover:text-foreground transition-colors"
+            className="hover:text-foreground transition-colors duration-200"
             onClick={(e) => { e.preventDefault(); api.openUrl("https://x.com/zhixianio"); }}
           >
             @zhixian
@@ -320,84 +307,86 @@ export function App() {
           onApplied={bumpConfigVersion}
         />
       </aside>
-      <main className="flex-1 overflow-y-auto p-4 relative">
-        {/* Chat toggle -- top-right corner */}
+
+      {/* ── Main Content ── */}
+      <main className="flex-1 overflow-y-auto p-6 relative">
+        {/* Chat toggle — floating pill */}
         {!chatOpen && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="absolute top-4 right-4 z-10"
+          <button
+            className="absolute top-5 right-5 z-10 flex items-center gap-2 px-3.5 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium hover:bg-primary/15 transition-all duration-200 shadow-sm cursor-pointer"
             onClick={() => setChatOpen(true)}
           >
+            <MessageCircleIcon className="size-4" />
             {t('nav.chat')}
-          </Button>
+          </button>
         )}
 
-        {route === "home" && (
-          <Home
-            key={`${activeInstance}-${configVersion}`}
-            onCook={(id, source) => {
-              setRecipeId(id);
-              setRecipeSource(source);
-              setRoute("cook");
-            }}
-            showToast={showToast}
-          />
-        )}
-        {route === "recipes" && (
-          <Recipes
-            onCook={(id, source) => {
-              setRecipeId(id);
-              setRecipeSource(source);
-              setRoute("cook");
-            }}
-          />
-        )}
-        {route === "cook" && recipeId && (
-          <Cook
-            recipeId={recipeId}
-            recipeSource={recipeSource}
-            onDone={() => {
-              setRoute("recipes");
-            }}
-          />
-        )}
-        {route === "cook" && !recipeId && <p>{t('config.noRecipeSelected')}</p>}
-        {route === "channels" && (
-          <Channels
-            key={`${activeInstance}-${configVersion}`}
-            showToast={showToast}
-          />
-        )}
-        {route === "cron" && <Cron key={`${activeInstance}`} />}
-        {route === "history" && <History key={`${activeInstance}-${configVersion}`} />}
-        <div className={route === "doctor" ? undefined : "hidden"}><Doctor sshHosts={sshHosts} /></div>
-        {route === "sessions" && <Sessions />}
-        {route === "settings" && (
-          <Settings
-            key={`${activeInstance}-${configVersion}`}
-            onDataChange={bumpConfigVersion}
-            hasAppUpdate={appUpdateAvailable}
-            onAppUpdateSeen={() => setAppUpdateAvailable(false)}
-          />
-        )}
+        <div className="animate-warm-enter">
+          {route === "home" && (
+            <Home
+              key={`${activeInstance}-${configVersion}`}
+              onCook={(id, source) => {
+                setRecipeId(id);
+                setRecipeSource(source);
+                setRoute("cook");
+              }}
+              showToast={showToast}
+            />
+          )}
+          {route === "recipes" && (
+            <Recipes
+              onCook={(id, source) => {
+                setRecipeId(id);
+                setRecipeSource(source);
+                setRoute("cook");
+              }}
+            />
+          )}
+          {route === "cook" && recipeId && (
+            <Cook
+              recipeId={recipeId}
+              recipeSource={recipeSource}
+              onDone={() => {
+                setRoute("recipes");
+              }}
+            />
+          )}
+          {route === "cook" && !recipeId && <p>{t('config.noRecipeSelected')}</p>}
+          {route === "channels" && (
+            <Channels
+              key={`${activeInstance}-${configVersion}`}
+              showToast={showToast}
+            />
+          )}
+          {route === "cron" && <Cron key={`${activeInstance}`} />}
+          {route === "history" && <History key={`${activeInstance}-${configVersion}`} />}
+          <div className={route === "doctor" ? undefined : "hidden"}><Doctor sshHosts={sshHosts} /></div>
+          {route === "sessions" && <Sessions />}
+          {route === "settings" && (
+            <Settings
+              key={`${activeInstance}-${configVersion}`}
+              onDataChange={bumpConfigVersion}
+              hasAppUpdate={appUpdateAvailable}
+              onAppUpdateSeen={() => setAppUpdateAvailable(false)}
+            />
+          )}
+        </div>
       </main>
 
-      {/* Chat Panel -- inline, pushes main content */}
+      {/* ── Chat Panel ── */}
       {chatOpen && (
-        <aside className="w-[360px] min-w-[360px] border-l border-border flex flex-col bg-background">
-          <div className="flex items-center justify-between px-4 pt-4 pb-2">
+        <aside className="w-[380px] min-w-[380px] border-l border-border flex flex-col bg-card">
+          <div className="flex items-center justify-between px-5 pt-5 pb-3">
             <h2 className="text-lg font-semibold">{t('nav.chat')}</h2>
             <Button
               variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
+              size="icon-xs"
               onClick={() => setChatOpen(false)}
             >
-              &times;
+              <XIcon className="size-4" />
             </Button>
           </div>
-          <div className="flex-1 overflow-hidden px-4 pb-4">
+          <div className="flex-1 overflow-hidden px-5 pb-5">
             <Chat />
           </div>
         </aside>
@@ -406,23 +395,25 @@ export function App() {
       </InstanceContext.Provider>
     </div>
 
-    {/* Toast Stack */}
+    {/* ── Toast Stack ── */}
     {toasts.length > 0 && (
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2">
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col-reverse gap-2.5">
         {toasts.map((toast) => (
           <div
             key={toast.id}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 rounded-md shadow-lg text-sm font-medium animate-in fade-in slide-in-from-bottom-2",
-              toast.type === "success" ? "bg-green-600 text-white" : "bg-destructive text-destructive-foreground"
+              "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium animate-in fade-in slide-in-from-bottom-3 duration-300",
+              toast.type === "success"
+                ? "bg-green-500/10 text-green-700 border border-green-500/20 shadow-sm dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/20"
+                : "bg-red-500/10 text-red-700 border border-red-500/20 shadow-sm dark:bg-red-500/15 dark:text-red-400 dark:border-red-500/20"
             )}
           >
             <span className="flex-1">{toast.message}</span>
             <button
-              className="opacity-70 hover:opacity-100 text-current ml-2"
+              className="opacity-50 hover:opacity-100 transition-opacity ml-1 cursor-pointer"
               onClick={() => dismissToast(toast.id)}
             >
-              &times;
+              <XIcon className="size-3.5" />
             </button>
           </div>
         ))}

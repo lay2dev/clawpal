@@ -175,13 +175,13 @@ export function Cron() {
   const doUninstall = async () => { setWdAction("uninstalling"); try { await ua.uninstallWatchdog(); loadWd(); } catch (e) { showErr(e); } finally { setWdAction(null); } };
 
   // watchdog status
-  let wdDot = "bg-gray-400", wdText = t("watchdog.notDeployed");
-  if (watchdog?.deployed && !watchdog?.alive) { wdDot = "bg-gray-400"; wdText = t("watchdog.stopped"); }
+  let wdDot = "bg-muted-foreground/40", wdText = t("watchdog.notDeployed");
+  if (watchdog?.deployed && !watchdog?.alive) { wdDot = "bg-muted-foreground/40"; wdText = t("watchdog.stopped"); }
   else if (watchdog?.alive && !watchdog?.lastCheckAt) { wdDot = "bg-yellow-500 animate-pulse"; wdText = t("watchdog.starting"); }
   else if (watchdog?.alive && watchdog?.lastCheckAt) {
     const age = Date.now() - new Date(watchdog.lastCheckAt).getTime();
-    if (age <= 120_000) { wdDot = "bg-green-500"; wdText = t("watchdog.running"); }
-    else { wdDot = "bg-red-500"; wdText = t("watchdog.crashed"); }
+    if (age <= 120_000) { wdDot = "bg-emerald-500"; wdText = t("watchdog.running"); }
+    else { wdDot = "bg-red-400"; wdText = t("watchdog.crashed"); }
   }
 
   return (
@@ -194,7 +194,7 @@ export function Cron() {
         </div>
       )}
       {lastSuccess && (
-        <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 mb-3 text-xs text-green-700 dark:text-green-400">
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 mb-3 text-xs text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
           {lastSuccess}
         </div>
       )}
@@ -254,10 +254,10 @@ export function Cron() {
         <div className="space-y-1">
           {/* Legend */}
           <div className="flex items-center gap-4 text-[10px] text-muted-foreground px-1 pb-1">
-            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" />{t("cron.legendOk")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{t("cron.legendOk")}</span>
             <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />{t("cron.legendRetrying")}</span>
-            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-500" />{t("cron.legendEscalated")}</span>
-            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-400" />{t("cron.legendDisabled")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-400" />{t("cron.legendEscalated")}</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />{t("cron.legendDisabled")}</span>
           </div>
           {jobs.map((job, idx) => {
             const jobId = job.jobId || String(idx);
@@ -275,10 +275,10 @@ export function Cron() {
                   >
                     {/* Status dot */}
                     <span className={cn("w-2 h-2 rounded-full shrink-0",
-                      job.enabled === false ? "bg-gray-400"
-                        : wdStatus === "escalated" ? "bg-red-500"
+                      job.enabled === false ? "bg-muted-foreground/40"
+                        : wdStatus === "escalated" ? "bg-red-400"
                         : wdStatus === "retrying" || wdStatus === "pending" ? "bg-yellow-500"
-                        : "bg-green-500"
+                        : "bg-emerald-500"
                     )} />
 
                     {/* Name */}

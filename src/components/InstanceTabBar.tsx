@@ -113,23 +113,23 @@ export function InstanceTabBar({
   const statusDot = (status: "connected" | "disconnected" | "error" | undefined) => {
     const color =
       status === "connected"
-        ? "bg-green-500"
+        ? "bg-emerald-500"
         : status === "error"
-          ? "bg-red-500"
-          : "bg-gray-400";
-    return <span className={cn("inline-block w-2 h-2 rounded-full shrink-0", color)} />;
+          ? "bg-red-400"
+          : "bg-muted-foreground/40";
+    return <span className={cn("inline-block w-2 h-2 rounded-full shrink-0 transition-colors duration-300", color)} />;
   };
 
   return (
     <>
-      <div className="flex items-center gap-0.5 px-2 py-1.5 bg-muted border-b border-border overflow-x-auto shrink-0">
+      <div className="flex items-center gap-1 px-3 py-2 bg-sidebar border-b border-sidebar-border overflow-x-auto shrink-0">
         {/* Local tab */}
         <button
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1 rounded text-sm whitespace-nowrap transition-colors",
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-200 cursor-pointer",
             activeId === "local"
-              ? "bg-background shadow-sm font-medium"
-              : "hover:bg-background/50"
+              ? "bg-card shadow-sm font-semibold text-primary border-b-2 border-b-primary"
+              : "text-muted-foreground hover:text-foreground"
           )}
           onClick={() => onSelect("local")}
         >
@@ -145,10 +145,10 @@ export function InstanceTabBar({
           >
             <button
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1 rounded text-sm whitespace-nowrap transition-colors",
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-200 cursor-pointer",
                 activeId === host.id
-                  ? "bg-background shadow-sm font-medium"
-                  : "hover:bg-background/50"
+                  ? "bg-card shadow-sm font-semibold text-primary border-b-2 border-b-primary"
+                  : "text-muted-foreground hover:text-foreground"
               )}
               onClick={() => onSelect(host.id)}
               onContextMenu={(e) => {

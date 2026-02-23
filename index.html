@@ -4,8 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ClawPal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=LXGW+WenKai+TC:wght@300;400;700&family=LXGW+WenKai+Mono+TC&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <script>
+      // Prevent flash: apply dark mode before React renders
+      (function() {
+        try {
+          var t = localStorage.getItem('clawpal_theme');
+          var d = t === 'dark' || (t !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (d) document.documentElement.classList.add('dark');
+        } catch(e) {}
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

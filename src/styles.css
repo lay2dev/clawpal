@@ -1,39 +1,113 @@
 @import "tailwindcss";
 
+/* ── Warm Organic Design System ── */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.875rem;
+
+  /* Warm cream & amber palette */
+  --background: oklch(0.965 0.008 78);
+  --foreground: oklch(0.18 0.02 55);
+
+  --card: oklch(0.993 0.003 80);
+  --card-foreground: oklch(0.18 0.02 55);
+
+  --popover: oklch(0.995 0.003 80);
+  --popover-foreground: oklch(0.18 0.02 55);
+
+  --primary: oklch(0.52 0.14 55);
+  --primary-foreground: oklch(0.985 0.006 80);
+
+  --secondary: oklch(0.94 0.015 75);
+  --secondary-foreground: oklch(0.30 0.03 55);
+
+  --muted: oklch(0.95 0.01 78);
+  --muted-foreground: oklch(0.50 0.02 55);
+
+  --accent: oklch(0.92 0.03 58);
+  --accent-foreground: oklch(0.25 0.03 55);
+
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.985 0.006 80);
+
+  --border: oklch(0.82 0.015 72);
+  --input: oklch(0.91 0.012 72);
+  --ring: oklch(0.60 0.12 55);
+
+  /* Chart colors — warm spectrum */
+  --chart-1: oklch(0.60 0.18 45);
+  --chart-2: oklch(0.55 0.12 160);
+  --chart-3: oklch(0.45 0.08 220);
+  --chart-4: oklch(0.75 0.16 80);
+  --chart-5: oklch(0.70 0.15 35);
+
+  /* Sidebar — distinct warm linen */
+  --sidebar: oklch(0.965 0.012 75);
+  --sidebar-foreground: oklch(0.18 0.02 55);
+  --sidebar-primary: oklch(0.52 0.14 55);
+  --sidebar-primary-foreground: oklch(0.985 0.006 80);
+  --sidebar-accent: oklch(0.92 0.025 60);
+  --sidebar-accent-foreground: oklch(0.25 0.03 55);
+  --sidebar-border: oklch(0.90 0.015 72);
+  --sidebar-ring: oklch(0.60 0.12 55);
+
+  /* Warm shadow tokens */
+  --shadow-warm: 0 2px 12px oklch(0.50 0.06 55 / 0.06);
+  --shadow-warm-lg: 0 4px 24px oklch(0.50 0.06 55 / 0.08);
+  --shadow-warm-hover: 0 6px 20px oklch(0.50 0.06 55 / 0.10);
+}
+
+/* ── Dark Mode ── */
+.dark {
+  --background: oklch(0.22 0.012 55);
+  --foreground: oklch(0.93 0.01 75);
+
+  --card: oklch(0.26 0.012 55);
+  --card-foreground: oklch(0.93 0.01 75);
+
+  --popover: oklch(0.26 0.012 55);
+  --popover-foreground: oklch(0.93 0.01 75);
+
+  --primary: oklch(0.68 0.13 55);
+  --primary-foreground: oklch(0.16 0.01 55);
+
+  --secondary: oklch(0.30 0.015 55);
+  --secondary-foreground: oklch(0.88 0.01 75);
+
+  --muted: oklch(0.28 0.01 55);
+  --muted-foreground: oklch(0.65 0.02 60);
+
+  --accent: oklch(0.32 0.025 55);
+  --accent-foreground: oklch(0.90 0.02 70);
+
+  --destructive: oklch(0.58 0.20 25);
+  --destructive-foreground: oklch(0.93 0.01 75);
+
+  --border: oklch(0.38 0.015 55 / 0.55);
+  --input: oklch(0.30 0.012 55);
+  --ring: oklch(0.68 0.12 55);
+
+  /* Chart colors — warm spectrum (dark) */
+  --chart-1: oklch(0.65 0.18 45);
+  --chart-2: oklch(0.60 0.12 160);
+  --chart-3: oklch(0.55 0.08 220);
+  --chart-4: oklch(0.75 0.16 80);
+  --chart-5: oklch(0.72 0.15 35);
+
+  /* Sidebar — dark warm */
+  --sidebar: oklch(0.19 0.012 55);
+  --sidebar-foreground: oklch(0.93 0.01 75);
+  --sidebar-primary: oklch(0.68 0.13 55);
+  --sidebar-primary-foreground: oklch(0.16 0.01 55);
+  --sidebar-accent: oklch(0.30 0.025 55);
+  --sidebar-accent-foreground: oklch(0.90 0.02 70);
+  --sidebar-border: oklch(0.32 0.015 55);
+  --sidebar-ring: oklch(0.68 0.12 55);
+
+  /* Dark shadow tokens — subtle warm glow */
+  --shadow-warm: 0 2px 12px oklch(0.00 0 0 / 0.25);
+  --shadow-warm-lg: 0 4px 24px oklch(0.00 0 0 / 0.35);
+  --shadow-warm-hover: 0 6px 20px oklch(0.00 0 0 / 0.4);
 }
 
 @theme inline {
@@ -70,9 +144,89 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --radius: var(--radius);
+  --font-mono: "LXGW WenKai Mono TC", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Default border color for all elements — makes bare `border` class use --border */
+*,
+*::before,
+*::after {
+  border-color: var(--border);
 }
 
 body {
   margin: 0;
-  font-family: ui-sans-serif, -apple-system, sans-serif;
+  font-family: "LXGW WenKai TC", "Nunito", ui-sans-serif, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Display headings */
+h1, h2, h3 {
+  font-family: "LXGW WenKai TC", "Nunito", ui-sans-serif, sans-serif;
+}
+
+/* Warm page-enter animation */
+@keyframes warm-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-warm-enter {
+  animation: warm-enter 0.3s ease-out both;
+}
+
+/* Subtle hover lift for cards */
+@keyframes warm-lift {
+  from { box-shadow: var(--shadow-warm); }
+  to { box-shadow: var(--shadow-warm-hover); }
+}
+
+/* Warm spinner */
+@keyframes warm-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.animate-warm-spin {
+  animation: warm-spin 1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+
+/* Warm scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.80 0.02 60 / 0.4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.65 0.04 55 / 0.5);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.40 0.02 55 / 0.4);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.50 0.03 55 / 0.5);
+}
+
+/* Active button press feel */
+[data-slot="button"]:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
 }

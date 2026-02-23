@@ -106,7 +106,7 @@ function MessageBubble({
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.205_0_0)] text-white">
+        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.205_0_0)] dark:bg-[oklch(0.35_0.02_55)] text-white">
           <div className="whitespace-pre-wrap text-sm">{message.content}</div>
         </div>
       </div>
@@ -116,7 +116,7 @@ function MessageBubble({
   if (message.role === "assistant") {
     return (
       <div className="flex justify-start">
-        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.93_0_0)]">
+        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.93_0_0)] dark:bg-muted dark:text-foreground">
           <div className="text-sm"><SimpleMarkdown content={message.content} /></div>
         </div>
       </div>
@@ -138,7 +138,7 @@ function MessageBubble({
             : <Badge variant="secondary" className="text-xs">{t("doctor.awaitingApproval")}</Badge>;
 
     return (
-      <div className="rounded-md p-3 text-sm border-l-[3px] border-l-primary/40 border border-border bg-[oklch(0.96_0_0)]">
+      <div className="rounded-md p-3 text-sm border-l-[3px] border-l-primary/40 border border-border bg-[oklch(0.96_0_0)] dark:bg-muted/50">
         <div className="flex items-center justify-between mb-1">
           <span className="font-mono font-medium text-xs">{inv.command}</span>
           <div className="flex items-center gap-2">
@@ -171,7 +171,7 @@ function MessageBubble({
 
   if (message.role === "tool-result") {
     return (
-      <div className="rounded-md text-sm border-l-[3px] border-l-border border border-border bg-[oklch(0.95_0_0)]">
+      <div className="rounded-md text-sm border-l-[3px] border-l-border border border-border bg-[oklch(0.95_0_0)] dark:bg-muted/30">
         <button
           className="w-full text-left px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
           onClick={() => setExpanded(!expanded)}

@@ -109,7 +109,10 @@
   "settings.disabled": "disabled",
   "settings.edit": "Edit",
   "settings.language": "Language",
-  "settings.languageDescription": "Choose your preferred display language for ClawPal.",
+  "settings.theme": "Theme",
+  "settings.themeLight": "Light",
+  "settings.themeDark": "Dark",
+  "settings.themeSystem": "System",
 
   "doctor.title": "\uD83E\uDD9E helps \uD83E\uDD9E",
   "doctor.healthScore": "Health score: {{score}}",

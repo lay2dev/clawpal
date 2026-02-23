@@ -109,7 +109,10 @@
   "settings.disabled": "已禁用",
   "settings.edit": "编辑",
   "settings.language": "语言",
-  "settings.languageDescription": "选择 ClawPal 的显示语言。",
+  "settings.theme": "主题",
+  "settings.themeLight": "浅色",
+  "settings.themeDark": "深色",
+  "settings.themeSystem": "跟随系统",
 
   "doctor.title": "\uD83E\uDD9E 帮 \uD83E\uDD9E",
   "doctor.healthScore": "健康评分：{{score}}",
