@@ -486,37 +486,24 @@ export function Home({
                             onValueChange={async (val) => {
                               const modelValue = resolveModelValue(val === "__none__" ? null : val);
                               try {
+                                // Find agent index in config list
                                 const raw = await ua.readRawConfig();
                                 const cfg = JSON.parse(raw);
-                                const list: Record<string, unknown>[] = cfg?.agents?.list ?? [];
-                                const entry = list.find((a) => a.id === agent.id);
-                                if (entry) {
-                                  if (modelValue) {
-                                    // Preserve fallbacks if model is already an object
-                                    const existing = entry.model;
-                                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                                      (existing as Record<string, unknown>).primary = modelValue;
-                                    } else {
-                                      entry.model = modelValue;
-                                    }
-                                  } else {
-                                    // Clear only primary, keep fallbacks if they exist
-                                    const existing = entry.model;
-                                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                                      delete (existing as Record<string, unknown>).primary;
-                                      // If no fields left, remove model entirely
-                                      if (Object.keys(existing as object).length === 0) delete entry.model;
-                                    } else {
-                                      delete entry.model;
-                                    }
-                                  }
-                                } else if (modelValue) {
-                                  list.push({ id: agent.id, model: modelValue });
-                                }
+                                const list: { id: string }[] = cfg?.agents?.list ?? [];
+                                const idx = list.findIndex((a) => a.id === agent.id);
                                 const label = modelValue
                                   ? `Set model for ${agent.id}: ${modelValue}`
                                   : `Clear model override for ${agent.id}`;
-                                await ua.queueCommand(label, ["openclaw", "config", "set", "agents.list", JSON.stringify(list), "--json"]);
+                                if (idx >= 0) {
+                                  if (modelValue) {
+                                    await ua.queueCommand(label, ["openclaw", "config", "set", `agents.list.${idx}.model.primary`, JSON.stringify(modelValue), "--json"]);
+                                  } else {
+                                    await ua.queueCommand(label, ["openclaw", "config", "unset", `agents.list.${idx}.model.primary`]);
+                                  }
+                                } else if (modelValue) {
+                                  // Agent not in list yet — append
+                                  await ua.queueCommand(label, ["openclaw", "config", "set", `agents.list.${list.length}`, JSON.stringify({ id: agent.id, model: modelValue }), "--json"]);
+                                }
                                 // Optimistic UI update
                                 setAgents((prev) => prev?.map((a) =>
                                   a.id === agent.id ? { ...a, model: modelValue ?? null } : a
