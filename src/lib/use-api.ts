@@ -344,7 +344,9 @@ export function useApi() {
         ),
         ["getStatusExtra", "checkOpenclawUpdate", "getCachedModelCatalog"],
       ),
-      checkOpenclawUpdate: dispatch(
+      checkOpenclawUpdate: dispatchCached(
+        "checkOpenclawUpdate",
+        isRemote ? 10 * 60_000 : 30 * 60_000,
         api.checkOpenclawUpdate,
         api.remoteCheckOpenclawUpdate,
       ),

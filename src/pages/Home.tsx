@@ -30,6 +30,16 @@ import { formatTime, formatBytes } from "@/lib/utils";
 import { useApi } from "@/lib/use-api";
 import { profileToModelValue } from "@/lib/model-value";
 
+type OpenclawUpdateLatch = {
+  checkedAt: number;
+  available: boolean;
+  latest?: string;
+  installedVersion?: string;
+};
+
+const OPENCLAW_UPDATE_LATCH = new Map<string, OpenclawUpdateLatch>();
+const OPENCLAW_UPDATE_NO_UPDATE_TTL_MS = 30 * 60 * 1000;
+
 interface AgentGroup {
   identity: string;
   emoji?: string;
@@ -257,13 +267,36 @@ export function Home({
 
   // Update check — deferred, runs once (not in poll loop)
   useEffect(() => {
+    const instanceKey = ua.instanceId;
+    const latched = OPENCLAW_UPDATE_LATCH.get(instanceKey);
+    const now = Date.now();
+    if (latched?.available) {
+      setUpdateInfo({ available: true, latest: latched.latest });
+      if (latched.installedVersion) setVersion((prev) => prev || latched.installedVersion || null);
+      setCheckingUpdate(false);
+      return;
+    }
+    if (latched && now - latched.checkedAt < OPENCLAW_UPDATE_NO_UPDATE_TTL_MS) {
+      setUpdateInfo({ available: false, latest: latched.latest });
+      if (latched.installedVersion) setVersion((prev) => prev || latched.installedVersion || null);
+      setCheckingUpdate(false);
+      return;
+    }
+
     setCheckingUpdate(true);
     setUpdateInfo(null);
     const timer = setTimeout(() => {
       if (ua.isRemote && !ua.isConnected) { setCheckingUpdate(false); return; }
       ua.checkOpenclawUpdate()
         .then((u) => {
-          setUpdateInfo({ available: u.upgradeAvailable, latest: u.latestVersion ?? undefined });
+          const next = {
+            checkedAt: Date.now(),
+            available: u.upgradeAvailable,
+            latest: u.latestVersion ?? undefined,
+            installedVersion: u.installedVersion,
+          };
+          OPENCLAW_UPDATE_LATCH.set(instanceKey, next);
+          setUpdateInfo({ available: next.available, latest: next.latest });
           // Fallback: set version from update check if tier 2 hasn't provided it yet
           if (u.installedVersion) setVersion((prev) => prev || u.installedVersion);
         })
