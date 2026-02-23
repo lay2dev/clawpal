@@ -127,9 +127,9 @@ export function Cron() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<string | null>(null);
 
-  const loadJobs = useCallback(() => { ua.listCronJobs().then(setJobs).catch(() => {}); }, [ua]);
+  const loadJobs = useCallback(() => { ua.listCronJobs().then(setJobs).catch((e) => console.warn("loadJobs:", e)); }, [ua]);
   const loadWd = useCallback(() => { ua.getWatchdogStatus().then(setWatchdog).catch(() => setWatchdog(null)); }, [ua]);
-  const loadRuns = useCallback((id: string) => { ua.getCronRuns(id, 10).then(r => setRuns(p => ({ ...p, [id]: r }))).catch(() => {}); }, [ua]);
+  const loadRuns = useCallback((id: string) => { ua.getCronRuns(id, 10).then(r => setRuns(p => ({ ...p, [id]: r }))).catch((e) => console.warn("loadRuns:", e)); }, [ua]);
 
   useEffect(() => { loadJobs(); loadWd(); const iv = setInterval(() => { loadJobs(); loadWd(); }, 10_000); return () => clearInterval(iv); }, [loadJobs, loadWd]);
   useEffect(() => { if (expandedJob) loadRuns(expandedJob); }, [expandedJob, loadRuns]);

@@ -56,7 +56,7 @@ export function PendingChangesBar({ onApplied, showToast }: PendingChangesBarPro
   // Poll queue count
   const refreshCount = useCallback(() => {
     if (!isConnected) return;
-    api.queuedCommandsCount().then(setCount).catch(() => {});
+    api.queuedCommandsCount().then(setCount).catch((e) => console.warn("queuedCommandsCount:", e));
   }, [api, isConnected]);
 
   useEffect(() => {
@@ -70,7 +70,7 @@ export function PendingChangesBar({ onApplied, showToast }: PendingChangesBarPro
   // Fetch command list when expanded
   useEffect(() => {
     if (expanded && count > 0) {
-      api.listQueuedCommands().then(setCommands).catch(() => {});
+      api.listQueuedCommands().then(setCommands).catch((e) => console.warn("listQueuedCommands:", e));
     }
   }, [expanded, count, api]);
 

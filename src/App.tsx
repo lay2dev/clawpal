@@ -97,7 +97,7 @@ export function App() {
     // Silent update check
     check()
       .then((update) => { if (update) setAppUpdateAvailable(true); })
-      .catch(() => {});
+      .catch((e) => console.warn("checkAppUpdate:", e));
 
     // Analytics ping (fire-and-forget)
     getVersion().then((version) => {
@@ -107,8 +107,8 @@ export function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ v: version, id: installId, platform: navigator.platform }),
-      }).catch(() => {});
-    }).catch(() => {});
+      }).catch((e) => console.warn("analytics:", e));
+    }).catch((e) => console.warn("analytics:", e));
   }, []);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);

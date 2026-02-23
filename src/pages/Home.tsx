@@ -71,7 +71,7 @@ export function Home({
   // Skip polling refreshes while there are queued commands (to preserve optimistic UI)
   const hasPendingRef = useRef(false);
   useEffect(() => {
-    const check = () => { ua.queuedCommandsCount().then((n) => { hasPendingRef.current = n > 0; }).catch(() => {}); };
+    const check = () => { ua.queuedCommandsCount().then((n) => { hasPendingRef.current = n > 0; }).catch((e) => console.warn("queuedCommandsCount:", e)); };
     check();
     const interval = setInterval(check, ua.isRemote ? 10000 : 3000);
     return () => clearInterval(interval);
@@ -729,7 +729,7 @@ export function Home({
             fetchStatusExtra();
             ua.checkOpenclawUpdate()
               .then((u) => setUpdateInfo({ available: u.upgradeAvailable, latest: u.latestVersion ?? undefined }))
-              .catch(() => {});
+              .catch((e) => console.warn("checkUpdate:", e));
           }
         }}
         isRemote={ua.isRemote}

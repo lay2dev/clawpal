@@ -158,7 +158,7 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
   const [appUpdateProgress, setAppUpdateProgress] = useState<number | null>(null);
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => {});
+    getVersion().then(setAppVersion).catch((e) => console.warn("getVersion:", e));
   }, []);
 
   const handleCheckForUpdates = useCallback(async () => {
