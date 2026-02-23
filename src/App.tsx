@@ -331,6 +331,7 @@ export function App() {
                 setRoute("cook");
               }}
               showToast={showToast}
+              onNavigate={(r) => setRoute(r as Route)}
             />
           )}
           {route === "recipes" && (

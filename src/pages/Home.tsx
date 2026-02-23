@@ -55,9 +55,11 @@ function groupAgents(agents: AgentOverview[]): AgentGroup[] {
 export function Home({
   onCook,
   showToast,
+  onNavigate,
 }: {
   onCook?: (recipeId: string, source?: string) => void;
   showToast?: (message: string, type?: "success" | "error") => void;
+  onNavigate?: (route: string) => void;
 }) {
   const { t } = useTranslation();
   const ua = useApi();
@@ -291,6 +293,14 @@ export function Home({
                   <ul className="space-y-0.5 font-mono text-amber-700 dark:text-amber-400">
                     {status.duplicateInstalls.map((entry, i) => <li key={i}>{entry}</li>)}
                   </ul>
+                  {onNavigate && (
+                    <button
+                      className="mt-1.5 text-amber-800 dark:text-amber-300 underline hover:no-underline"
+                      onClick={() => onNavigate("doctor")}
+                    >
+                      {t('home.fixInDoctor')}
+                    </button>
+                  )}
                 </div>
               </>
             )}
