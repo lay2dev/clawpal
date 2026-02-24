@@ -2,3 +2,6 @@ node_modules/
 dist/
 src-tauri/target/
 .worktrees/
+bun.lockb
+bun.lock
+bun.dlock
