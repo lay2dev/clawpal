@@ -463,16 +463,33 @@ mod inner {
             key_path: Option<&str>,
             passphrase: &str,
         ) -> Result<(), String> {
-            let askpass_path = std::env::temp_dir()
-                .join(format!("clawpal-askpass-{}.sh", uuid::Uuid::new_v4()));
-            let script = "#!/bin/sh\nprintf '%s\\n' \"$CLAWPAL_SSH_PASSPHRASE\"\n";
-            std::fs::write(&askpass_path, script)
+            struct AskpassScript {
+                path: std::path::PathBuf,
+            }
+
+            impl AskpassScript {
+                fn new(path: std::path::PathBuf) -> Self {
+                    Self { path }
+                }
+            }
+
+            impl Drop for AskpassScript {
+                fn drop(&mut self) {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+            }
+
+            let askpass_path = AskpassScript::new(
+                std::env::temp_dir().join(format!("clawpal-askpass-{}.sh", uuid::Uuid::new_v4())),
+            );
+            let script = "#!/bin/sh\nprintf '%s\\n' \"$CLAWPAL_SSH_PASSPHRASE\"\\n";
+            std::fs::write(&askpass_path.path, script)
                 .map_err(|e| format!("Failed to create SSH askpass helper: {e}"))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = std::fs::set_permissions(
-                    &askpass_path,
+                    &askpass_path.path,
                     std::fs::Permissions::from_mode(0o700),
                 );
             }
@@ -483,7 +500,7 @@ mod inner {
                 cmd.arg(path);
             }
             let output_res = cmd
-                .env("SSH_ASKPASS", &askpass_path)
+                .env("SSH_ASKPASS", &askpass_path.path)
                 .env("SSH_ASKPASS_REQUIRE", "force")
                 .env("CLAWPAL_SSH_PASSPHRASE", passphrase)
                 .env(
@@ -493,8 +510,6 @@ mod inner {
                 .stdin(std::process::Stdio::null())
                 .output()
                 .await;
-
-            let _ = std::fs::remove_file(&askpass_path);
 
             let output = output_res.map_err(|e| format!("Failed to run ssh-add: {e}"))?;
             if !output.status.success() {
@@ -797,9 +812,82 @@ mod inner {
         pub async fn connect_with_passphrase(
             &self,
             config: &SshHostConfig,
-            _passphrase: Option<&str>,
+            passphrase: Option<&str>,
         ) -> Result<(), String> {
+            if let Some(pp) = passphrase.filter(|p| !p.trim().is_empty()) {
+                match config.auth_method.as_str() {
+                    "key" => {
+                        let key = config
+                            .key_path
+                            .as_ref()
+                            .map(|p| shellexpand::tilde(p).to_string());
+                        Self::add_key_to_agent_with_passphrase(key.as_deref(), pp).await?;
+                    }
+                    "ssh_config" => {
+                        Self::add_key_to_agent_with_passphrase(None, pp).await?;
+                    }
+                    _ => {}
+                }
+            }
             self.connect(config).await
+        }
+
+        async fn add_key_to_agent_with_passphrase(
+            key_path: Option<&str>,
+            passphrase: &str,
+        ) -> Result<(), String> {
+            struct AskpassScript {
+                path: std::path::PathBuf,
+            }
+
+            impl AskpassScript {
+                fn new(path: std::path::PathBuf) -> Self {
+                    Self { path }
+                }
+            }
+
+            impl Drop for AskpassScript {
+                fn drop(&mut self) {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+            }
+
+            let askpass_path = AskpassScript::new(
+                std::env::temp_dir()
+                    .join(format!("clawpal-askpass-{}.bat", uuid::Uuid::new_v4())),
+            );
+            let script = "@echo off\r\necho %CLAWPAL_SSH_PASSPHRASE%\r\n";
+            std::fs::write(&askpass_path.path, script)
+                .map_err(|e| format!("Failed to create SSH askpass helper: {e}"))?;
+
+            let mut cmd = Command::new("ssh-add");
+            cmd.arg("-q");
+            if let Some(path) = key_path {
+                cmd.arg(path);
+            }
+            let output_res = cmd
+                .env("SSH_ASKPASS", &askpass_path.path)
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .env(
+                    "DISPLAY",
+                    std::env::var("DISPLAY").unwrap_or_else(|_| "clawpal:0".to_string()),
+                )
+                .env("CLAWPAL_SSH_PASSPHRASE", passphrase)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await;
+
+            let output = output_res.map_err(|e| format!("Failed to run ssh-add: {e}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if stderr.is_empty() {
+                    "SSH key unlock failed. Please verify passphrase and local ssh-agent."
+                        .to_string()
+                } else {
+                    format!("SSH key unlock failed: {stderr}")
+                });
+            }
+            Ok(())
         }
 
         async fn run_ssh_output(

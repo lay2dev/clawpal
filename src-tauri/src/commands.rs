@@ -4413,6 +4413,170 @@ fn push_ssh_config_hosts(
     }
 }
 
+fn parse_quoted_ssh_value(mut value: &str) -> String {
+    value = value.trim();
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+        {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn strip_ssh_comment(value: &str) -> String {
+    let mut output = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            output.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            output.push(ch);
+            escaped = true;
+            continue;
+        }
+
+        if quote.is_some() {
+            if quote == Some(ch) {
+                quote = None;
+            }
+            output.push(ch);
+            continue;
+        }
+
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            output.push(ch);
+            continue;
+        }
+
+        if ch == '#' {
+            break;
+        }
+
+        output.push(ch);
+    }
+
+    output.trim().to_string()
+}
+
+fn parse_ssh_config_entry(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+
+    let mut sep = None;
+    let mut quote: Option<char> = None;
+
+    for (idx, ch) in line.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+
+        if matches!(ch, '"' | '\'') {
+            quote = Some(ch);
+            continue;
+        }
+
+        if ch == '=' {
+            sep = Some((idx, true));
+            break;
+        }
+
+        if ch.is_whitespace() {
+            sep = Some((idx, false));
+            break;
+        }
+    }
+
+    let Some((sep_idx, is_eq)) = sep else {
+        return None;
+    };
+
+    let key = line[..sep_idx].trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return None;
+    }
+
+    let raw_value = if is_eq {
+        line[sep_idx + 1..].trim()
+    } else {
+        line[sep_idx..].trim()
+    };
+    if raw_value.is_empty() {
+        return None;
+    }
+
+    let value = parse_quoted_ssh_value(&strip_ssh_comment(raw_value));
+    if value.is_empty() {
+        None
+    } else {
+        Some((key, value))
+    }
+}
+
+fn split_host_aliases(value: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in value.trim().chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+                continue;
+            }
+            current.push(ch);
+            continue;
+        }
+
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                aliases.push(current.clone());
+                current.clear();
+            }
+            continue;
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        aliases.push(current);
+    }
+
+    aliases
+}
+
 fn parse_ssh_config_hosts(data: &str) -> Vec<SshConfigHostSuggestion> {
     let mut out = Vec::new();
     let mut aliases: Vec<String> = Vec::new();
@@ -4422,20 +4586,8 @@ fn parse_ssh_config_hosts(data: &str) -> Vec<SshConfigHostSuggestion> {
     let mut identity_file: Option<String> = None;
 
     for raw in data.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
+        let Some((key, value)) = parse_ssh_config_entry(raw) else {
             continue;
-        }
-        let mut parts = line.splitn(2, char::is_whitespace);
-        let key = parts.next().unwrap_or("").trim().to_ascii_lowercase();
-        let value = parts.next().unwrap_or("").trim();
-        if key.is_empty() || value.is_empty() {
-            continue;
-        }
-        let value = if let Some(idx) = value.find(" #") {
-            value[..idx].trim()
-        } else {
-            value
         };
 
         if key == "host" {
@@ -4449,9 +4601,7 @@ fn parse_ssh_config_hosts(data: &str) -> Vec<SshConfigHostSuggestion> {
                     &identity_file,
                 );
             }
-            aliases = value
-                .split_whitespace()
-                .map(str::trim)
+            aliases = split_host_aliases(&value)
                 .filter(|v| !v.is_empty())
                 .map(ToOwned::to_owned)
                 .collect();
