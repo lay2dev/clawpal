@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstallSession, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
 
 export const api = {
+  installCreateSession: (method: "local" | "wsl2" | "docker" | "remote_ssh"): Promise<InstallSession> =>
+    invoke("install_create_session", { method }),
+  installGetSession: (sessionId: string): Promise<InstallSession> =>
+    invoke("install_get_session", { sessionId }),
   getSystemStatus: (): Promise<SystemStatus> =>
     invoke("get_system_status", {}),
   getInstanceStatus: (): Promise<InstanceStatus> =>

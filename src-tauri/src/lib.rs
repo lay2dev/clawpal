@@ -39,6 +39,8 @@ use crate::commands::{
     log_app_event,
     remote_read_app_log, remote_read_error_log, remote_read_gateway_log, remote_read_gateway_error_log,
 };
+use crate::install::commands::{install_create_session, install_get_session};
+use crate::install::session_store::InstallSessionStore;
 use crate::bridge_client::BridgeClient;
 use crate::doctor_commands::{
     doctor_port_forward, doctor_read_remote_credentials, doctor_auto_pair,
@@ -84,7 +86,10 @@ pub fn run() {
         .manage(CommandQueue::new())
         .manage(RemoteCommandQueues::new())
         .manage(CliCache::new())
+        .manage(InstallSessionStore::new())
         .invoke_handler(tauri::generate_handler![
+            install_create_session,
+            install_get_session,
             get_system_status,
             get_status_light,
             get_status_extra,
