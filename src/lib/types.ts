@@ -273,6 +273,76 @@ export interface SftpEntry {
   size: number;
 }
 
+export type RescueBotAction = "set" | "activate" | "status" | "deactivate" | "unset";
+
+export interface RescueBotCommandResult {
+  command: string[];
+  output: {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  };
+}
+
+export interface RescueBotManageResult {
+  action: RescueBotAction;
+  profile: string;
+  mainPort: number;
+  rescuePort: number;
+  minRecommendedPort: number;
+  wasAlreadyConfigured: boolean;
+  commands: RescueBotCommandResult[];
+}
+
+export interface RescuePrimaryCheckItem {
+  id: string;
+  title: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface RescuePrimaryIssue {
+  id: string;
+  code: string;
+  severity: "error" | "warn" | "info";
+  message: string;
+  autoFixable: boolean;
+  fixHint?: string;
+  source: "rescue" | "primary";
+}
+
+export interface RescuePrimaryDiagnosisResult {
+  status: "healthy" | "degraded" | "broken";
+  checkedAt: string;
+  targetProfile: string;
+  rescueProfile: string;
+  rescueConfigured: boolean;
+  rescuePort?: number;
+  checks: RescuePrimaryCheckItem[];
+  issues: RescuePrimaryIssue[];
+}
+
+export interface RescuePrimaryRepairStep {
+  id: string;
+  title: string;
+  ok: boolean;
+  detail: string;
+  command?: string[];
+}
+
+export interface RescuePrimaryRepairResult {
+  attemptedAt: string;
+  targetProfile: string;
+  rescueProfile: string;
+  selectedIssueIds: string[];
+  appliedIssueIds: string[];
+  skippedIssueIds: string[];
+  failedIssueIds: string[];
+  steps: RescuePrimaryRepairStep[];
+  before: RescuePrimaryDiagnosisResult;
+  after: RescuePrimaryDiagnosisResult;
+}
+
 // Cron
 
 export type WatchdogJobStatus = "ok" | "pending" | "triggered" | "retrying" | "escalated";

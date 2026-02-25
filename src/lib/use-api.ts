@@ -312,6 +312,18 @@ export function useApi() {
         dispatch(api.restartGateway, api.remoteRestartGateway),
         ["getInstanceStatus", "getStatusExtra"],
       ),
+      manageRescueBot: withInvalidation(
+        dispatch(api.manageRescueBot, api.remoteManageRescueBot),
+        ["getInstanceStatus", "getStatusExtra"],
+      ),
+      diagnosePrimaryViaRescue: dispatch(
+        api.diagnosePrimaryViaRescue,
+        api.remoteDiagnosePrimaryViaRescue,
+      ),
+      repairPrimaryViaRescue: dispatch(
+        api.repairPrimaryViaRescue,
+        api.remoteRepairPrimaryViaRescue,
+      ),
 
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),
