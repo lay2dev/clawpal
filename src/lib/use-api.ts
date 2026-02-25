@@ -278,6 +278,10 @@ export function useApi() {
           api.remoteDeleteModelProfile,
         ),
       ),
+      testModelProfile: dispatch(
+        api.testModelProfile,
+        api.remoteTestModelProfile,
+      ),
       resolveApiKeys: dispatchCached(
         "resolveApiKeys",
         isRemote ? 15_000 : 10_000,

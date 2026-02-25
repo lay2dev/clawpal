@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { toast } from "sonner";
 import { useApi } from "@/lib/use-api";
 import { useTheme } from "@/lib/use-theme";
 import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion, ResolvedApiKey } from "@/lib/types";
@@ -147,6 +148,7 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
+  const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -342,6 +344,44 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
       .catch((e) => setMessage(t('settings.deleteFailed', { error: String(e) })));
   };
 
+  const toggleProfileEnabled = (profile: ModelProfile) => {
+    const nextEnabled = !profile.enabled;
+    ua.upsertModelProfile({
+      ...profile,
+      enabled: nextEnabled,
+    })
+      .then(() => {
+        const message = nextEnabled
+          ? t('settings.profileEnabledMessage', { name: `${profile.provider}/${profile.model}` })
+          : t('settings.profileDisabledMessage', { name: `${profile.provider}/${profile.model}` });
+        toast.success(message);
+        refreshProfiles();
+        onDataChange?.();
+      })
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t('settings.saveFailed', { error: errorText }));
+      });
+  };
+
+  const testProfile = async (profile: ModelProfile) => {
+    setTestingProfileId(profile.id);
+    try {
+      await ua.testModelProfile(profile.id);
+
+      toast.success(
+        t('settings.testProfileSuccess', {
+          name: `${profile.provider}/${profile.model}`,
+        }),
+      );
+    } catch (e) {
+      const errorText = e instanceof Error ? e.message : String(e);
+      toast.error(t('settings.testProfileFailed', { error: errorText }));
+    } finally {
+      setTestingProfileId(null);
+    }
+  };
+
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
@@ -487,6 +527,23 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
                           size="sm"
                           variant="outline"
                           type="button"
+                          onClick={() => testProfile(profile)}
+                          disabled={testingProfileId === profile.id}
+                        >
+                          {testingProfileId === profile.id ? t('settings.testing') : t('settings.test')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          type="button"
+                          onClick={() => toggleProfileEnabled(profile)}
+                        >
+                          {profile.enabled ? t('settings.disable') : t('settings.enable')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          type="button"
                           onClick={() => editProfile(profile)}
                         >
                           {t('settings.edit')}
@@ -609,6 +666,17 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen }: {
                 />
               </div>
             )}
+
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="profile-enabled"
+                checked={form.enabled}
+                onCheckedChange={(checked) =>
+                  setForm((p) => ({ ...p, enabled: checked === true }))
+                }
+              />
+              <Label htmlFor="profile-enabled">{t('settings.profileEnabled')}</Label>
+            </div>
 
             <DialogFooter>
               {form.id && (

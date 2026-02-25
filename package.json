@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:tauri": "bunx @tauri-apps/cli dev",
     "build": "tsc && vite build",
+    "build:tauri": "bunx @tauri-apps/cli build",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "release:dry-run": "bash scripts/release.sh --dry-run",
@@ -27,6 +29,7 @@
     "react-diff-viewer-continued": "^4.1.2",
     "react-dom": "^18.3.1",
     "react-i18next": "^16.5.4",
+    "sonner": "^2.0.1",
     "tailwind-merge": "^3.4.1"
   },
   "devDependencies": {

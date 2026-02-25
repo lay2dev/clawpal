@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
 
 export const api = {
   getSystemStatus: (): Promise<SystemStatus> =>
@@ -30,6 +30,8 @@ export const api = {
     invoke("upsert_model_profile", { profile }),
   deleteModelProfile: (profileId: string): Promise<boolean> =>
     invoke("delete_model_profile", { profileId }),
+  testModelProfile: (profileId: string): Promise<boolean> =>
+    invoke("test_model_profile", { profileId }),
   resolveProviderAuth: (provider: string): Promise<ProviderAuthSuggestion> =>
     invoke("resolve_provider_auth", { provider }),
   resolveApiKeys: (): Promise<ResolvedApiKey[]> =>
@@ -87,6 +89,8 @@ export const api = {
   // SSH host management
   listSshHosts: (): Promise<SshHost[]> =>
     invoke("list_ssh_hosts", {}),
+  listSshConfigHosts: (): Promise<SshConfigHostSuggestion[]> =>
+    invoke("list_ssh_config_hosts", {}),
   upsertSshHost: (host: SshHost): Promise<SshHost> =>
     invoke("upsert_ssh_host", { host }),
   deleteSshHost: (hostId: string): Promise<boolean> =>
@@ -95,6 +99,8 @@ export const api = {
   // SSH connection
   sshConnect: (hostId: string): Promise<boolean> =>
     invoke("ssh_connect", { hostId }),
+  sshConnectWithPassphrase: (hostId: string, passphrase: string): Promise<boolean> =>
+    invoke("ssh_connect_with_passphrase", { hostId, passphrase }),
   sshDisconnect: (hostId: string): Promise<boolean> =>
     invoke("ssh_disconnect", { hostId }),
   sshStatus: (hostId: string): Promise<string> =>
@@ -149,6 +155,8 @@ export const api = {
     invoke("remote_upsert_model_profile", { hostId, profile }),
   remoteDeleteModelProfile: (hostId: string, profileId: string): Promise<boolean> =>
     invoke("remote_delete_model_profile", { hostId, profileId }),
+  remoteTestModelProfile: (hostId: string, profileId: string): Promise<boolean> =>
+    invoke("remote_test_model_profile", { hostId, profileId }),
   remoteResolveApiKeys: (hostId: string): Promise<ResolvedApiKey[]> =>
     invoke("remote_resolve_api_keys", { hostId }),
   remoteExtractModelProfilesFromConfig: (hostId: string): Promise<{ created: number; reused: number; skippedInvalid: number }> =>
