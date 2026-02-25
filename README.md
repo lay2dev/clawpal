@@ -4,6 +4,7 @@ A desktop companion app for [OpenClaw](https://github.com/openclaw/openclaw) —
 
 ## Features
 
+- **Install OpenClaw** — Start from guided installation paths (Local / WSL2 / Docker / Remote SSH), run step-by-step precheck/install/init/verify, then continue directly to config workflows
 - **Recipes** — Browse and apply pre-built configuration templates with parameter forms, live diffs, and automatic rollback on failure
 - **Agent Management** — Create, configure, and monitor your OpenClaw agents at a glance
 - **Model Profiles** — Set up API keys, browse the model catalog, and switch the global default model in one click

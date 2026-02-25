@@ -45,3 +45,12 @@
 - [x] Memory 单文件删除与清空可用
 - [x] Session 文件列表可见（active + archive）
 - [x] Session 单文件删除与按 agent/全部清空可用
+
+## 7. OpenClaw 安装引导（v0.4）
+
+- [x] Home 提供 Install OpenClaw 入口
+- [x] 支持四种安装方式选择：Local / WSL2 / Docker / Remote SSH
+- [x] 创建安装会话后可执行 precheck/install/init/verify 四步流程
+- [x] 每步显示执行结果、错误态重试入口、命令摘要
+- [x] 完成 `ready` 后可直接衔接 Doctor/Recipes 配置流程
+- [ ] 四种方式接入真实执行器（当前为可审计命令计划与流程骨架）
