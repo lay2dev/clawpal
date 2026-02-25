@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
 
 export const api = {
   getSystemStatus: (): Promise<SystemStatus> =>
@@ -84,6 +84,8 @@ export const api = {
     invoke("manage_rescue_bot", { action, profile: profile ?? null, rescuePort: rescuePort ?? null }),
   diagnosePrimaryViaRescue: (targetProfile?: string, rescueProfile?: string): Promise<RescuePrimaryDiagnosisResult> =>
     invoke("diagnose_primary_via_rescue", { targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null }),
+  repairPrimaryViaRescue: (targetProfile?: string, rescueProfile?: string, issueIds?: string[]): Promise<RescuePrimaryRepairResult> =>
+    invoke("repair_primary_via_rescue", { targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null, issueIds: issueIds ?? null }),
   setGlobalModel: (modelValue: string | null): Promise<boolean> =>
     invoke("set_global_model", { modelValue }),
   setAgentModel: (agentId: string, modelValue: string | null): Promise<boolean> =>
@@ -129,6 +131,8 @@ export const api = {
     invoke("remote_manage_rescue_bot", { hostId, action, profile: profile ?? null, rescuePort: rescuePort ?? null }),
   remoteDiagnosePrimaryViaRescue: (hostId: string, targetProfile?: string, rescueProfile?: string): Promise<RescuePrimaryDiagnosisResult> =>
     invoke("remote_diagnose_primary_via_rescue", { hostId, targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null }),
+  remoteRepairPrimaryViaRescue: (hostId: string, targetProfile?: string, rescueProfile?: string, issueIds?: string[]): Promise<RescuePrimaryRepairResult> =>
+    invoke("remote_repair_primary_via_rescue", { hostId, targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null, issueIds: issueIds ?? null }),
   remoteApplyConfigPatch: (hostId: string, patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("remote_apply_config_patch", { hostId, patchTemplate, params }),
   remoteListDiscordGuildChannels: (hostId: string): Promise<DiscordGuildChannel[]> =>

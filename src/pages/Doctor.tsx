@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
-import type { RescuePrimaryDiagnosisResult, SshHost } from "@/lib/types";
+import type { RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, SshHost } from "@/lib/types";
 import {
   Card,
   CardHeader,
@@ -60,6 +60,9 @@ export function Doctor({ sshHosts }: DoctorProps) {
   const [primaryCheckLoading, setPrimaryCheckLoading] = useState(false);
   const [primaryCheckResult, setPrimaryCheckResult] = useState<RescuePrimaryDiagnosisResult | null>(null);
   const [primaryCheckError, setPrimaryCheckError] = useState<string | null>(null);
+  const [primaryRepairing, setPrimaryRepairing] = useState(false);
+  const [primaryRepairResult, setPrimaryRepairResult] = useState<RescuePrimaryRepairResult | null>(null);
+  const [primaryRepairError, setPrimaryRepairError] = useState<string | null>(null);
 
   // Reset doctor agent when switching instances
   useEffect(() => {
@@ -72,6 +75,8 @@ export function Doctor({ sshHosts }: DoctorProps) {
     setRescuePort(null);
     setPrimaryCheckResult(null);
     setPrimaryCheckError(null);
+    setPrimaryRepairResult(null);
+    setPrimaryRepairError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
 
@@ -270,6 +275,8 @@ export function Doctor({ sshHosts }: DoctorProps) {
     }
     setPrimaryCheckLoading(true);
     setPrimaryCheckError(null);
+    setPrimaryRepairError(null);
+    setPrimaryRepairResult(null);
     try {
       const result = await ua.diagnosePrimaryViaRescue("primary", rescueProfile);
       setPrimaryCheckResult(result);
@@ -292,6 +299,39 @@ export function Doctor({ sshHosts }: DoctorProps) {
     const value = new Date(checkedAt);
     if (Number.isNaN(value.getTime())) return checkedAt;
     return value.toLocaleString();
+  };
+
+  const countSafeFixableIssues = (result: RescuePrimaryDiagnosisResult | null) =>
+    result?.issues.filter((issue) => issue.source === "primary" && issue.autoFixable).length ?? 0;
+
+  const handleRepairPrimaryViaRescue = async () => {
+    if (isRemote && !isConnected) {
+      setPrimaryRepairError(t("doctor.rescueBotConnectRequired"));
+      return;
+    }
+    setPrimaryRepairing(true);
+    setPrimaryRepairError(null);
+    setPrimaryRepairResult(null);
+    try {
+      const selectedIssueIds =
+        primaryCheckResult?.issues
+          .filter((issue) => issue.source === "primary" && issue.autoFixable)
+          .map((issue) => issue.id) ?? [];
+      const result = await ua.repairPrimaryViaRescue(
+        "primary",
+        rescueProfile,
+        selectedIssueIds.length > 0 ? selectedIssueIds : undefined,
+      );
+      setPrimaryRepairResult(result);
+      setPrimaryCheckResult(result.after);
+      setPrimaryCheckError(null);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setPrimaryRepairResult(null);
+      setPrimaryRepairError(t("doctor.primaryRepairFailed", { error: text }));
+    } finally {
+      setPrimaryRepairing(false);
+    }
   };
 
   useEffect(() => {
@@ -375,20 +415,47 @@ export function Doctor({ sshHosts }: DoctorProps) {
         <CardContent>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <p className="text-sm text-muted-foreground">{t("doctor.primaryRecoveryHint")}</p>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleCheckPrimaryViaRescue}
-              disabled={primaryCheckLoading || (isRemote && !isConnected)}
-            >
-              {primaryCheckLoading
-                ? t("doctor.primaryChecking")
-                : t("doctor.primaryCheckNow")}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleCheckPrimaryViaRescue}
+                disabled={primaryCheckLoading || primaryRepairing || (isRemote && !isConnected)}
+              >
+                {primaryCheckLoading
+                  ? t("doctor.primaryChecking")
+                  : t("doctor.primaryCheckNow")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRepairPrimaryViaRescue}
+                disabled={
+                  primaryCheckLoading
+                  || primaryRepairing
+                  || !primaryCheckResult
+                  || (isRemote && !isConnected)
+                }
+              >
+                {primaryRepairing
+                  ? t("doctor.primaryRepairing")
+                  : t("doctor.primaryRepairNow", { count: countSafeFixableIssues(primaryCheckResult) })}
+              </Button>
+            </div>
           </div>
           {primaryCheckError && (
             <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <div>{primaryCheckError}</div>
+              <div className="mt-2">
+                <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
+                  {t("doctor.viewGatewayLogs")}
+                </Button>
+              </div>
+            </div>
+          )}
+          {primaryRepairError && (
+            <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <div>{primaryRepairError}</div>
               <div className="mt-2">
                 <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
                   {t("doctor.viewGatewayLogs")}
@@ -456,9 +523,43 @@ export function Doctor({ sshHosts }: DoctorProps) {
                   ))}
                 </div>
               )}
-              <div className="mt-3 text-xs text-muted-foreground">
-                {t("doctor.primaryRepairComingSoon")}
-              </div>
+              {primaryRepairResult && (
+                <div className="mt-4 rounded-md border border-border/60 bg-background/70 p-3">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {t("doctor.primaryRepairSummary")}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <Badge variant="outline">
+                      {t("doctor.primaryRepairSelected", { count: primaryRepairResult.selectedIssueIds.length })}
+                    </Badge>
+                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-700 dark:text-emerald-300">
+                      {t("doctor.primaryRepairApplied", { count: primaryRepairResult.appliedIssueIds.length })}
+                    </Badge>
+                    <Badge variant="outline">
+                      {t("doctor.primaryRepairSkipped", { count: primaryRepairResult.skippedIssueIds.length })}
+                    </Badge>
+                    <Badge variant={primaryRepairResult.failedIssueIds.length > 0 ? "destructive" : "outline"}>
+                      {t("doctor.primaryRepairFailedCount", { count: primaryRepairResult.failedIssueIds.length })}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {t("doctor.primaryRecheckedAt", { time: formatCheckedAt(primaryRepairResult.after.checkedAt) })}
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {primaryRepairResult.steps.map((step) => (
+                      <div key={step.id} className="rounded-md border border-border/50 bg-muted/20 p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm">{step.title}</div>
+                          <Badge variant={step.ok ? "outline" : "destructive"} className="text-[10px]">
+                            {step.ok ? t("doctor.primaryCheckPass") : t("doctor.primaryCheckFail")}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">{step.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

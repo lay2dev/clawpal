@@ -189,6 +189,31 @@ pub struct RescuePrimaryDiagnosisResult {
     pub issues: Vec<RescuePrimaryIssue>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescuePrimaryRepairStep {
+    pub id: String,
+    pub title: String,
+    pub ok: bool,
+    pub detail: String,
+    pub command: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescuePrimaryRepairResult {
+    pub attempted_at: String,
+    pub target_profile: String,
+    pub rescue_profile: String,
+    pub selected_issue_ids: Vec<String>,
+    pub applied_issue_ids: Vec<String>,
+    pub skipped_issue_ids: Vec<String>,
+    pub failed_issue_ids: Vec<String>,
+    pub steps: Vec<RescuePrimaryRepairStep>,
+    pub before: RescuePrimaryDiagnosisResult,
+    pub after: RescuePrimaryDiagnosisResult,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractModelProfilesResult {
@@ -1989,6 +2014,25 @@ pub async fn diagnose_primary_via_rescue(
 }
 
 #[tauri::command]
+pub async fn repair_primary_via_rescue(
+    target_profile: Option<String>,
+    rescue_profile: Option<String>,
+    issue_ids: Option<Vec<String>>,
+) -> Result<RescuePrimaryRepairResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
+        let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+        repair_primary_via_rescue_local(
+            &target_profile,
+            &rescue_profile,
+            issue_ids.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> {
     let paths = resolve_paths();
     let index = list_snapshots(&paths.metadata_path)?;
@@ -2596,6 +2640,385 @@ async fn diagnose_primary_via_rescue_remote(
         &primary_doctor_output,
         &primary_gateway_output,
     ))
+}
+
+fn collect_safe_primary_issue_ids(
+    diagnosis: &RescuePrimaryDiagnosisResult,
+    requested_ids: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut seen_safe = HashSet::new();
+    let safe_ids = diagnosis
+        .issues
+        .iter()
+        .filter(|issue| issue.source == "primary" && issue.auto_fixable)
+        .filter_map(|issue| {
+            if seen_safe.insert(issue.id.clone()) {
+                Some(issue.id.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if requested_ids.is_empty() {
+        return (safe_ids, Vec::new());
+    }
+
+    let safe_set = safe_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut selected = Vec::new();
+    let mut skipped = Vec::new();
+    let mut seen_requested = HashSet::new();
+    for id in requested_ids {
+        if !seen_requested.insert(id.clone()) {
+            continue;
+        }
+        if safe_set.contains(id) {
+            selected.push(id.clone());
+        } else {
+            skipped.push(id.clone());
+        }
+    }
+    (selected, skipped)
+}
+
+fn build_primary_issue_fix_command(
+    target_profile: &str,
+    issue_id: &str,
+) -> Option<(String, Vec<String>)> {
+    match issue_id {
+        "field.agents" => Some((
+            "Initialize agents.defaults.model".into(),
+            build_profile_command(
+                target_profile,
+                &[
+                    "config",
+                    "set",
+                    "agents.defaults.model",
+                    "anthropic/claude-sonnet-4-5",
+                    "--json",
+                ],
+            ),
+        )),
+        "json.syntax" => Some((
+            "Normalize primary profile config".into(),
+            build_profile_command(
+                target_profile,
+                &[
+                    "config",
+                    "set",
+                    "agents.defaults.model",
+                    "anthropic/claude-sonnet-4-5",
+                    "--json",
+                ],
+            ),
+        )),
+        "field.port" => Some((
+            "Normalize gateway port".into(),
+            build_profile_command(
+                target_profile,
+                &["config", "set", "gateway.port", "18789", "--json"],
+            ),
+        )),
+        _ => None,
+    }
+}
+
+fn build_step_detail(command: &[String], output: &OpenclawCommandOutput) -> String {
+    if output.exit_code == 0 {
+        return command_detail(output);
+    }
+    command_failure_message(command, output)
+}
+
+fn run_local_profile_restart_with_fallback(
+    profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<bool, String> {
+    let restart_command = build_profile_command(profile, &["gateway", "restart"]);
+    let restart_output = run_openclaw_dynamic(&restart_command)?;
+    let restart_ok = restart_output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.restart".into(),
+        title: "Restart primary gateway".into(),
+        ok: restart_ok,
+        detail: build_step_detail(&restart_command, &restart_output),
+        command: Some(restart_command.clone()),
+    });
+    if restart_ok {
+        return Ok(true);
+    }
+
+    if !is_gateway_restart_timeout(&restart_output) {
+        return Ok(false);
+    }
+
+    let stop_command = build_profile_command(profile, &["gateway", "stop"]);
+    let stop_output = run_openclaw_dynamic(&stop_command)?;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.stop".into(),
+        title: "Stop primary gateway (restart fallback)".into(),
+        ok: stop_output.exit_code == 0,
+        detail: build_step_detail(&stop_command, &stop_output),
+        command: Some(stop_command),
+    });
+
+    let start_command = build_profile_command(profile, &["gateway", "start"]);
+    let start_output = run_openclaw_dynamic(&start_command)?;
+    let start_ok = start_output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.start".into(),
+        title: "Start primary gateway (restart fallback)".into(),
+        ok: start_ok,
+        detail: build_step_detail(&start_command, &start_output),
+        command: Some(start_command),
+    });
+    Ok(start_ok)
+}
+
+async fn run_remote_profile_restart_with_fallback(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<bool, String> {
+    let restart_command = build_profile_command(profile, &["gateway", "restart"]);
+    let restart_output = run_remote_openclaw_dynamic(pool, host_id, restart_command.clone()).await?;
+    let restart_ok = restart_output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.restart".into(),
+        title: "Restart primary gateway".into(),
+        ok: restart_ok,
+        detail: build_step_detail(&restart_command, &restart_output),
+        command: Some(restart_command.clone()),
+    });
+    if restart_ok {
+        return Ok(true);
+    }
+
+    if !is_gateway_restart_timeout(&restart_output) {
+        return Ok(false);
+    }
+
+    let stop_command = build_profile_command(profile, &["gateway", "stop"]);
+    let stop_output = run_remote_openclaw_dynamic(pool, host_id, stop_command.clone()).await?;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.stop".into(),
+        title: "Stop primary gateway (restart fallback)".into(),
+        ok: stop_output.exit_code == 0,
+        detail: build_step_detail(&stop_command, &stop_output),
+        command: Some(stop_command),
+    });
+
+    let start_command = build_profile_command(profile, &["gateway", "start"]);
+    let start_output = run_remote_openclaw_dynamic(pool, host_id, start_command.clone()).await?;
+    let start_ok = start_output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.gateway.start".into(),
+        title: "Start primary gateway (restart fallback)".into(),
+        ok: start_ok,
+        detail: build_step_detail(&start_command, &start_output),
+        command: Some(start_command),
+    });
+    Ok(start_ok)
+}
+
+fn repair_primary_via_rescue_local(
+    target_profile: &str,
+    rescue_profile: &str,
+    issue_ids: Vec<String>,
+) -> Result<RescuePrimaryRepairResult, String> {
+    let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
+    let before = diagnose_primary_via_rescue_local(target_profile, rescue_profile)?;
+    let (selected_issue_ids, mut skipped_issue_ids) = collect_safe_primary_issue_ids(&before, &issue_ids);
+    let mut applied_issue_ids = Vec::new();
+    let mut failed_issue_ids = Vec::new();
+    let mut steps = Vec::new();
+
+    if !before.rescue_configured {
+        steps.push(RescuePrimaryRepairStep {
+            id: "precheck.rescue_configured".into(),
+            title: "Rescue profile availability".into(),
+            ok: false,
+            detail: format!(
+                "Rescue profile \"{}\" is not configured; activate it before repair",
+                before.rescue_profile
+            ),
+            command: None,
+        });
+        let after = before.clone();
+        return Ok(RescuePrimaryRepairResult {
+            attempted_at,
+            target_profile: target_profile.to_string(),
+            rescue_profile: rescue_profile.to_string(),
+            selected_issue_ids,
+            applied_issue_ids,
+            skipped_issue_ids,
+            failed_issue_ids,
+            steps,
+            before,
+            after,
+        });
+    }
+
+    if selected_issue_ids.is_empty() {
+        steps.push(RescuePrimaryRepairStep {
+            id: "repair.noop".into(),
+            title: "No safe auto-fixes available".into(),
+            ok: true,
+            detail: "No auto-fixable primary issues were selected".into(),
+            command: None,
+        });
+    } else {
+        for issue_id in &selected_issue_ids {
+            let Some((title, command)) = build_primary_issue_fix_command(target_profile, issue_id) else {
+                skipped_issue_ids.push(issue_id.clone());
+                steps.push(RescuePrimaryRepairStep {
+                    id: format!("repair.{issue_id}"),
+                    title: "Skip unsupported issue fix".into(),
+                    ok: false,
+                    detail: format!("No safe repair mapping for issue \"{issue_id}\""),
+                    command: None,
+                });
+                continue;
+            };
+            let output = run_openclaw_dynamic(&command)?;
+            let ok = output.exit_code == 0;
+            steps.push(RescuePrimaryRepairStep {
+                id: format!("repair.{issue_id}"),
+                title,
+                ok,
+                detail: build_step_detail(&command, &output),
+                command: Some(command),
+            });
+            if ok {
+                applied_issue_ids.push(issue_id.clone());
+            } else {
+                failed_issue_ids.push(issue_id.clone());
+            }
+        }
+    }
+
+    if !applied_issue_ids.is_empty() {
+        let restart_ok = run_local_profile_restart_with_fallback(target_profile, &mut steps)?;
+        if !restart_ok {
+            failed_issue_ids.push("primary.gateway.restart".into());
+        }
+    }
+
+    let after = diagnose_primary_via_rescue_local(target_profile, rescue_profile)?;
+    Ok(RescuePrimaryRepairResult {
+        attempted_at,
+        target_profile: target_profile.to_string(),
+        rescue_profile: rescue_profile.to_string(),
+        selected_issue_ids,
+        applied_issue_ids,
+        skipped_issue_ids,
+        failed_issue_ids,
+        steps,
+        before,
+        after,
+    })
+}
+
+async fn repair_primary_via_rescue_remote(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    target_profile: &str,
+    rescue_profile: &str,
+    issue_ids: Vec<String>,
+) -> Result<RescuePrimaryRepairResult, String> {
+    let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
+    let before = diagnose_primary_via_rescue_remote(pool, host_id, target_profile, rescue_profile).await?;
+    let (selected_issue_ids, mut skipped_issue_ids) = collect_safe_primary_issue_ids(&before, &issue_ids);
+    let mut applied_issue_ids = Vec::new();
+    let mut failed_issue_ids = Vec::new();
+    let mut steps = Vec::new();
+
+    if !before.rescue_configured {
+        steps.push(RescuePrimaryRepairStep {
+            id: "precheck.rescue_configured".into(),
+            title: "Rescue profile availability".into(),
+            ok: false,
+            detail: format!(
+                "Rescue profile \"{}\" is not configured; activate it before repair",
+                before.rescue_profile
+            ),
+            command: None,
+        });
+        let after = before.clone();
+        return Ok(RescuePrimaryRepairResult {
+            attempted_at,
+            target_profile: target_profile.to_string(),
+            rescue_profile: rescue_profile.to_string(),
+            selected_issue_ids,
+            applied_issue_ids,
+            skipped_issue_ids,
+            failed_issue_ids,
+            steps,
+            before,
+            after,
+        });
+    }
+
+    if selected_issue_ids.is_empty() {
+        steps.push(RescuePrimaryRepairStep {
+            id: "repair.noop".into(),
+            title: "No safe auto-fixes available".into(),
+            ok: true,
+            detail: "No auto-fixable primary issues were selected".into(),
+            command: None,
+        });
+    } else {
+        for issue_id in &selected_issue_ids {
+            let Some((title, command)) = build_primary_issue_fix_command(target_profile, issue_id) else {
+                skipped_issue_ids.push(issue_id.clone());
+                steps.push(RescuePrimaryRepairStep {
+                    id: format!("repair.{issue_id}"),
+                    title: "Skip unsupported issue fix".into(),
+                    ok: false,
+                    detail: format!("No safe repair mapping for issue \"{issue_id}\""),
+                    command: None,
+                });
+                continue;
+            };
+            let output = run_remote_openclaw_dynamic(pool, host_id, command.clone()).await?;
+            let ok = output.exit_code == 0;
+            steps.push(RescuePrimaryRepairStep {
+                id: format!("repair.{issue_id}"),
+                title,
+                ok,
+                detail: build_step_detail(&command, &output),
+                command: Some(command),
+            });
+            if ok {
+                applied_issue_ids.push(issue_id.clone());
+            } else {
+                failed_issue_ids.push(issue_id.clone());
+            }
+        }
+    }
+
+    if !applied_issue_ids.is_empty() {
+        let restart_ok =
+            run_remote_profile_restart_with_fallback(pool, host_id, target_profile, &mut steps).await?;
+        if !restart_ok {
+            failed_issue_ids.push("primary.gateway.restart".into());
+        }
+    }
+
+    let after = diagnose_primary_via_rescue_remote(pool, host_id, target_profile, rescue_profile).await?;
+    Ok(RescuePrimaryRepairResult {
+        attempted_at,
+        target_profile: target_profile.to_string(),
+        rescue_profile: rescue_profile.to_string(),
+        selected_issue_ids,
+        applied_issue_ids,
+        skipped_issue_ids,
+        failed_issue_ids,
+        steps,
+        before,
+        after,
+    })
 }
 
 fn resolve_gateway_port_from_config(cfg: &Value) -> u16 {
@@ -4552,6 +4975,80 @@ mod rescue_bot_tests {
         ];
         assert_eq!(classify_rescue_primary_status(&issues), "broken");
     }
+
+    #[test]
+    fn test_collect_safe_primary_issue_ids_filters_non_primary_and_non_fixable() {
+        let diagnosis = RescuePrimaryDiagnosisResult {
+            status: "degraded".into(),
+            checked_at: "2026-02-25T00:00:00Z".into(),
+            target_profile: "primary".into(),
+            rescue_profile: "rescue".into(),
+            rescue_configured: true,
+            rescue_port: Some(19789),
+            checks: Vec::new(),
+            issues: vec![
+                RescuePrimaryIssue {
+                    id: "field.agents".into(),
+                    code: "required.field".into(),
+                    severity: "warn".into(),
+                    message: "missing agents".into(),
+                    auto_fixable: true,
+                    fix_hint: None,
+                    source: "primary".into(),
+                },
+                RescuePrimaryIssue {
+                    id: "field.port".into(),
+                    code: "invalid.port".into(),
+                    severity: "error".into(),
+                    message: "port invalid".into(),
+                    auto_fixable: false,
+                    fix_hint: None,
+                    source: "primary".into(),
+                },
+                RescuePrimaryIssue {
+                    id: "rescue.gateway.unhealthy".into(),
+                    code: "rescue.gateway.unhealthy".into(),
+                    severity: "warn".into(),
+                    message: "rescue unhealthy".into(),
+                    auto_fixable: true,
+                    fix_hint: None,
+                    source: "rescue".into(),
+                },
+            ],
+        };
+
+        let (selected, skipped) = collect_safe_primary_issue_ids(
+            &diagnosis,
+            &[
+                "field.agents".into(),
+                "field.port".into(),
+                "rescue.gateway.unhealthy".into(),
+            ],
+        );
+        assert_eq!(selected, vec!["field.agents"]);
+        assert_eq!(skipped, vec!["field.port", "rescue.gateway.unhealthy"]);
+    }
+
+    #[test]
+    fn test_build_primary_issue_fix_command_for_field_port() {
+        let (_, command) = build_primary_issue_fix_command("primary", "field.port")
+            .expect("field.port should have safe fix command");
+        assert_eq!(
+            command,
+            vec![
+                "--profile",
+                "primary",
+                "config",
+                "set",
+                "gateway.port",
+                "18789",
+                "--json"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+        );
+    }
 }
 
 fn collect_channel_nodes(cfg: &Value) -> Vec<ChannelNode> {
@@ -6234,6 +6731,26 @@ pub async fn remote_diagnose_primary_via_rescue(
     let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile).await
+}
+
+#[tauri::command]
+pub async fn remote_repair_primary_via_rescue(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    target_profile: Option<String>,
+    rescue_profile: Option<String>,
+    issue_ids: Option<Vec<String>>,
+) -> Result<RescuePrimaryRepairResult, String> {
+    let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
+    let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+    repair_primary_via_rescue_remote(
+        &pool,
+        &host_id,
+        &target_profile,
+        &rescue_profile,
+        issue_ids.unwrap_or_default(),
+    )
+    .await
 }
 
 async fn run_remote_rescue_bot_command(

@@ -320,6 +320,10 @@ export function useApi() {
         api.diagnosePrimaryViaRescue,
         api.remoteDiagnosePrimaryViaRescue,
       ),
+      repairPrimaryViaRescue: dispatch(
+        api.repairPrimaryViaRescue,
+        api.remoteRepairPrimaryViaRescue,
+      ),
 
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),

@@ -322,6 +322,27 @@ export interface RescuePrimaryDiagnosisResult {
   issues: RescuePrimaryIssue[];
 }
 
+export interface RescuePrimaryRepairStep {
+  id: string;
+  title: string;
+  ok: boolean;
+  detail: string;
+  command?: string[];
+}
+
+export interface RescuePrimaryRepairResult {
+  attemptedAt: string;
+  targetProfile: string;
+  rescueProfile: string;
+  selectedIssueIds: string[];
+  appliedIssueIds: string[];
+  skippedIssueIds: string[];
+  failedIssueIds: string[];
+  steps: RescuePrimaryRepairStep[];
+  before: RescuePrimaryDiagnosisResult;
+  after: RescuePrimaryDiagnosisResult;
+}
+
 // Cron
 
 export type WatchdogJobStatus = "ok" | "pending" | "triggered" | "retrying" | "escalated";
