@@ -4,7 +4,12 @@ import { api } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
-import type { RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, SshHost } from "@/lib/types";
+import type {
+  RescuePrimaryDiagnosisResult,
+  RescuePrimaryIssue,
+  RescuePrimaryRepairResult,
+  SshHost,
+} from "@/lib/types";
 import {
   Card,
   CardHeader,
@@ -63,6 +68,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
   const [primaryCheckResult, setPrimaryCheckResult] = useState<RescuePrimaryDiagnosisResult | null>(null);
   const [primaryCheckError, setPrimaryCheckError] = useState<string | null>(null);
   const [primaryRepairing, setPrimaryRepairing] = useState(false);
+  const [primaryRepairingIssueId, setPrimaryRepairingIssueId] = useState<string | null>(null);
   const [primaryRepairResult, setPrimaryRepairResult] = useState<RescuePrimaryRepairResult | null>(null);
   const [primaryRepairError, setPrimaryRepairError] = useState<string | null>(null);
 
@@ -81,6 +87,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
     setRescuePort(null);
     setPrimaryCheckResult(null);
     setPrimaryCheckError(null);
+    setPrimaryRepairingIssueId(null);
     setPrimaryRepairResult(null);
     setPrimaryRepairError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,6 +385,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
       return;
     }
     setPrimaryRepairing(true);
+    setPrimaryRepairingIssueId(null);
     setPrimaryRepairError(null);
     setPrimaryRepairResult(null);
     try {
@@ -399,6 +407,34 @@ export function Doctor({ sshHosts }: DoctorProps) {
       setPrimaryRepairError(t("doctor.primaryRepairFailed", { error: text }));
     } finally {
       setPrimaryRepairing(false);
+      setPrimaryRepairingIssueId(null);
+    }
+  };
+
+  const handleRepairPrimaryIssue = async (issue: RescuePrimaryIssue) => {
+    if (!issue.autoFixable || issue.source !== "primary") {
+      return;
+    }
+    if (isRemote && !isConnected) {
+      setPrimaryRepairError(t("doctor.rescueBotConnectRequired"));
+      return;
+    }
+    setPrimaryRepairing(true);
+    setPrimaryRepairingIssueId(issue.id);
+    setPrimaryRepairError(null);
+    setPrimaryRepairResult(null);
+    try {
+      const result = await ua.repairPrimaryViaRescue("primary", rescueProfile, [issue.id]);
+      setPrimaryRepairResult(result);
+      setPrimaryCheckResult(result.after);
+      setPrimaryCheckError(null);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setPrimaryRepairResult(null);
+      setPrimaryRepairError(t("doctor.primaryRepairFailed", { error: text }));
+    } finally {
+      setPrimaryRepairing(false);
+      setPrimaryRepairingIssueId(null);
     }
   };
 
@@ -583,7 +619,37 @@ export function Doctor({ sshHosts }: DoctorProps) {
                 {primaryCheckResult.checks.map((check) => (
                   <div key={check.id} className="rounded-md border border-border/50 bg-background/60 p-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm">{check.title}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm">{check.title}</div>
+                        {!check.ok && check.id === "rescue.profile.configured" && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[11px]"
+                            onClick={handleActivateRescueBot}
+                            disabled={
+                              rescueActivating
+                              || rescueDeactivating
+                              || rescueUnsetting
+                              || rescueStatusChecking
+                              || (isRemote && !isConnected)
+                            }
+                          >
+                            {rescueActivating ? t("doctor.activatingRescueBot") : t("doctor.activateRescueBot")}
+                          </Button>
+                        )}
+                        {!check.ok && check.id.startsWith("primary.") && countSafeFixableIssues(primaryCheckResult) > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[11px]"
+                            onClick={handleRepairPrimaryViaRescue}
+                            disabled={primaryCheckLoading || primaryRepairing || (isRemote && !isConnected)}
+                          >
+                            {primaryRepairing ? t("doctor.primaryRepairing") : t("doctor.primaryQuickFix")}
+                          </Button>
+                        )}
+                      </div>
                       <Badge variant={check.ok ? "outline" : "destructive"} className="text-[10px]">
                         {check.ok ? t("doctor.primaryCheckPass") : t("doctor.primaryCheckFail")}
                       </Badge>
@@ -604,7 +670,24 @@ export function Doctor({ sshHosts }: DoctorProps) {
                   {primaryCheckResult.issues.map((issue) => (
                     <div key={issue.id} className="rounded-md border border-destructive/30 bg-destructive/5 p-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm">{issue.message}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-sm">{issue.message}</div>
+                          {issue.source === "primary" && issue.autoFixable && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-[11px]"
+                              onClick={() => {
+                                void handleRepairPrimaryIssue(issue);
+                              }}
+                              disabled={primaryCheckLoading || primaryRepairing || (isRemote && !isConnected)}
+                            >
+                              {primaryRepairing && primaryRepairingIssueId === issue.id
+                                ? t("doctor.primaryIssueFixing")
+                                : t("doctor.primaryIssueFix")}
+                            </Button>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1">
                           <Badge variant="outline" className="text-[10px]">
                             {issue.source === "rescue"

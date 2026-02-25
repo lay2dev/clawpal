@@ -2551,7 +2551,7 @@ fn build_rescue_primary_diagnosis(
             severity: "error".into(),
             message: "Primary doctor command failed".into(),
             auto_fixable: false,
-            fix_hint: Some("Run `openclaw --profile primary doctor --json` manually".into()),
+            fix_hint: Some("Review doctor output in this check and open gateway logs for details".into()),
             source: "primary".into(),
         });
     }
@@ -2601,8 +2601,7 @@ fn diagnose_primary_via_rescue_local(
     } else {
         None
     };
-    let primary_doctor_command = build_profile_command(target_profile, &["doctor", "--json"]);
-    let primary_doctor_output = run_openclaw_dynamic(&primary_doctor_command)?;
+    let primary_doctor_output = run_local_primary_doctor_with_fallback(target_profile)?;
     let primary_gateway_command =
         build_profile_command(target_profile, &["gateway", "status", "--no-probe", "--json"]);
     let primary_gateway_output = run_openclaw_dynamic(&primary_gateway_command)?;
@@ -2632,8 +2631,8 @@ async fn diagnose_primary_via_rescue_remote(
     } else {
         None
     };
-    let primary_doctor_command = build_profile_command(target_profile, &["doctor", "--json"]);
-    let primary_doctor_output = run_remote_openclaw_dynamic(pool, host_id, primary_doctor_command).await?;
+    let primary_doctor_output =
+        run_remote_primary_doctor_with_fallback(pool, host_id, target_profile).await?;
     let primary_gateway_command =
         build_profile_command(target_profile, &["gateway", "status", "--no-probe", "--json"]);
     let primary_gateway_output = run_remote_openclaw_dynamic(pool, host_id, primary_gateway_command).await?;
@@ -3243,6 +3242,16 @@ fn is_gateway_restart_timeout(output: &OpenclawCommandOutput) -> bool {
         || (details.contains("timed out") && details.contains("health check"))
 }
 
+fn is_doctor_json_option_unsupported(output: &OpenclawCommandOutput) -> bool {
+    let details = format!("{}\n{}", output.stderr, output.stdout).to_ascii_lowercase();
+    (details.contains("unknown option")
+        || details.contains("unknown argument")
+        || details.contains("unrecognized option")
+        || details.contains("unexpected argument")
+        || details.contains("no such option"))
+        && details.contains("--json")
+}
+
 fn is_rescue_cleanup_noop(
     action: RescueBotAction,
     command: &[String],
@@ -3286,6 +3295,16 @@ fn is_rescue_cleanup_noop(
 fn run_local_rescue_bot_command(command: Vec<String>) -> Result<RescueBotCommandResult, String> {
     let output = run_openclaw_dynamic(&command)?;
     Ok(RescueBotCommandResult { command, output })
+}
+
+fn run_local_primary_doctor_with_fallback(profile: &str) -> Result<OpenclawCommandOutput, String> {
+    let json_command = build_profile_command(profile, &["doctor", "--json"]);
+    let output = run_openclaw_dynamic(&json_command)?;
+    if output.exit_code != 0 && is_doctor_json_option_unsupported(&output) {
+        let plain_command = build_profile_command(profile, &["doctor"]);
+        return run_openclaw_dynamic(&plain_command);
+    }
+    Ok(output)
 }
 
 fn run_local_gateway_restart_fallback(
@@ -5085,6 +5104,26 @@ mod rescue_bot_tests {
             exit_code: 1,
         };
         assert!(!is_gateway_restart_timeout(&output));
+    }
+
+    #[test]
+    fn test_is_doctor_json_option_unsupported_matches_unknown_option() {
+        let output = OpenclawCommandOutput {
+            stdout: String::new(),
+            stderr: "error: unknown option '--json'".into(),
+            exit_code: 1,
+        };
+        assert!(is_doctor_json_option_unsupported(&output));
+    }
+
+    #[test]
+    fn test_is_doctor_json_option_unsupported_ignores_other_failures() {
+        let output = OpenclawCommandOutput {
+            stdout: String::new(),
+            stderr: "doctor command failed to connect".into(),
+            exit_code: 1,
+        };
+        assert!(!is_doctor_json_option_unsupported(&output));
     }
 
     #[test]
@@ -6942,6 +6981,20 @@ async fn run_remote_openclaw_dynamic(
     command: Vec<String>,
 ) -> Result<OpenclawCommandOutput, String> {
     Ok(run_remote_rescue_bot_command(pool, host_id, command).await?.output)
+}
+
+async fn run_remote_primary_doctor_with_fallback(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    profile: &str,
+) -> Result<OpenclawCommandOutput, String> {
+    let json_command = build_profile_command(profile, &["doctor", "--json"]);
+    let output = run_remote_openclaw_dynamic(pool, host_id, json_command).await?;
+    if output.exit_code != 0 && is_doctor_json_option_unsupported(&output) {
+        let plain_command = build_profile_command(profile, &["doctor"]);
+        return run_remote_openclaw_dynamic(pool, host_id, plain_command).await;
+    }
+    Ok(output)
 }
 
 async fn run_remote_gateway_restart_fallback(
