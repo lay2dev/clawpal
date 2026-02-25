@@ -301,16 +301,6 @@ export function Doctor({ sshHosts }: DoctorProps) {
       });
       return;
     }
-    if (rescueConfigured && rescuePort !== null) {
-      updateRescueState({
-        message: t("doctor.rescueBotAlreadyConfiguredState", {
-          profile: rescueProfile,
-          port: rescuePort,
-        }),
-        messageTone: "info",
-      });
-      return;
-    }
     updateRescueState({
       activating: true,
       message: null,
@@ -582,7 +572,6 @@ export function Doctor({ sshHosts }: DoctorProps) {
                   || rescueDeactivating
                   || rescueUnsetting
                   || rescueStatusChecking
-                  || rescueConfigured === true
                   || (isRemote && !isConnected)
                 }
               >
