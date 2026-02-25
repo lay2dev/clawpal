@@ -28,7 +28,7 @@ interface DoctorProps {
 export function Doctor({ sshHosts }: DoctorProps) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { instanceId, isRemote } = useInstance();
+  const { instanceId, isRemote, isConnected } = useInstance();
   const doctor = useDoctorAgent();
 
   // Agent source: an instance id ("local" / host uuid) or "remote" (hosted doctor)
@@ -169,6 +169,10 @@ export function Doctor({ sshHosts }: DoctorProps) {
   };
 
   const handleActivateRescueBot = async () => {
+    if (isRemote && !isConnected) {
+      setRescueMessage(t("doctor.rescueBotConnectRequired"));
+      return;
+    }
     setRescueActivating(true);
     setRescueMessage(null);
     try {
@@ -205,21 +209,35 @@ export function Doctor({ sshHosts }: DoctorProps) {
     <section>
       <h2 className="text-2xl font-bold mb-4">{t("doctor.title")}</h2>
 
+      <Card className="mb-4 gap-2 py-4">
+        <CardHeader className="pb-0">
+          <CardTitle className="text-base">{t("doctor.rescueBotTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-muted-foreground">{t("doctor.rescueBotHint")}</p>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleActivateRescueBot}
+              disabled={rescueActivating || (isRemote && !isConnected)}
+            >
+              {rescueActivating
+                ? t("doctor.activatingRescueBot")
+                : t("doctor.activateRescueBot")}
+            </Button>
+          </div>
+          {rescueMessage && (
+            <div className="mt-3 text-sm text-muted-foreground">{rescueMessage}</div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card className="gap-2 py-4">
         <CardHeader className="pb-0">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">{t("doctor.agentSource")}</CardTitle>
             <div className="flex items-center gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleActivateRescueBot}
-                disabled={rescueActivating}
-              >
-                {rescueActivating
-                  ? t("doctor.activatingRescueBot")
-                  : t("doctor.activateRescueBot")}
-              </Button>
               <Button variant="ghost" size="sm" onClick={() => openLogs("clawpal")}>
                 {t("doctor.clawpalLogs")}
               </Button>
@@ -230,9 +248,6 @@ export function Doctor({ sshHosts }: DoctorProps) {
           </div>
         </CardHeader>
         <CardContent>
-          {rescueMessage && (
-            <div className="mb-3 text-sm text-muted-foreground">{rescueMessage}</div>
-          )}
           {!doctor.connected && doctor.messages.length === 0 ? (
             <>
               {/* Source radio — instance gateways (excluding current target) + remote doctor */}
