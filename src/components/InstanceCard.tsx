@@ -28,14 +28,15 @@ const typeIcons: Record<InstanceType, typeof MonitorIcon> = {
   ssh: ServerIcon,
 };
 
-function HealthDot({ healthy }: { healthy: boolean | null }) {
+function HealthDot({ healthy, offline }: { healthy: boolean | null; offline: boolean }) {
   return (
     <span
       className={cn(
         "inline-block size-2 rounded-full shrink-0",
-        healthy === true && "bg-green-500",
-        healthy === false && "bg-red-500",
-        healthy === null && "bg-muted-foreground/40 animate-pulse",
+        offline && "bg-muted-foreground/40",
+        !offline && healthy === true && "bg-green-500",
+        !offline && healthy === false && "bg-red-500",
+        !offline && healthy === null && "bg-muted-foreground/40 animate-pulse",
       )}
     />
   );
@@ -47,6 +48,7 @@ export function InstanceCard({
   healthy,
   agentCount,
   opened,
+  connectionStatus,
   onClick,
   onRename,
   onEdit,
@@ -57,8 +59,11 @@ export function InstanceCard({
 
   const hasMenu = !!(onRename || onEdit || onDelete);
 
-  const healthText =
-    healthy === true
+  const isOffline = connectionStatus === "disconnected" || connectionStatus === "error";
+
+  const healthText = isOffline
+    ? t("start.offline")
+    : healthy === true
       ? t("start.healthy")
       : healthy === false
         ? t("start.unhealthy")
@@ -129,12 +134,12 @@ export function InstanceCard({
         </div>
 
         {/* Label */}
-        <div className="font-semibold truncate">{label}</div>
+        <div className="font-bold truncate">{label}</div>
 
         {/* Bottom row: health + agent count */}
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <HealthDot healthy={healthy} />
+            <HealthDot healthy={healthy} offline={isOffline} />
             {healthText}
           </span>
           <Badge variant="secondary" className="text-xs">
