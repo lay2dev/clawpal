@@ -817,6 +817,10 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
 
                 if let Some(channels) = guild_val.get("channels").and_then(Value::as_object) {
                     for (channel_id, _channel_val) in channels {
+                        // Skip glob/wildcard patterns (e.g. "*") — not real channel IDs
+                        if channel_id.contains('*') || channel_id.contains('?') {
+                            continue;
+                        }
                         if entries.iter().any(|e| e.guild_id == *guild_id && e.channel_id == *channel_id) {
                             continue;
                         }
@@ -5416,6 +5420,10 @@ pub async fn remote_list_discord_guild_channels(
 
             if let Some(channels) = guild_val.get("channels").and_then(Value::as_object) {
                 for (channel_id, _) in channels {
+                    // Skip glob/wildcard patterns (e.g. "*") — not real channel IDs
+                    if channel_id.contains('*') || channel_id.contains('?') {
+                        continue;
+                    }
                     if entries.iter().any(|e| e.guild_id == *guild_id && e.channel_id == *channel_id) {
                         continue;
                     }
