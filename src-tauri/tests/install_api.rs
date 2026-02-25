@@ -4,6 +4,8 @@ use clawpal::install::commands::{
     run_local_precheck_for_test, run_step_for_test,
 };
 use clawpal::install::runners::docker::docker_verify_compose_command_for_test;
+use clawpal::cli_runner::set_active_openclaw_home_override;
+use clawpal::models::resolve_paths;
 
 #[test]
 fn install_session_serialization_roundtrip() {
@@ -79,4 +81,17 @@ fn docker_verify_command_sets_safe_env_defaults() {
     assert!(command.contains("OPENCLAW_CONFIG_DIR="));
     assert!(command.contains("OPENCLAW_WORKSPACE_DIR="));
     assert!(command.contains("docker compose config"));
+}
+
+#[test]
+fn resolve_paths_uses_active_openclaw_home_override() {
+    set_active_openclaw_home_override(Some("~/.clawpal/test-docker-openclaw".to_string()))
+        .expect("set override should succeed");
+    let paths = resolve_paths();
+    let openclaw_dir = paths.openclaw_dir.to_string_lossy().to_string();
+    assert!(
+        openclaw_dir.contains(".clawpal/test-docker-openclaw"),
+        "expected overridden openclaw dir, got {openclaw_dir}"
+    );
+    set_active_openclaw_home_override(None).expect("clear override should succeed");
 }

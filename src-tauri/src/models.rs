@@ -34,8 +34,13 @@ fn env_path(name: &str) -> Option<PathBuf> {
 
 pub fn resolve_paths() -> OpenClawPaths {
     let home = home_dir().unwrap_or_else(|| Path::new(".").to_path_buf());
+    let active_override = crate::cli_runner::get_active_openclaw_home_override()
+        .map(PathBuf::from);
     let openclaw_dir =
-        env_path("CLAWPAL_OPENCLAW_DIR").or_else(|| env_path("OPENCLAW_HOME")).unwrap_or_else(|| home.join(".openclaw"));
+        active_override
+            .or_else(|| env_path("CLAWPAL_OPENCLAW_DIR"))
+            .or_else(|| env_path("OPENCLAW_HOME"))
+            .unwrap_or_else(|| home.join(".openclaw"));
     let clawpal_dir =
         env_path("CLAWPAL_DATA_DIR").unwrap_or_else(|| home.join(".clawpal"));
 
