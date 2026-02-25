@@ -33,7 +33,11 @@ fn parse_step(raw: &str) -> Result<InstallStep, String> {
     }
 }
 
-fn create_session(store: &InstallSessionStore, method_raw: &str) -> Result<InstallSession, String> {
+fn create_session(
+    store: &InstallSessionStore,
+    method_raw: &str,
+    options: Option<HashMap<String, Value>>,
+) -> Result<InstallSession, String> {
     let method = parse_method(method_raw)?;
     let now = Utc::now().to_rfc3339();
     let session = InstallSession {
@@ -42,7 +46,7 @@ fn create_session(store: &InstallSessionStore, method_raw: &str) -> Result<Insta
         state: InstallState::SelectedMethod,
         current_step: None,
         logs: vec![],
-        artifacts: HashMap::<String, Value>::new(),
+        artifacts: options.unwrap_or_default(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -182,30 +186,46 @@ fn run_step(store: &InstallSessionStore, session_id_raw: &str, step_raw: &str) -
     session.updated_at = Utc::now().to_rfc3339();
     store.upsert(session.clone())?;
 
-    session.state = success_state(&step);
-    session.updated_at = Utc::now().to_rfc3339();
-    store.upsert(session)?;
+    let run_outcome = runners::run_step(&method, &step, &session.artifacts);
+    match run_outcome {
+        Ok(output) => {
+            for (key, value) in &output.artifacts {
+                session.artifacts.insert(key.clone(), value.clone());
+            }
+            session.state = success_state(&step);
+            session.updated_at = Utc::now().to_rfc3339();
+            store.upsert(session)?;
 
-    let runner_output = runners::run_step(&method, &step);
+            let mut result = make_result(
+                true,
+                output.summary,
+                output.details,
+                next_step(&step),
+                None,
+            );
+            result.commands = output.commands;
+            result.artifacts = output.artifacts;
+            Ok(result)
+        }
+        Err(err) => {
+            session.state = failed_state(&step);
+            session.updated_at = Utc::now().to_rfc3339();
+            store.upsert(session)?;
 
-    let mut result = make_result(
-        true,
-        runner_output.summary,
-        runner_output.details,
-        next_step(&step),
-        None,
-    );
-    result.commands = runner_output.commands;
-    result.artifacts = runner_output.artifacts;
-    Ok(result)
+            let mut result = make_result(false, err.summary, err.details, None, Some(err.error_code));
+            result.commands = err.commands;
+            Ok(result)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn install_create_session(
     method: String,
+    options: Option<HashMap<String, Value>>,
     store: State<'_, InstallSessionStore>,
 ) -> Result<InstallSession, String> {
-    create_session(&store, method.trim())
+    create_session(&store, method.trim(), options)
 }
 
 #[tauri::command]
@@ -238,7 +258,7 @@ pub async fn install_list_methods() -> Result<Vec<InstallMethodCapability>, Stri
 }
 
 pub async fn create_session_for_test(method: &str) -> Result<InstallSession, String> {
-    create_session(&TEST_SESSION_STORE, method)
+    create_session(&TEST_SESSION_STORE, method, None)
 }
 
 pub async fn get_session_for_test(session_id: &str) -> Result<InstallSession, String> {
@@ -260,7 +280,8 @@ pub async fn list_methods_for_test() -> Result<Vec<InstallMethodCapability>, Str
 }
 
 pub async fn run_local_precheck_for_test() -> Result<InstallStepResult, String> {
-    let output = runners::run_step(&InstallMethod::Local, &InstallStep::Precheck);
+    let output = runners::run_step(&InstallMethod::Local, &InstallStep::Precheck, &HashMap::new())
+        .map_err(|e| format!("{}: {}", e.summary, e.details))?;
     let mut result = make_result(
         true,
         output.summary,

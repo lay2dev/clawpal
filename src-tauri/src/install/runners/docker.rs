@@ -1,32 +1,57 @@
-use super::RunnerOutput;
+use super::{run_command, RunnerFailure, RunnerOutput};
 use crate::install::types::InstallStep;
+use serde_json::Value;
 use std::collections::HashMap;
 
-pub fn run_step(step: &InstallStep) -> RunnerOutput {
+const IMAGE: &str = "ghcr.io/openclaw/openclaw:latest";
+
+pub fn run_step(
+    step: &InstallStep,
+    _artifacts: &HashMap<String, Value>,
+) -> Result<RunnerOutput, RunnerFailure> {
     match step {
-        InstallStep::Precheck => RunnerOutput {
-            summary: "docker precheck completed".to_string(),
-            details: "Validated Docker daemon availability".to_string(),
-            commands: vec!["docker info".to_string()],
-            artifacts: HashMap::new(),
-        },
-        InstallStep::Install => RunnerOutput {
-            summary: "docker install completed".to_string(),
-            details: "Prepared Docker image and container plan".to_string(),
-            commands: vec!["docker pull ghcr.io/openclaw/openclaw:latest".to_string()],
-            artifacts: HashMap::new(),
-        },
-        InstallStep::Init => RunnerOutput {
-            summary: "docker init completed".to_string(),
-            details: "Initialized mounted OpenClaw config volume".to_string(),
-            commands: vec!["docker run --rm ghcr.io/openclaw/openclaw:latest openclaw init".to_string()],
-            artifacts: HashMap::new(),
-        },
-        InstallStep::Verify => RunnerOutput {
-            summary: "docker verify completed".to_string(),
-            details: "Verified containerized OpenClaw status".to_string(),
-            commands: vec!["docker run --rm ghcr.io/openclaw/openclaw:latest openclaw status --json".to_string()],
-            artifacts: HashMap::new(),
-        },
+        InstallStep::Precheck => {
+            let info = run_command("docker", &["info"])?;
+            Ok(RunnerOutput {
+                summary: "docker precheck completed".to_string(),
+                details: info.stdout,
+                commands: vec![info.command_line],
+                artifacts: HashMap::new(),
+            })
+        }
+        InstallStep::Install => {
+            let pull = run_command("docker", &["pull", IMAGE])?;
+            Ok(RunnerOutput {
+                summary: "docker install completed".to_string(),
+                details: if pull.stderr.is_empty() {
+                    pull.stdout
+                } else {
+                    format!("{}\n{}", pull.stdout, pull.stderr)
+                },
+                commands: vec![pull.command_line],
+                artifacts: HashMap::from([("docker_image".to_string(), Value::String(IMAGE.to_string()))]),
+            })
+        }
+        InstallStep::Init => {
+            let volume = run_command("docker", &["volume", "create", "clawpal-openclaw-config"])?;
+            Ok(RunnerOutput {
+                summary: "docker init completed".to_string(),
+                details: volume.stdout,
+                commands: vec![volume.command_line],
+                artifacts: HashMap::from([(
+                    "docker_volume".to_string(),
+                    Value::String("clawpal-openclaw-config".to_string()),
+                )]),
+            })
+        }
+        InstallStep::Verify => {
+            let inspect = run_command("docker", &["image", "inspect", IMAGE])?;
+            Ok(RunnerOutput {
+                summary: "docker verify completed".to_string(),
+                details: "Docker image is present and inspect succeeded".to_string(),
+                commands: vec![inspect.command_line],
+                artifacts: HashMap::new(),
+            })
+        }
     }
 }
