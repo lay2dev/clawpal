@@ -1,4 +1,5 @@
 use super::session_store::InstallSessionStore;
+use super::runners;
 use super::types::{
     InstallMethod, InstallMethodCapability, InstallSession, InstallState, InstallStep,
     InstallStepResult,
@@ -160,6 +161,7 @@ fn run_step(store: &InstallSessionStore, session_id_raw: &str, step_raw: &str) -
         Some(value) => value,
         None => return Err(format!("install session not found: {session_id}")),
     };
+    let method = session.method.clone();
 
     if !is_step_allowed(&session.state, &step) {
         session.state = failed_state(&step);
@@ -184,14 +186,17 @@ fn run_step(store: &InstallSessionStore, session_id_raw: &str, step_raw: &str) -
     session.updated_at = Utc::now().to_rfc3339();
     store.upsert(session)?;
 
+    let runner_output = runners::run_step(&method, &step);
+
     let mut result = make_result(
         true,
-        format!("{} completed", step.as_str()),
-        format!("{} finished successfully", step.as_str()),
+        runner_output.summary,
+        runner_output.details,
         next_step(&step),
         None,
     );
-    result.commands = vec![format!("{}: simulated", step.as_str())];
+    result.commands = runner_output.commands;
+    result.artifacts = runner_output.artifacts;
     Ok(result)
 }
 
@@ -252,4 +257,18 @@ pub async fn run_step_for_test(session_id: &str, step: &str) -> Result<InstallSt
 
 pub async fn list_methods_for_test() -> Result<Vec<InstallMethodCapability>, String> {
     Ok(list_method_capabilities())
+}
+
+pub async fn run_local_precheck_for_test() -> Result<InstallStepResult, String> {
+    let output = runners::run_step(&InstallMethod::Local, &InstallStep::Precheck);
+    let mut result = make_result(
+        true,
+        output.summary,
+        output.details,
+        next_step(&InstallStep::Precheck),
+        None,
+    );
+    result.commands = output.commands;
+    result.artifacts = output.artifacts;
+    Ok(result)
 }

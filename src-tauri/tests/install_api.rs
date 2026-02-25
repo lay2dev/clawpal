@@ -1,6 +1,7 @@
 use clawpal::install::types::InstallSession;
 use clawpal::install::commands::{
-    create_session_for_test, get_session_for_test, list_methods_for_test, run_step_for_test,
+    create_session_for_test, get_session_for_test, list_methods_for_test, run_local_precheck_for_test,
+    run_step_for_test,
 };
 
 #[test]
@@ -54,4 +55,13 @@ async fn list_methods_returns_all_four_methods() {
         .expect("list methods should succeed");
     let names: Vec<String> = methods.into_iter().map(|m| m.method).collect();
     assert_eq!(names, vec!["local", "wsl2", "docker", "remote_ssh"]);
+}
+
+#[tokio::test]
+async fn local_precheck_returns_command_summary() {
+    let result = run_local_precheck_for_test()
+        .await
+        .expect("local precheck should succeed");
+    assert!(!result.commands.is_empty());
+    assert!(result.summary.contains("precheck"));
 }
