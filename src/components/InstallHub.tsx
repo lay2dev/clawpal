@@ -47,7 +47,7 @@ function getStepStatus(state: string | null | undefined, step: InstallStep): Ste
   if (step === "init") {
     if (state === "init_running") return "running";
     if (state === "init_failed") return "failed";
-    if (state === "ready") return "success";
+    if (["init_passed", "ready"].includes(state)) return "success";
     return "pending";
   }
   if (step === "verify") {
@@ -55,6 +55,20 @@ function getStepStatus(state: string | null | undefined, step: InstallStep): Ste
     return "pending";
   }
   return "pending";
+}
+
+function canRunStep(state: string | null | undefined, step: InstallStep): boolean {
+  if (!state) return false;
+  if (step === "precheck") {
+    return state === "selected_method" || state === "precheck_failed";
+  }
+  if (step === "install") {
+    return state === "precheck_passed" || state === "install_failed";
+  }
+  if (step === "init") {
+    return state === "install_passed" || state === "init_failed";
+  }
+  return state === "init_passed";
 }
 
 export function InstallHub({
@@ -231,6 +245,7 @@ export function InstallHub({
               <div className="space-y-2">
                 {STEP_ORDER.map((step) => {
                   const status = getStepStatus(session.state, step);
+                  const actionable = canRunStep(session.state, step);
                   return (
                     <div key={step} className="flex items-center justify-between rounded border px-2 py-1.5">
                       <div className="flex items-center gap-2">
@@ -242,7 +257,7 @@ export function InstallHub({
                       <Button
                         size="xs"
                         variant={status === "failed" ? "outline" : "default"}
-                        disabled={runningStep !== null}
+                        disabled={runningStep !== null || !actionable}
                         onClick={() => runStep(step)}
                       >
                         {runningStep === step
@@ -259,7 +274,9 @@ export function InstallHub({
               {lastResult && (
                 <div className="rounded border bg-muted/30 p-2 text-xs space-y-1">
                   <div className="font-medium">{lastResult.summary}</div>
-                  <div className="text-muted-foreground">{lastResult.details}</div>
+                  <div className="max-h-24 overflow-auto rounded border bg-background/70 p-2 text-muted-foreground whitespace-pre-wrap break-all">
+                    {lastResult.details}
+                  </div>
                   {lastResult.commands.length > 0 && (
                     <div className="max-h-40 overflow-auto rounded border bg-background/70 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
                       {lastResult.commands.join("\n")}
@@ -277,11 +294,11 @@ export function InstallHub({
                 <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs space-y-2">
                   <div className="font-medium">{t("home.install.ready")}</div>
                   <div className="flex items-center gap-2">
-                    <Button size="xs" variant="outline" onClick={() => onNavigate?.("doctor")}>
-                      {t("home.install.goDoctor")}
+                    <Button size="xs" variant="outline" onClick={() => onNavigate?.("settings")}>
+                      {t("home.install.goSettings")}
                     </Button>
-                    <Button size="xs" onClick={() => onNavigate?.("recipes")}>
-                      {t("home.install.goRecipes")}
+                    <Button size="xs" onClick={() => onNavigate?.("channels")}>
+                      {t("home.install.goChannels")}
                     </Button>
                   </div>
                 </div>
