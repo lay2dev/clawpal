@@ -1,9 +1,9 @@
 use crate::doctor::classify_engine_error;
-use serde_json::json;
-use serde_json::Value;
 use crate::runtime::types::{
     RuntimeAdapter, RuntimeError, RuntimeErrorCode, RuntimeEvent, RuntimeSessionKey,
 };
+use serde_json::json;
+use serde_json::Value;
 
 use super::process::run_zeroclaw_message;
 use super::session::{append_history, build_prompt_with_history_preamble, reset_history};
@@ -60,7 +60,8 @@ impl ZeroclawInstallAdapter {
         out
     }
 
-    const HISTORY_PREAMBLE: &str = "You are continuing an installation chat. Keep continuity with prior turns.\n";
+    const HISTORY_PREAMBLE: &str =
+        "You are continuing an installation chat. Keep continuity with prior turns.\n";
 
     fn install_domain_prompt(key: &RuntimeSessionKey, user_system_prompt: &str) -> String {
         let target_line = if key.instance_id == "local" {
@@ -75,7 +76,8 @@ impl ZeroclawInstallAdapter {
             "Execution model: you can request commands to be run on the selected target through ClawPal's approved execution path.",
             "The user has pre-approved all command execution. Commands are sent to ClawPal's sandbox for execution.",
             "If command execution is needed, output ONLY JSON:",
-            "{\"tool\":\"system.run\",\"type\":\"read|write\",\"command\":\"<shell command>\",\"reason\":\"<why>\"}",
+            "{\"tool\":\"clawpal\",\"args\":\"<subcommand>\",\"reason\":\"<why>\"}",
+            "{\"tool\":\"openclaw\",\"args\":\"<subcommand>\",\"instance\":\"<optional instance id>\",\"reason\":\"<why>\"}",
             "Do NOT claim you cannot access the host or lack permissions.",
             "Do NOT ask user to run commands manually.",
             "Do NOT ask user for permission to run commands — all commands are pre-approved.",
@@ -103,16 +105,11 @@ impl ZeroclawInstallAdapter {
         for candidate in candidates {
             if let Ok(v) = serde_json::from_str::<Value>(&candidate) {
                 let tool = v.get("tool").and_then(|x| x.as_str());
-                if tool == Some("system.run") {
-                    let command = v.get("command")?.as_str()?.trim().to_string();
-                    if command.is_empty() {
+                if tool == Some("clawpal") || tool == Some("openclaw") {
+                    let args = v.get("args")?.as_str()?.trim().to_string();
+                    if args.is_empty() {
                         return None;
                     }
-                    let invoke_type = v
-                        .get("type")
-                        .and_then(|x| x.as_str())
-                        .filter(|x| *x == "read" || *x == "write")
-                        .unwrap_or("read");
                     let reason = v
                         .get("reason")
                         .and_then(|x| x.as_str())
@@ -120,13 +117,17 @@ impl ZeroclawInstallAdapter {
                         .to_string();
                     let payload = json!({
                         "id": format!("zc-{}", uuid::Uuid::new_v4()),
-                        "command": "system.run",
-                        "args": { "command": command },
-                        "type": invoke_type,
+                        "command": tool.unwrap_or("clawpal"),
+                        "args": {
+                            "args": args,
+                            "instance": v.get("instance").and_then(|x| x.as_str()).unwrap_or(""),
+                        },
+                        "type": "read",
                     });
                     let note = format!(
-                        "Running: `{}`\nReason: {}",
-                        payload["args"]["command"].as_str().unwrap_or(""),
+                        "Running: `{} {}`\nReason: {}",
+                        payload["command"].as_str().unwrap_or(""),
+                        payload["args"]["args"].as_str().unwrap_or(""),
                         reason
                     );
                     return Some((RuntimeEvent::Invoke { payload }, note));
@@ -164,8 +165,7 @@ impl RuntimeAdapter for ZeroclawInstallAdapter {
         let session_key = key.storage_key();
         reset_history(&session_key);
         let prompt = Self::install_domain_prompt(key, message);
-        let text = run_zeroclaw_message(&prompt, &key.instance_id)
-            .map_err(Self::map_error)?;
+        let text = run_zeroclaw_message(&prompt, &key.instance_id).map_err(Self::map_error)?;
         append_history(&session_key, "system", &prompt);
         if let Some((invoke, note)) = Self::parse_tool_intent(&text) {
             append_history(&session_key, "assistant", &note);
@@ -182,10 +182,10 @@ impl RuntimeAdapter for ZeroclawInstallAdapter {
     ) -> Result<Vec<RuntimeEvent>, RuntimeError> {
         let session_key = key.storage_key();
         append_history(&session_key, "user", message);
-        let prompt = build_prompt_with_history_preamble(&session_key, message, Self::HISTORY_PREAMBLE);
+        let prompt =
+            build_prompt_with_history_preamble(&session_key, message, Self::HISTORY_PREAMBLE);
         let guarded = Self::install_domain_prompt(key, &prompt);
-        let text = run_zeroclaw_message(&guarded, &key.instance_id)
-            .map_err(Self::map_error)?;
+        let text = run_zeroclaw_message(&guarded, &key.instance_id).map_err(Self::map_error)?;
         if let Some((invoke, note)) = Self::parse_tool_intent(&text) {
             append_history(&session_key, "assistant", &note);
             return Ok(vec![RuntimeEvent::chat_final(note), invoke]);

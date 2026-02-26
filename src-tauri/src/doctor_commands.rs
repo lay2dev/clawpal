@@ -4,7 +4,6 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::doctor_runtime_bridge::emit_runtime_event;
-use crate::bridge_client::extract_shell_command;
 use crate::models::resolve_paths;
 use crate::runtime::types::{RuntimeAdapter, RuntimeDomain, RuntimeEvent, RuntimeSessionKey};
 use crate::runtime::zeroclaw::adapter::ZeroclawDoctorAdapter;
@@ -34,9 +33,7 @@ fn take_zeroclaw_invoke(invoke_id: &str) -> Option<Value> {
 }
 
 #[tauri::command]
-pub async fn doctor_connect(
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn doctor_connect(app: AppHandle) -> Result<(), String> {
     let _ = app.emit("doctor:connected", json!({ "engine": "zeroclaw" }));
     Ok(())
 }
@@ -114,7 +111,7 @@ pub async fn doctor_send_message(
 
 #[tauri::command]
 pub async fn doctor_approve_invoke(
-    pool: State<'_, SshConnectionPool>,
+    _pool: State<'_, SshConnectionPool>,
     app: AppHandle,
     invoke_id: String,
     target: String,
@@ -132,75 +129,33 @@ pub async fn doctor_approve_invoke(
     // (write → "Execute" button, read → "Allow" button).
     // User approval is the security boundary, not command validation.
     let result = match command {
-        "system.run" => {
-            // Gateway sends command as string or array ["/bin/sh", "-lc", "actual cmd"]
-            let shell_cmd = extract_shell_command(&args);
-            if shell_cmd.is_empty() {
-                return Err("system.run: missing 'command' argument".into());
-            }
-            // Execute directly — user already approved this command.
-            // Include executedOn metadata so the agent knows WHERE the command ran
-            // (prevents it from claiming "command ran locally" on remote targets).
-            if target == "local" {
-                let mut v = run_command_local(&shell_cmd).await?;
-                v["executedOn"] = json!("local");
-                v
-            } else {
-                // If SSH fails, try reconnecting once before giving up.
-                match run_command_remote(&pool, &target, &shell_cmd).await {
-                    Ok(mut v) => {
-                        v["executedOn"] = json!(format!("{target} (remote)"));
-                        v
-                    }
-                    Err(e) => {
-                        // Retry: reconnect SSH and try again
-                        if let Ok(()) = pool.reconnect(&target).await {
-                            match run_command_remote(&pool, &target, &shell_cmd).await {
-                                Ok(mut v) => {
-                                    v["executedOn"] = json!(format!("{target} (remote, reconnected)"));
-                                    v
-                                }
-                                Err(e2) => json!({
-                                    "stdout": "",
-                                    "stderr": format!("Remote execution failed on '{target}' after reconnect: {e2}"),
-                                    "exitCode": 255,
-                                    "executedOn": format!("{target} (connection lost)"),
-                                }),
-                            }
-                        } else {
-                            json!({
-                                "stdout": "",
-                                "stderr": format!("Remote execution failed on '{target}': {e}. Ask the user to reconnect in the Instance tab."),
-                                "exitCode": 255,
-                                "executedOn": format!("{target} (connection lost)"),
-                            })
-                        }
-                    }
-                }
-            }
-        }
-        // Fallback: pass through to internal handlers (for legacy/custom commands)
+        "clawpal" => run_clawpal_tool(&args).await?,
+        "openclaw" => run_openclaw_tool(&args, &target).await?,
         _ => {
-            if target == "local" {
-                execute_local_command(command, &args).await?
-            } else {
-                execute_remote_command(&pool, &target, command, &args).await?
-            }
+            return Err(format!(
+                "unsupported tool '{command}', expected 'clawpal' or 'openclaw'"
+            ))
         }
     };
 
     // Emit tool result first so UI can render it directly under the tool call
     // before any zeroclaw follow-up assistant message arrives.
-    let _ = app.emit("doctor:invoke-result", json!({
-        "id": invoke_id,
-        "result": result,
-    }));
+    let _ = app.emit(
+        "doctor:invoke-result",
+        json!({
+            "id": invoke_id,
+            "result": result,
+        }),
+    );
 
     // Feed execution result back into zeroclaw session so it can continue the diagnosis.
     let command = command.to_string();
     let result_text = if let Some(stdout) = result.get("stdout").and_then(|v| v.as_str()) {
         let stderr = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-        let exit_code = result.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let exit_code = result
+            .get("exitCode")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
         let mut msg = format!("[Command executed: `{command}`]\n");
         if !stdout.is_empty() {
             msg.push_str(&format!("stdout:\n```\n{stdout}\n```\n"));
@@ -214,7 +169,11 @@ pub async fn doctor_approve_invoke(
         format!("[Command executed: `{command}`]\nResult: {result}")
     };
     let is_install = domain.as_deref() == Some("install");
-    let rt_domain = if is_install { RuntimeDomain::Install } else { RuntimeDomain::Doctor };
+    let rt_domain = if is_install {
+        RuntimeDomain::Install
+    } else {
+        RuntimeDomain::Doctor
+    };
     let key = RuntimeSessionKey::new(
         "zeroclaw",
         rt_domain,
@@ -238,10 +197,7 @@ pub async fn doctor_approve_invoke(
 }
 
 #[tauri::command]
-pub async fn doctor_reject_invoke(
-    invoke_id: String,
-    _reason: String,
-) -> Result<(), String> {
+pub async fn doctor_reject_invoke(invoke_id: String, _reason: String) -> Result<(), String> {
     if take_zeroclaw_invoke(&invoke_id).is_some() {
         // zeroclaw local pending invoke: just drop from pending queue.
         return Ok(());
@@ -263,8 +219,7 @@ pub async fn collect_doctor_context() -> Result<String, String> {
         .unwrap_or_else(|_| "unknown".into());
 
     // Collect recent error log
-    let error_log = crate::logging::read_log_tail("error.log", 100)
-        .unwrap_or_default();
+    let error_log = crate::logging::read_log_tail("error.log", 100).unwrap_or_default();
 
     // Check if gateway process is running
     let gateway_running = std::process::Command::new("pgrep")
@@ -303,26 +258,37 @@ pub async fn collect_doctor_context_remote(
     host_id: String,
 ) -> Result<String, String> {
     // Collect openclaw version
-    let version_result = pool.exec_login(&host_id, "openclaw --version 2>/dev/null || echo unknown").await?;
+    let version_result = pool
+        .exec_login(&host_id, "openclaw --version 2>/dev/null || echo unknown")
+        .await?;
     let version = version_result.stdout.trim().to_string();
 
     // Resolve config path: check OPENCLAW_STATE_DIR / OPENCLAW_HOME, fallback to ~/.openclaw
-    let config_path_result = pool.exec_login(&host_id,
-        "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\""
-    ).await?;
+    let config_path_result = pool
+        .exec_login(
+            &host_id,
+            "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"",
+        )
+        .await?;
     let config_path = config_path_result.stdout.trim().to_string();
     validate_not_sensitive(&config_path)?;
-    let config_content = pool.sftp_read(&host_id, &config_path).await
+    let config_content = pool
+        .sftp_read(&host_id, &config_path)
+        .await
         .unwrap_or_else(|_| "(unable to read remote config)".into());
 
     // Use `openclaw gateway status` — always returns useful text even when gateway is stopped.
     // `openclaw health --json` requires a running gateway + auth token and returns empty otherwise.
-    let status_result = pool.exec_login(&host_id, "openclaw gateway status 2>&1").await?;
+    let status_result = pool
+        .exec_login(&host_id, "openclaw gateway status 2>&1")
+        .await?;
     let gateway_status = status_result.stdout.trim().to_string();
 
     // Check if gateway process is running (reliable even when health RPC fails)
     // Bracket trick: [o]penclaw-gateway prevents pgrep from matching its own sh -c process
-    let pgrep_result = pool.exec(&host_id, "pgrep -f '[o]penclaw-gateway' >/dev/null 2>&1").await;
+    let pgrep_result = pool
+        .exec(&host_id, "pgrep -f '[o]penclaw-gateway' >/dev/null 2>&1")
+        .await;
     let gateway_running = matches!(pgrep_result, Ok(r) if r.exit_code == 0);
 
     // Collect recent error log (logs live under $OPENCLAW_STATE_DIR/logs/)
@@ -392,7 +358,11 @@ fn allowed_read_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = vec![
         paths.openclaw_dir.clone(),
         paths.clawpal_dir.clone(),
-        paths.config_path.parent().unwrap_or(&paths.openclaw_dir).to_path_buf(),
+        paths
+            .config_path
+            .parent()
+            .unwrap_or(&paths.openclaw_dir)
+            .to_path_buf(),
     ];
     // Also allow /etc/openclaw for system-wide config
     let etc_openclaw = std::path::PathBuf::from("/etc/openclaw");
@@ -406,8 +376,8 @@ fn allowed_read_dirs() -> Vec<std::path::PathBuf> {
 fn validate_read_path(path: &str) -> Result<std::path::PathBuf, String> {
     validate_not_sensitive(path)?;
     let expanded = shellexpand::tilde(path).to_string();
-    let canonical = std::fs::canonicalize(&expanded)
-        .map_err(|e| format!("Cannot resolve path {path}: {e}"))?;
+    let canonical =
+        std::fs::canonicalize(&expanded).map_err(|e| format!("Cannot resolve path {path}: {e}"))?;
     let allowed = allowed_read_dirs();
     for dir in &allowed {
         if let Ok(canon_dir) = std::fs::canonicalize(dir) {
@@ -427,7 +397,8 @@ fn validate_write_path(path: &str) -> Result<std::path::PathBuf, String> {
     let expanded = shellexpand::tilde(path).to_string();
     let target = std::path::PathBuf::from(&expanded);
     // For writes, the file may not exist yet, so check the parent directory
-    let parent = target.parent()
+    let parent = target
+        .parent()
         .ok_or_else(|| format!("Invalid path: {path}"))?;
     let canon_parent = std::fs::canonicalize(parent)
         .map_err(|e| format!("Cannot resolve parent directory of {path}: {e}"))?;
@@ -540,7 +511,11 @@ async fn run_command_local(cmd: &str) -> Result<Value, String> {
 }
 
 /// Run a shell command on a remote host via SSH (user-approved, no validate_command).
-async fn run_command_remote(pool: &SshConnectionPool, host_id: &str, cmd: &str) -> Result<Value, String> {
+async fn run_command_remote(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    cmd: &str,
+) -> Result<Value, String> {
     let result = pool.exec_login(host_id, cmd).await?;
     Ok(json!({
         "stdout": truncate_output(result.stdout.as_bytes()),
@@ -549,11 +524,120 @@ async fn run_command_remote(pool: &SshConnectionPool, host_id: &str, cmd: &str) 
     }))
 }
 
+async fn run_clawpal_tool(args: &Value) -> Result<Value, String> {
+    let raw = args
+        .get("args")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        return Err("clawpal: missing args".to_string());
+    }
+    if raw == "instance list" {
+        let registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "stdout": serde_json::to_string(&registry.list()).unwrap_or_else(|_| "[]".to_string()),
+            "stderr": "",
+            "exitCode": 0
+        }));
+    }
+    if raw == "ssh list" {
+        let hosts = clawpal_core::ssh::registry::list_ssh_hosts().map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "stdout": serde_json::to_string(&hosts).unwrap_or_else(|_| "[]".to_string()),
+            "stderr": "",
+            "exitCode": 0
+        }));
+    }
+    if raw == "profile list" {
+        let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+        let profiles =
+            clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "stdout": serde_json::to_string(&profiles).unwrap_or_else(|_| "[]".to_string()),
+            "stderr": "",
+            "exitCode": 0
+        }));
+    }
+    if raw.starts_with("health check") {
+        let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+        let registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        if raw.contains("--all") {
+            let mut output = Vec::new();
+            for instance in registry.list() {
+                let status =
+                    clawpal_core::health::check_instance(&instance).map_err(|e| e.to_string())?;
+                output.push(json!({"id": instance.id, "status": status}));
+            }
+            return Ok(json!({
+                "stdout": serde_json::to_string(&output).unwrap_or_else(|_| "[]".to_string()),
+                "stderr": "",
+                "exitCode": 0
+            }));
+        }
+        let target_id = raw
+            .split_whitespace()
+            .nth(2)
+            .filter(|v| !v.is_empty() && *v != "check")
+            .unwrap_or("local");
+        let instance = if target_id == "local" {
+            clawpal_core::instance::Instance {
+                id: "local".to_string(),
+                instance_type: clawpal_core::instance::InstanceType::Local,
+                label: "Local".to_string(),
+                openclaw_home: None,
+                clawpal_data_dir: None,
+                ssh_host_config: None,
+            }
+        } else {
+            registry
+                .get(target_id)
+                .cloned()
+                .ok_or_else(|| format!("instance '{target_id}' not found"))?
+        };
+        let status = clawpal_core::health::check_instance(&instance).map_err(|e| e.to_string())?;
+        let _ = openclaw; // keeps symmetry with CLI execution context
+        return Ok(json!({
+            "stdout": serde_json::to_string(&json!({"id": instance.id, "status": status})).unwrap_or_else(|_| "{}".to_string()),
+            "stderr": "",
+            "exitCode": 0
+        }));
+    }
+    Err(format!("unsupported clawpal args: {raw}"))
+}
+
+async fn run_openclaw_tool(args: &Value, target: &str) -> Result<Value, String> {
+    if target != "local" {
+        return Err("openclaw tool currently supports local target only".to_string());
+    }
+    let raw = args
+        .get("args")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        return Err("openclaw: missing args".to_string());
+    }
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+    let output = clawpal_core::openclaw::OpenclawCli::new()
+        .run(&parts)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "exitCode": output.exit_code,
+    }))
+}
+
 /// Execute a command locally on behalf of the doctor agent.
 async fn execute_local_command(command: &str, args: &Value) -> Result<Value, String> {
     match command {
         "read_file" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("read_file: missing 'path' argument")?;
             let canonical = validate_read_path(path)?;
             let content = tokio::fs::read_to_string(&canonical)
@@ -562,7 +646,9 @@ async fn execute_local_command(command: &str, args: &Value) -> Result<Value, Str
             Ok(json!({"content": content}))
         }
         "list_files" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("list_files: missing 'path' argument")?;
             let canonical = validate_read_path(path)?;
             let mut entries = Vec::new();
@@ -613,25 +699,34 @@ async fn execute_local_command(command: &str, args: &Value) -> Result<Value, Str
             }))
         }
         "write_file" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("write_file: missing 'path' argument")?;
-            let content = args.get("content").and_then(|v| v.as_str())
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
                 .ok_or("write_file: missing 'content' argument")?;
             let validated = validate_write_path(path)?;
             // Atomic write: write to temp file then rename to avoid symlink TOCTOU
-            let parent = validated.parent()
+            let parent = validated
+                .parent()
                 .ok_or_else(|| format!("Invalid path: {path}"))?;
             let tmp = parent.join(format!(".clawpal-tmp-{}", uuid::Uuid::new_v4()));
-            tokio::fs::write(&tmp, content)
-                .await
-                .map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("Failed to write {path}: {e}") })?;
-            tokio::fs::rename(&tmp, &validated)
-                .await
-                .map_err(|e| { let _ = std::fs::remove_file(&tmp); format!("Failed to rename temp file to {path}: {e}") })?;
+            tokio::fs::write(&tmp, content).await.map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("Failed to write {path}: {e}")
+            })?;
+            tokio::fs::rename(&tmp, &validated).await.map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("Failed to rename temp file to {path}: {e}")
+            })?;
             Ok(json!({"ok": true}))
         }
         "run_command" => {
-            let cmd = args.get("command").and_then(|v| v.as_str())
+            let cmd = args
+                .get("command")
+                .and_then(|v| v.as_str())
                 .ok_or("run_command: missing 'command' argument")?;
             validate_command(cmd)?;
             let child = tokio::process::Command::new("sh")
@@ -671,14 +766,18 @@ async fn execute_remote_command(
 ) -> Result<Value, String> {
     match command {
         "read_file" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("read_file: missing 'path' argument")?;
             validate_not_sensitive(path)?;
             let content = pool.sftp_read(host_id, path).await?;
             Ok(json!({"content": content}))
         }
         "list_files" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("list_files: missing 'path' argument")?;
             validate_not_sensitive(path)?;
             let entries = pool.sftp_list(host_id, path).await?;
@@ -694,12 +793,16 @@ async fn execute_remote_command(
             ).await?;
             let config_path = result.stdout.trim().to_string();
             validate_not_sensitive(&config_path)?;
-            let content = pool.sftp_read(host_id, &config_path).await
+            let content = pool
+                .sftp_read(host_id, &config_path)
+                .await
                 .unwrap_or_else(|_| "(unable to read remote config)".into());
             Ok(json!({"content": content, "path": config_path}))
         }
         "system_info" => {
-            let version_result = pool.exec_login(host_id, "openclaw --version 2>/dev/null || echo unknown").await?;
+            let version_result = pool
+                .exec_login(host_id, "openclaw --version 2>/dev/null || echo unknown")
+                .await?;
             let platform_result = pool.exec(host_id, "uname -s").await?;
             let arch_result = pool.exec(host_id, "uname -m").await?;
             let hostname_result = pool.exec(host_id, "hostname").await?;
@@ -712,7 +815,9 @@ async fn execute_remote_command(
             }))
         }
         "validate_config" => {
-            let result = pool.exec_login(host_id, "openclaw health --json 2>/dev/null").await?;
+            let result = pool
+                .exec_login(host_id, "openclaw health --json 2>/dev/null")
+                .await?;
             if result.exit_code != 0 {
                 return Ok(json!({
                     "ok": false,
@@ -725,9 +830,13 @@ async fn execute_remote_command(
             Ok(parsed)
         }
         "write_file" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or("write_file: missing 'path' argument")?;
-            let content = args.get("content").and_then(|v| v.as_str())
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
                 .ok_or("write_file: missing 'content' argument")?;
             validate_not_sensitive(path)?;
             // Atomic write via temp file + mv to avoid symlink TOCTOU
@@ -746,10 +855,16 @@ async fn execute_remote_command(
                 return Err(format!("Failed to write temp file for {path}: {e}"));
             }
             // Atomic rename: mv temp -> target (overwrites without following symlinks)
-            match pool.exec(host_id, &format!("mv -f '{tmp_esc}' '{esc}'")).await {
+            match pool
+                .exec(host_id, &format!("mv -f '{tmp_esc}' '{esc}'"))
+                .await
+            {
                 Ok(mv_result) if mv_result.exit_code != 0 => {
                     let _ = pool.exec(host_id, &format!("rm -f '{tmp_esc}'")).await;
-                    return Err(format!("Failed to rename temp file to {path}: {}", mv_result.stderr.trim()));
+                    return Err(format!(
+                        "Failed to rename temp file to {path}: {}",
+                        mv_result.stderr.trim()
+                    ));
                 }
                 Err(e) => {
                     let _ = pool.exec(host_id, &format!("rm -f '{tmp_esc}'")).await;
@@ -760,7 +875,9 @@ async fn execute_remote_command(
             Ok(json!({"ok": true}))
         }
         "run_command" => {
-            let cmd = args.get("command").and_then(|v| v.as_str())
+            let cmd = args
+                .get("command")
+                .and_then(|v| v.as_str())
                 .ok_or("run_command: missing 'command' argument")?;
             validate_command(cmd)?;
             let result = pool.exec(host_id, cmd).await?;
