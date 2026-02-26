@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -10,10 +11,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type {
   EnsureAccessResult,
+  ModelProfile,
   InstallMethod,
   InstallMethodCapability,
+  InstallTargetDecision,
+  InstallUiAction,
   InstallSession,
   InstallStep,
   InstallStepResult,
@@ -21,13 +32,16 @@ import type {
 } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 import { appendOrchestratorEvent } from "@/lib/orchestrator-log";
+import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 const METHOD_ORDER: InstallMethod[] = ["local", "wsl2", "docker", "remote_ssh"];
-const STEP_ORDER: InstallStep[] = ["precheck", "install", "init", "verify"];
 const INSTALL_SESSION_STORAGE_PREFIX = "clawpal_install_session_v1:";
 const INSTALL_RESUME_STORAGE_PREFIX = "clawpal_install_resume_v1:";
+const DOCKER_INSTANCES_STORAGE_KEY = "clawpal_docker_instances";
+const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
+const INTENT_HINTS = ["本机", "Docker", "远程 SSH", "连接已有实例"];
 
-type StepStatus = "pending" | "running" | "success" | "failed";
 type BlockerAction = "resume" | "settings" | "doctor" | "instances";
 
 interface InstallAutoBlocker {
@@ -35,6 +49,31 @@ interface InstallAutoBlocker {
   message: string;
   details?: string;
   actions: BlockerAction[];
+}
+
+type StepState = "done" | "running" | "failed" | "pending";
+
+function getStepState(session: InstallSession, step: InstallStep): StepState {
+  const stepOrder: InstallStep[] = ["precheck", "install", "init", "verify"];
+  const currentIdx = session.current_step ? stepOrder.indexOf(session.current_step) : -1;
+  const thisIdx = stepOrder.indexOf(step);
+
+  if (session.state === "ready") return "done";
+  if (session.current_step === step) {
+    const stateStr = session.state;
+    if (stateStr.endsWith("_failed")) return "failed";
+    if (stateStr.endsWith("_running")) return "running";
+    return "running";
+  }
+  if (thisIdx < currentIdx) return "done";
+  return "pending";
+}
+
+function StepIndicator({ state }: { state: StepState }) {
+  if (state === "done") return <span className="size-4 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>;
+  if (state === "running") return <span className="size-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />;
+  if (state === "failed") return <span className="size-4 rounded-full bg-red-500 flex items-center justify-center text-white text-[10px]">✕</span>;
+  return <span className="size-4 rounded-full border-2 border-muted-foreground/30" />;
 }
 
 function hasStorage(): boolean {
@@ -77,6 +116,35 @@ function writeResumeSessionId(instanceId: string, sessionId: string): void {
 function clearResumeSessionId(instanceId: string): void {
   if (!hasStorage()) return;
   window.localStorage.removeItem(storageResumeKey(instanceId));
+}
+
+function readStoredDockerInstanceIds(): Set<string> {
+  if (!hasStorage()) return new Set();
+  const raw = window.localStorage.getItem(DOCKER_INSTANCES_STORAGE_KEY);
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed
+        .map((item) => (typeof item?.id === "string" ? item.id.trim() : ""))
+        .filter((id) => id.length > 0),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function allocateDockerInstanceMeta(): { id: string; label: string } {
+  const ids = readStoredDockerInstanceIds();
+  if (!ids.has(DEFAULT_DOCKER_INSTANCE_ID)) {
+    return { id: DEFAULT_DOCKER_INSTANCE_ID, label: "Docker Local" };
+  }
+  let index = 2;
+  while (ids.has(`docker:local-${index}`)) {
+    index += 1;
+  }
+  return { id: `docker:local-${index}`, label: `Docker Local ${index}` };
 }
 
 function classifyAutoBlocker(
@@ -201,55 +269,20 @@ function sortMethods(methods: InstallMethodCapability[]): InstallMethodCapabilit
   return [...methods].sort((a, b) => (rank.get(a.method) ?? 99) - (rank.get(b.method) ?? 99));
 }
 
-function getStepStatus(state: string | null | undefined, step: InstallStep): StepStatus {
-  if (!state) return "pending";
-  if (step === "precheck") {
-    if (state === "precheck_running") return "running";
-    if (state === "precheck_failed") return "failed";
-    if (["precheck_passed", "install_running", "install_passed", "init_running", "init_passed", "ready"].includes(state)) return "success";
-    return "pending";
-  }
-  if (step === "install") {
-    if (state === "install_running") return "running";
-    if (state === "install_failed") return "failed";
-    if (["install_passed", "init_running", "init_passed", "ready"].includes(state)) return "success";
-    return "pending";
-  }
-  if (step === "init") {
-    if (state === "init_running") return "running";
-    if (state === "init_failed") return "failed";
-    if (["init_passed", "ready"].includes(state)) return "success";
-    return "pending";
-  }
-  if (step === "verify") {
-    if (state === "ready") return "success";
-    return "pending";
-  }
-  return "pending";
-}
-
-function canRunStep(state: string | null | undefined, step: InstallStep): boolean {
-  if (!state) return false;
-  if (step === "precheck") {
-    return state === "selected_method" || state === "precheck_failed";
-  }
-  if (step === "install") {
-    return state === "precheck_passed" || state === "install_failed";
-  }
-  if (step === "init") {
-    return state === "install_passed" || state === "init_failed";
-  }
-  return state === "init_passed";
-}
-
 export function InstallHub({
+  open,
+  onOpenChange,
   showToast,
   onNavigate,
   onReady,
+  onRequestAddSsh,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   showToast?: (message: string, type?: "success" | "error") => void;
   onNavigate?: (route: string) => void;
-  onReady?: (method: InstallMethod) => void;
+  onReady?: (session: InstallSession) => void;
+  onRequestAddSsh?: () => void;
 }) {
   const { t } = useTranslation();
   const ua = useApi();
@@ -270,6 +303,12 @@ export function InstallHub({
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
   const [sshHosts, setSshHosts] = useState<SshHost[]>([]);
   const [selectedSshHostId, setSelectedSshHostId] = useState<string>("");
+  const [installIntent, setInstallIntent] = useState("本机 Docker");
+  const [checkingAuth, setCheckingAuth] = useState(false);
+  const [syncingAuth, setSyncingAuth] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [decidingTarget, setDecidingTarget] = useState(false);
+  const [targetDecision, setTargetDecision] = useState<InstallTargetDecision | null>(null);
 
   useEffect(() => {
     setLoadingMethods(true);
@@ -289,9 +328,9 @@ export function InstallHub({
     ua.listSshHosts()
       .then((hosts) => {
         setSshHosts(hosts);
-        if (hosts.length > 0) {
-          setSelectedSshHostId(hosts[0].id);
-        }
+        setSelectedSshHostId((prev) => (
+          prev && hosts.some((host) => host.id === prev) ? prev : ""
+        ));
       })
       .catch(() => {});
   }, [ua]);
@@ -305,6 +344,7 @@ export function InstallHub({
     setLastAccessError(null);
     setLastOrchestratorReason("");
     setLastOrchestratorSource("");
+    setTargetDecision(null);
     setResumeSessionId(readResumeSessionId(instanceId));
 
     const sessionId = readStoredSessionId(instanceId);
@@ -325,19 +365,80 @@ export function InstallHub({
       });
   }, [ua.instanceId]);
 
-  const selectedMeta = useMemo(
-    () => methods.find((m) => m.method === selectedMethod) ?? null,
-    [methods, selectedMethod],
+  const selectedTargetMeta = useMemo(
+    () => methods.find((m) => m.method === targetDecision?.method) ?? null,
+    [methods, targetDecision?.method],
   );
-
+  const targetUiActions = targetDecision?.uiActions ?? [];
+  const targetRequiredFields = targetDecision?.requiredFields ?? [];
+  const targetRequiresSshHost = Boolean(
+    targetDecision?.requiresSshHost || targetRequiredFields.includes("ssh_host_id"),
+  );
+  const intentPlaceholder = t("home.install.intentPlaceholder");
   const methodLabel = (method: InstallMethod): string => t(`home.install.method.${method}`);
+  const requiredFieldLabel = (field: string): string => {
+    if (field === "ssh_host_id") return t("home.install.selectRemoteHost");
+    if (field === "auth_profile") return t("home.install.authRequiredTitle");
+    return field;
+  };
+  const resolveGoal = (targetSession: InstallSession): string => {
+    const fromArtifacts = typeof targetSession.artifacts?.install_goal_intent === "string"
+      ? targetSession.artifacts.install_goal_intent.trim()
+      : "";
+    return fromArtifacts || `install:${targetSession.method}`;
+  };
+
+  const checkCompatibleAuth = async (): Promise<boolean> => {
+    setCheckingAuth(true);
+    try {
+      const keys = await api.resolveApiKeys();
+      const hasAny = keys.some((item) => Boolean(item.maskedKey && item.maskedKey.trim().length > 0));
+      setAuthRequired(!hasAny);
+      return hasAny;
+    } catch (e) {
+      showToast?.(String(e), "error");
+      setAuthRequired(true);
+      return false;
+    } finally {
+      setCheckingAuth(false);
+    }
+  };
+
+  const syncAuthFromRemoteHost = async (): Promise<boolean> => {
+    if (!selectedSshHostId) {
+      showToast?.(t("home.install.remoteHostRequired"), "error");
+      return false;
+    }
+    setSyncingAuth(true);
+    try {
+      await api.sshConnect(selectedSshHostId).catch(() => {});
+      const profiles = await api.remoteListModelProfiles(selectedSshHostId);
+      let imported = 0;
+      for (const profile of profiles as ModelProfile[]) {
+        await api.upsertModelProfile(profile);
+        imported += 1;
+      }
+      showToast?.(t("home.install.authSynced", { count: imported }), "success");
+      showToast?.(t("home.install.authRotateHint"), "error");
+      setAuthRequired(false);
+      return true;
+    } catch (e) {
+      showToast?.(t("home.install.authSyncFailed", { error: String(e) }), "error");
+      return false;
+    } finally {
+      setSyncingAuth(false);
+    }
+  };
 
   const ensureInstanceByMethod = (nextSession: InstallSession): { instanceId: string; transport: string } | null => {
     if (nextSession.method === "local") {
       return { instanceId: "local", transport: "local" };
     }
     if (nextSession.method === "docker") {
-      return { instanceId: "docker:local", transport: "docker_local" };
+      const instanceId = typeof nextSession.artifacts?.docker_instance_id === "string"
+        ? nextSession.artifacts.docker_instance_id.trim()
+        : "";
+      return { instanceId: instanceId || DEFAULT_DOCKER_INSTANCE_ID, transport: "docker_local" };
     }
     if (nextSession.method === "wsl2") {
       return { instanceId: "wsl2:local", transport: "wsl2" };
@@ -466,7 +567,7 @@ export function InstallHub({
       }
       if (next.state === "ready") {
         await runRecordExperience(next);
-        onReady?.(next.method);
+        onReady?.(next);
       }
       return { result, session: next };
     } catch (e) {
@@ -496,7 +597,7 @@ export function InstallHub({
     setAutoBlocker(null);
     try {
       let current = startSession;
-      const goal = `install:${startSession.method}`;
+      const goal = resolveGoal(startSession);
       const initialTarget = ensureInstanceByMethod(startSession);
       appendOrchestratorEvent({
         level: "info",
@@ -569,7 +670,15 @@ export function InstallHub({
           showToast?.(t("home.install.orchestratorUnavailable", { error: String(e) }), "error");
           return;
         }
-        if (!step) break;
+        if (!step) {
+          const blocker = classifyAutoBlocker(
+            "orchestrator returned no step",
+            t("home.install.blocked.orchestratorUnavailable"),
+          );
+          setAutoBlocker(blocker);
+          showToast?.(t("home.install.blocked.orchestratorUnavailable"), "error");
+          return;
+        }
         const { result, session: refreshed } = await runStepAndRefresh(current, step, true);
         if (!result.ok || !refreshed) {
           const blocker = classifyAutoBlocker(
@@ -640,20 +749,29 @@ export function InstallHub({
     onNavigate?.(route);
   };
 
-  const handleCreateSession = () => {
-    if (selectedMethod === "remote_ssh" && !selectedSshHostId) {
-      showToast?.(t("home.install.remoteHostRequired"), "error");
-      return;
-    }
+  const createInstallSession = async (method: InstallMethod, goalIntent: string) => {
     setCreating(true);
     setLastResult(null);
     setLastAccessResult(null);
     setLastAccessError(null);
     setAutoBlocker(null);
-    const options = selectedMethod === "remote_ssh"
-      ? { ssh_host_id: selectedSshHostId }
-      : undefined;
-    ua.installCreateSession(selectedMethod, options)
+    setSelectedMethod(method);
+    const dockerMeta = method === "docker" ? allocateDockerInstanceMeta() : null;
+    const options = method === "remote_ssh"
+      ? {
+          ssh_host_id: selectedSshHostId,
+          install_goal_intent: goalIntent,
+        }
+      : method === "docker"
+        ? {
+            docker_instance_id: dockerMeta?.id || DEFAULT_DOCKER_INSTANCE_ID,
+            docker_instance_label: dockerMeta?.label || "Docker Local",
+            install_goal_intent: goalIntent,
+          }
+        : {
+            install_goal_intent: goalIntent,
+          };
+    ua.installCreateSession(method, options)
       .then((next) => {
         setSession(next);
         showToast?.(t("home.install.sessionCreated"), "success");
@@ -673,6 +791,74 @@ export function InstallHub({
       .finally(() => setCreating(false));
   };
 
+  const handleLauncherConfirm = async () => {
+    const goalIntent = installIntent.trim() || "install";
+    const intentLower = goalIntent.toLowerCase();
+    const isConnect = intentLower.includes("连接") || intentLower.includes("connect");
+    const mode = isConnect ? "connect" : "install";
+
+    setDecidingTarget(true);
+    let decision: InstallTargetDecision;
+    try {
+      decision = await ua.installDecideTarget(goalIntent, {
+        selected_ssh_host_id: selectedSshHostId || null,
+        ssh_host_count: sshHosts.length,
+        available_methods: methods
+          .filter((item) => item.available)
+          .map((item) => item.method),
+        mode,
+      });
+    } catch (e) {
+      const message = String(e);
+      showToast?.(message, "error");
+      setDecidingTarget(false);
+      return;
+    } finally {
+      setDecidingTarget(false);
+    }
+
+    setTargetDecision(decision);
+
+    if (decision.source !== "zeroclaw-sidecar" || !decision.method) {
+      showToast?.(decision.reason || t("home.install.targetDecisionFailed"), "error");
+      return;
+    }
+
+    const decisionMethod = decision.method;
+    const decisionNeedsSshHost = Boolean(
+      decision.requiresSshHost || decision.requiredFields?.includes("ssh_host_id"),
+    );
+    if (decisionNeedsSshHost && !selectedSshHostId) {
+      showToast?.(t("home.install.remoteHostRequired"), "error");
+      return;
+    }
+
+    if (isConnect) {
+      // Connect flow: sync auth from remote if SSH, then signal done
+      if (decisionMethod === "remote_ssh" && selectedSshHostId) {
+        await syncAuthFromRemoteHost().catch(() => false);
+      }
+      showToast?.(t("home.install.connectDone"), "success");
+      return;
+    }
+
+    // Install flow
+    const methodMeta = methods.find((item) => item.method === decisionMethod) ?? null;
+    if (!methodMeta?.available) {
+      showToast?.(methodMeta?.hint || t("home.install.needsSetup"), "error");
+      return;
+    }
+
+    const hasAuth = await checkCompatibleAuth();
+    if (!hasAuth) {
+      setAuthRequired(true);
+      return;
+    }
+
+    setAuthRequired(false);
+    await createInstallSession(decisionMethod, goalIntent);
+  };
+
   const refreshSession = (sessionId: string) => {
     return ua.installGetSession(sessionId).then((next) => {
       setSession(next);
@@ -680,92 +866,86 @@ export function InstallHub({
     });
   };
 
-  const runStep = (step: InstallStep) => {
-    if (!session) return;
-    void runStepAndRefresh(session, step);
-  };
-
-  const renderBlockerAction = (action: BlockerAction) => {
-    if (!session) return null;
-    if (action === "resume") {
-      return (
-        <Button size="xs" variant="outline" onClick={() => void runAutoInstall(session)}>
-          {t("home.install.resumeAuto")}
-        </Button>
-      );
+  const runTargetUiAction = (action: InstallUiAction) => {
+    if (action.kind === "open_settings") {
+      onNavigate?.("settings");
+      return;
     }
-    if (action === "settings") {
-      return (
-        <Button size="xs" variant="outline" onClick={() => navigateWithAutoResume("settings", true)}>
-          {t("home.install.goSettings")}
-        </Button>
-      );
+    if (action.kind === "open_instances") {
+      if (onRequestAddSsh) {
+        onRequestAddSsh();
+      } else {
+        onNavigate?.("home");
+      }
+      return;
     }
-    if (action === "doctor") {
-      return (
-        <Button size="xs" variant="outline" onClick={() => navigateWithAutoResume("doctor", true)}>
-          {t("home.install.openDoctor")}
-        </Button>
-      );
+    if (action.kind === "open_doctor") {
+      onNavigate?.("doctor");
     }
-    if (action === "instances") {
-      return (
-        <Button size="xs" variant="outline" onClick={() => onNavigate?.("home")}>
-          {t("home.install.openInstances")}
-        </Button>
-      );
-    }
-    return null;
   };
 
   return (
-    <>
-      <h3 className="text-lg font-semibold mt-8 mb-4">{t("home.install.title")}</h3>
-      <Card>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">{t("home.install.description")}</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={selectedMethod}
-              onValueChange={(value) => setSelectedMethod(value as InstallMethod)}
-              disabled={loadingMethods || creating || runningStep !== null || autoRunning}
-            >
-              <SelectTrigger size="sm" className="w-[240px]">
-                <SelectValue placeholder={t("home.install.selectMethod")} />
-              </SelectTrigger>
-              <SelectContent>
-                {methods.map((method) => (
-                  <SelectItem key={method.method} value={method.method}>
-                    {methodLabel(method.method)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedMeta && (
-              <Badge variant={selectedMeta.available ? "secondary" : "outline"}>
-                {selectedMeta.available
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{t("home.install.setupTitle")}</DialogTitle>
+          <DialogDescription>{t("home.install.setupDesc")}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          {autoRunning && <Badge variant="outline">{t("home.install.autoRunning")}</Badge>}
+
+          <div className="flex flex-wrap items-center gap-2 text-xs min-h-5">
+            {targetDecision?.method && (
+              <Badge variant="outline">{methodLabel(targetDecision.method)}</Badge>
+            )}
+            {targetDecision?.method && selectedTargetMeta && (
+              <Badge variant={selectedTargetMeta.available ? "secondary" : "outline"}>
+                {selectedTargetMeta.available
                   ? t("home.install.available")
                   : t("home.install.needsSetup")}
               </Badge>
             )}
-            <Button size="sm" disabled={creating || loadingMethods || runningStep !== null || autoRunning} onClick={handleCreateSession}>
-              {creating ? t("home.install.creating") : t("home.install.start")}
-            </Button>
-            {autoRunning && (
-              <Badge variant="outline">{t("home.install.autoRunning")}</Badge>
-            )}
           </div>
-          {selectedMeta?.hint && (
-            <p className="text-xs text-muted-foreground">{selectedMeta.hint}</p>
+          {targetDecision?.reason && targetDecision.source !== "zeroclaw-sidecar" && (
+            <p className="text-xs text-muted-foreground">{targetDecision.reason}</p>
           )}
-          {selectedMethod === "remote_ssh" && (
-            <div className="flex items-center gap-2">
+          {targetRequiredFields.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              {targetRequiredFields.map((field) => (
+                <Badge key={field} variant="outline">
+                  {requiredFieldLabel(field)}
+                </Badge>
+              ))}
+            </div>
+          )}
+          {targetUiActions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {targetUiActions.map((action) => (
+                <Button
+                  key={action.id}
+                  size="xs"
+                  variant="outline"
+                  onClick={() => runTargetUiAction(action)}
+                >
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          {(authRequired
+            || decidingTarget
+            || targetRequiresSshHost
+            || sshHosts.length > 0) && (
+            <div className="space-y-2">
+              <div className="text-xs font-medium">{t("home.install.selectRemoteHost")}</div>
               <Select
                 value={selectedSshHostId}
                 onValueChange={setSelectedSshHostId}
                 disabled={creating || runningStep !== null || autoRunning || sshHosts.length === 0}
               >
-                <SelectTrigger size="sm" className="w-[260px]">
+                <SelectTrigger size="sm">
                   <SelectValue placeholder={t("home.install.selectRemoteHost")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -777,142 +957,160 @@ export function InstallHub({
                 </SelectContent>
               </Select>
               {sshHosts.length === 0 && (
-                <span className="text-xs text-muted-foreground">{t("home.install.noRemoteHosts")}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{t("home.install.noRemoteHosts")}</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => onRequestAddSsh?.()}
+                  >
+                    {t("instance.addSsh")}
+                  </Button>
+                </div>
               )}
             </div>
           )}
 
+          {authRequired && (
+            <div className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs space-y-2">
+              <div className="font-medium">{t("home.install.authRequiredHint")}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => onNavigate?.("settings")}
+                >
+                  {t("home.install.goSettings")}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={syncingAuth || !selectedSshHostId}
+                  onClick={() => void syncAuthFromRemoteHost()}
+                >
+                  {syncingAuth
+                    ? t("home.install.syncingAuth")
+                    : t("home.install.syncAuthFromRemote")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Intent input */}
+          <div className="space-y-2">
+            <Textarea
+              value={installIntent}
+              onChange={(event) => setInstallIntent(event.target.value)}
+              placeholder={intentPlaceholder}
+              className="min-h-16"
+            />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {INTENT_HINTS.map((hint) => (
+                <button
+                  key={hint}
+                  type="button"
+                  className="text-xs px-2 py-1 rounded border hover:bg-muted/40 transition-colors"
+                  onClick={() => setInstallIntent(hint)}
+                >
+                  {hint}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center justify-end">
+              <Button
+                onClick={() => void handleLauncherConfirm()}
+                disabled={
+                  loadingMethods
+                  || creating
+                  || decidingTarget
+                  || checkingAuth
+                  || syncingAuth
+                  || (targetRequiresSshHost && !selectedSshHostId)
+                }
+              >
+                {t("home.install.launcherRun")}
+              </Button>
+            </div>
+          </div>
+
+          {/* A2UI Stepper */}
           {session && (
-            <div className="space-y-3 rounded-md border p-3 text-sm">
-              <div>
-                <div className="font-medium">{t("home.install.currentSession")}</div>
-                <div className="text-muted-foreground">ID: {session.id}</div>
-                <div className="text-muted-foreground">
-                  {t("home.install.sessionState", { state: session.state })}
-                </div>
-                {lastOrchestratorSource && (
-                  <div className="text-muted-foreground">
-                    {t("home.install.orchestrator", {
-                      source: lastOrchestratorSource,
-                      reason: lastOrchestratorReason || "-",
-                    })}
+            <div className="space-y-2 mt-4">
+              {(["precheck", "install", "init", "verify"] as const).map((step) => {
+                const state = getStepState(session, step);
+                return (
+                  <div key={step} className="flex items-center gap-2.5">
+                    <StepIndicator state={state} />
+                    <span className={cn(
+                      "text-sm",
+                      state === "running" && "font-medium text-primary",
+                      state === "failed" && "text-destructive",
+                      state === "done" && "text-foreground",
+                      state === "pending" && "text-muted-foreground",
+                    )}>
+                      {t(`home.install.step.${step}`)}
+                    </span>
+                    {state === "running" && (
+                      <span className="text-xs text-muted-foreground animate-pulse">
+                        {t("home.install.running")}
+                      </span>
+                    )}
                   </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Blocker recovery */}
+          {autoBlocker && session && session.state !== "ready" && !autoRunning && (
+            <Card className="border-destructive/30 bg-destructive/5 mt-4">
+              <CardContent className="space-y-3">
+                <p className="text-sm font-medium">{autoBlocker.message}</p>
+                {autoBlocker.details && (
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">{t("home.install.showDetails")}</summary>
+                    <pre className="mt-1 whitespace-pre-wrap font-mono">{autoBlocker.details}</pre>
+                  </details>
                 )}
-              </div>
-
-              <div className="rounded border bg-muted/30 p-2 text-xs space-y-1">
-                <div className="font-medium">{t("home.install.access.title")}</div>
-                <div className="text-muted-foreground">
-                  {ensuringAccess
-                    ? t("home.install.access.probing")
-                    : lastAccessResult
-                      ? t("home.install.access.probed")
-                      : lastAccessError
-                        ? t("home.install.access.failedInline")
-                        : t("home.install.access.notStarted")}
-                </div>
-                {lastAccessResult && (
-                  <>
-                    <div className="text-muted-foreground">
-                      {t("home.install.access.chain", { chain: lastAccessResult.workingChain.join(" -> ") })}
-                    </div>
-                    <div className="text-muted-foreground">
-                      {lastAccessResult.profileReused
-                        ? t("home.install.access.reused")
-                        : t("home.install.access.created")}
-                      {lastAccessResult.usedLegacyFallback ? ` · ${t("home.install.access.fallback")}` : ""}
-                    </div>
-                  </>
-                )}
-                {lastAccessError && (
-                  <div className="text-red-600 dark:text-red-400">{lastAccessError}</div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                {STEP_ORDER.map((step) => {
-                  const status = getStepStatus(session.state, step);
-                  const actionable = canRunStep(session.state, step);
-                  return (
-                    <div key={step} className="flex items-center justify-between rounded border px-2 py-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium">{t(`home.install.step.${step}`)}</span>
-                        <Badge variant="outline" className="text-[10px]">
-                          {t(`home.install.status.${status}`)}
-                        </Badge>
-                      </div>
-                      <Button
-                        size="xs"
-                        variant={status === "failed" ? "outline" : "default"}
-                        disabled={runningStep !== null || autoRunning || !actionable}
-                        onClick={() => runStep(step)}
-                      >
-                        {runningStep === step
-                          ? t("home.install.running")
-                          : status === "failed"
-                            ? t("home.install.retry")
-                            : t("home.install.runStep")}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {lastResult && (
-                <div className="rounded border bg-muted/30 p-2 text-xs space-y-1">
-                  <div className="font-medium">{lastResult.summary}</div>
-                  <div className="max-h-24 overflow-auto rounded border bg-background/70 p-2 text-muted-foreground whitespace-pre-wrap break-all">
-                    {lastResult.details}
-                  </div>
-                  {lastResult.commands.length > 0 && (
-                    <div className="max-h-40 overflow-auto rounded border bg-background/70 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
-                      {lastResult.commands.join("\n")}
-                    </div>
-                  )}
-                  {lastResult.next_step && (
-                    <Button size="xs" variant="outline" onClick={() => runStep(lastResult.next_step as InstallStep)}>
-                      {t("home.install.nextStep", { step: t(`home.install.step.${lastResult.next_step}`) })}
-                    </Button>
-                  )}
-                </div>
-              )}
-
-              {autoBlocker && session.state !== "ready" && !autoRunning && (
-                <div className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs space-y-2">
-                  <div className="font-medium">{autoBlocker.message}</div>
-                  <div className="text-muted-foreground">
-                    {t("home.install.blocked.code", { code: autoBlocker.code })}
-                  </div>
-                  {autoBlocker.details && (
-                    <div className="max-h-24 overflow-auto rounded border bg-background/70 p-2 text-muted-foreground whitespace-pre-wrap break-all">
-                      {autoBlocker.details}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {autoBlocker.actions.map((action) => (
-                      <span key={action}>{renderBlockerAction(action)}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {session.state === "ready" && (
-                <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs space-y-2">
-                  <div className="font-medium">{t("home.install.ready")}</div>
-                  <div className="flex items-center gap-2">
-                    <Button size="xs" variant="outline" onClick={() => onNavigate?.("settings")}>
+                <div className="flex gap-2">
+                  {autoBlocker.actions.includes("settings") && (
+                    <Button size="sm" variant="outline" onClick={() => onNavigate?.("settings")}>
                       {t("home.install.goSettings")}
                     </Button>
-                    <Button size="xs" onClick={() => onNavigate?.("channels")}>
-                      {t("home.install.goChannels")}
+                  )}
+                  {autoBlocker.actions.includes("doctor") && (
+                    <Button size="sm" variant="outline" onClick={() => onNavigate?.("doctor")}>
+                      {t("home.install.openDoctor")}
                     </Button>
-                  </div>
+                  )}
+                  {autoBlocker.actions.includes("resume") && (
+                    <Button size="sm" onClick={() => { setAutoBlocker(null); void runAutoInstall(session); }}>
+                      {t("home.install.retry")}
+                    </Button>
+                  )}
                 </div>
-              )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Completion */}
+          {session?.state === "ready" && (
+            <div className="space-y-3 mt-4">
+              <p className="text-sm text-green-600 dark:text-green-400 font-medium">
+                {t("home.install.ready")}
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => { onOpenChange(false); onNavigate?.("settings"); }}>
+                  {t("home.install.goSettings")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); onNavigate?.("channels"); }}>
+                  {t("home.install.goChannels")}
+                </Button>
+              </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-    </>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
