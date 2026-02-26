@@ -27,67 +27,6 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Resolve the `openclaw` binary path, with fallback probing for common locations.
-/// `fix_path_env::fix()` in main.rs patches PATH from the user's login shell, but
-/// it silently fails on some setups. This function caches the resolved path for the
-/// lifetime of the process.
-pub(crate) fn resolve_openclaw_bin() -> &'static str {
-    use std::sync::OnceLock;
-    static BIN: OnceLock<String> = OnceLock::new();
-    BIN.get_or_init(|| {
-        // First: check if "openclaw" is already in PATH (fix_path_env worked)
-        if find_in_path("openclaw") {
-            return "openclaw".to_string();
-        }
-        // Fallback: probe well-known locations
-        let home = std::env::var("HOME").unwrap_or_default();
-        let candidates = [
-            "/opt/homebrew/bin/openclaw".to_string(),
-            "/usr/local/bin/openclaw".to_string(),
-            format!("{home}/.npm-global/bin/openclaw"),
-            format!("{home}/.local/bin/openclaw"),
-        ];
-        // Also probe nvm directories (any node version)
-        let nvm_dir = std::env::var("NVM_DIR").unwrap_or_else(|_| format!("{home}/.nvm"));
-        let nvm_pattern = format!("{nvm_dir}/versions/node");
-        let mut nvm_candidates = Vec::new();
-        if let Ok(entries) = fs::read_dir(&nvm_pattern) {
-            for entry in entries.flatten() {
-                let p = entry.path().join("bin/openclaw");
-                if p.exists() {
-                    nvm_candidates.push(p.to_string_lossy().to_string());
-                }
-            }
-        }
-        for candidate in candidates.iter().chain(nvm_candidates.iter()) {
-            if Path::new(candidate).is_file() {
-                // Prepend its directory to PATH so child processes benefit.
-                // Called exactly once via OnceLock, before other threads read PATH.
-                if let Some(dir) = Path::new(candidate).parent() {
-                    if let Ok(current_path) = std::env::var("PATH") {
-                        let dir_str = dir.to_string_lossy();
-                        let already_in_path = std::env::split_paths(&current_path)
-                            .any(|p| p == Path::new(dir_str.as_ref()));
-                        if !already_in_path {
-                            std::env::set_var("PATH", format!("{dir_str}:{current_path}"));
-                        }
-                    }
-                }
-                return candidate.clone();
-            }
-        }
-        // Last resort: return bare name and let the OS error propagate
-        "openclaw".to_string()
-    })
-}
-
-/// Check if a binary exists in PATH without executing it.
-fn find_in_path(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file()))
-        .unwrap_or(false)
-}
-
 use crate::recipe::{
     build_candidate_config_from_template, collect_change_paths, format_diff,
     load_recipes_with_fallback, ApplyResult, PreviewResult,
@@ -541,7 +480,7 @@ pub fn get_status_extra() -> Result<StatusExtra, String> {
         let mut cache = OPENCLAW_VERSION_CACHE.lock().unwrap();
         if cache.is_none() {
             *cache = Some(
-                std::process::Command::new(resolve_openclaw_bin())
+                std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin())
                     .arg("--version")
                     .output()
                     .ok()
@@ -3591,7 +3530,7 @@ fn run_openclaw_raw_timeout(
     args: &[&str],
     timeout_secs: Option<u64>,
 ) -> Result<OpenclawCommandOutput, String> {
-    let mut command = Command::new(resolve_openclaw_bin());
+    let mut command = Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
     command
         .args(args)
         .stdout(std::process::Stdio::piped())
@@ -9654,7 +9593,7 @@ pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>,
 #[tauri::command]
 pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(resolve_openclaw_bin());
+        let mut cmd = std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
         cmd.args(["cron", "run", &job_id]);
         if let Some(path) = crate::cli_runner::get_active_openclaw_home_override() {
             cmd.env("OPENCLAW_HOME", path);
@@ -9678,7 +9617,7 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn delete_cron_job(job_id: String) -> Result<String, String> {
-    let mut cmd = std::process::Command::new(resolve_openclaw_bin());
+    let mut cmd = std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
     cmd.args(["cron", "remove", &job_id]);
     if let Some(path) = crate::cli_runner::get_active_openclaw_home_override() {
         cmd.env("OPENCLAW_HOME", path);

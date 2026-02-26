@@ -1,5 +1,4 @@
 use super::{classify_error_code, run_command, RunnerFailure, RunnerOutput};
-use crate::commands::resolve_openclaw_bin;
 use crate::config_io::{ensure_dirs, write_text, DEFAULT_CONFIG};
 use crate::install::types::InstallStep;
 use crate::models::resolve_paths;
@@ -8,7 +7,7 @@ use std::collections::HashMap;
 use std::process::Command;
 
 fn detect_openclaw() -> Result<(bool, String), RunnerFailure> {
-    let bin = resolve_openclaw_bin();
+    let bin = clawpal_core::openclaw::resolve_openclaw_bin();
     let command_line = format!("{} --version", bin);
     match Command::new(bin).arg("--version").output() {
         Ok(output) => {
@@ -46,7 +45,10 @@ pub fn run_step(
         InstallStep::Precheck => {
             let (openclaw_present, command_line) = detect_openclaw()?;
             let mut next_artifacts = HashMap::new();
-            next_artifacts.insert("openclaw_present".to_string(), Value::Bool(openclaw_present));
+            next_artifacts.insert(
+                "openclaw_present".to_string(),
+                Value::Bool(openclaw_present),
+            );
             let details = if openclaw_present {
                 "OpenClaw detected on local machine".to_string()
             } else {
@@ -65,7 +67,10 @@ pub fn run_step(
                 return Ok(RunnerOutput {
                     summary: "local install skipped".to_string(),
                     details: "OpenClaw already present from precheck".to_string(),
-                    commands: vec![format!("{} --version", resolve_openclaw_bin())],
+                    commands: vec![format!(
+                        "{} --version",
+                        clawpal_core::openclaw::resolve_openclaw_bin()
+                    )],
                     artifacts: HashMap::from([("openclaw_present".to_string(), Value::Bool(true))]),
                 });
             }
@@ -119,8 +124,14 @@ pub fn run_step(
             })
         }
         InstallStep::Verify => {
-            let version = run_command(resolve_openclaw_bin(), &["--version"])?;
-            let status = run_command(resolve_openclaw_bin(), &["config", "get", "agents", "--json"])?;
+            let version = run_command(
+                clawpal_core::openclaw::resolve_openclaw_bin(),
+                &["--version"],
+            )?;
+            let status = run_command(
+                clawpal_core::openclaw::resolve_openclaw_bin(),
+                &["config", "get", "agents", "--json"],
+            )?;
             Ok(RunnerOutput {
                 summary: "local verify completed".to_string(),
                 details: format!("{}\n{}", version.stdout, status.stdout),
