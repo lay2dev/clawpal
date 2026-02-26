@@ -1,5 +1,11 @@
 # Codex Execution Prompt: GUI-CLI-Agent Three-Layer Refactor
 
+## How to Execute
+
+Use the `superpowers:executing-plans` skill to execute this refactor. The plan file is at `docs/plans/2026-02-26-gui-cli-agent-layers-plan.md`.
+
+For each phase, also use `superpowers:verification-before-completion` before committing to ensure the phase actually compiles and passes tests.
+
 ## Context
 
 You are implementing a major architectural refactor for ClawPal, a Tauri desktop app that manages OpenClaw instances. The refactor extracts business logic from Tauri commands into a shared `clawpal-core` library crate, adds a standalone `clawpal-cli` binary, and replaces the SSH implementation.
