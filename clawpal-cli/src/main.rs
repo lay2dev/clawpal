@@ -1,6 +1,10 @@
 use clap::{Parser, Subcommand};
 use clawpal_core::health::{check_instance, HealthStatus};
 use clawpal_core::instance::{Instance, InstanceRegistry, InstanceType};
+use clawpal_core::openclaw::OpenclawCli;
+use clawpal_core::profile::{
+    delete_profile, list_profiles, test_profile, upsert_profile, ModelProfile,
+};
 use serde_json::json;
 
 #[derive(Parser, Debug)]
@@ -76,9 +80,22 @@ enum SshCommands {
 #[derive(Subcommand, Debug)]
 enum ProfileCommands {
     List,
-    Add,
-    Remove { id: String },
-    Test { id: String },
+    Add {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+    },
+    Remove {
+        id: String,
+    },
+    Test {
+        id: String,
+    },
 }
 
 fn main() {
@@ -86,6 +103,7 @@ fn main() {
     let result = match cli.command {
         Commands::Instance { command } => run_instance_command(command),
         Commands::Health { command } => run_health_command(command),
+        Commands::Profile { command } => run_profile_command(command),
         command => Ok(json!({
             "status": "not yet implemented",
             "command": format!("{command:?}"),
@@ -149,6 +167,44 @@ fn default_local_instance() -> Instance {
         openclaw_home: None,
         clawpal_data_dir: None,
         ssh_host_config: None,
+    }
+}
+
+fn run_profile_command(command: ProfileCommands) -> Result<serde_json::Value, String> {
+    let openclaw = OpenclawCli::new();
+    match command {
+        ProfileCommands::List => {
+            let profiles = list_profiles(&openclaw).map_err(|e| e.to_string())?;
+            Ok(json!(profiles))
+        }
+        ProfileCommands::Add {
+            provider,
+            model,
+            name,
+            api_key,
+        } => {
+            let profile = ModelProfile {
+                id: String::new(),
+                name: name.unwrap_or_default(),
+                provider,
+                model,
+                auth_ref: String::new(),
+                api_key,
+                base_url: None,
+                description: None,
+                enabled: true,
+            };
+            let saved = upsert_profile(&openclaw, profile).map_err(|e| e.to_string())?;
+            Ok(json!(saved))
+        }
+        ProfileCommands::Remove { id } => {
+            let removed = delete_profile(&openclaw, &id).map_err(|e| e.to_string())?;
+            Ok(json!({ "removed": removed, "id": id }))
+        }
+        ProfileCommands::Test { id } => {
+            let result = test_profile(&openclaw, &id).map_err(|e| e.to_string())?;
+            Ok(json!(result))
+        }
     }
 }
 

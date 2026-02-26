@@ -300,6 +300,34 @@ pub struct ModelProfile {
     pub enabled: bool,
 }
 
+fn model_profile_to_core(value: ModelProfile) -> clawpal_core::profile::ModelProfile {
+    clawpal_core::profile::ModelProfile {
+        id: value.id,
+        name: value.name,
+        provider: value.provider,
+        model: value.model,
+        auth_ref: value.auth_ref,
+        api_key: value.api_key,
+        base_url: value.base_url,
+        description: value.description,
+        enabled: value.enabled,
+    }
+}
+
+fn model_profile_from_core(value: clawpal_core::profile::ModelProfile) -> ModelProfile {
+    ModelProfile {
+        id: value.id,
+        name: value.name,
+        provider: value.provider,
+        model: value.model,
+        auth_ref: value.auth_ref,
+        api_key: value.api_key,
+        base_url: value.base_url,
+        description: value.description,
+        enabled: value.enabled,
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCatalogModel {
@@ -568,8 +596,9 @@ pub fn get_system_status() -> Result<SystemStatus, String> {
 
 #[tauri::command]
 pub fn list_model_profiles() -> Result<Vec<ModelProfile>, String> {
-    let paths = resolve_paths();
-    Ok(load_model_profiles(&paths))
+    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+    let profiles = clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
+    Ok(profiles.into_iter().map(model_profile_from_core).collect())
 }
 
 #[tauri::command]
@@ -657,64 +686,18 @@ pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult
 
 #[tauri::command]
 pub fn upsert_model_profile(mut profile: ModelProfile) -> Result<ModelProfile, String> {
-    if profile.provider.trim().is_empty() || profile.model.trim().is_empty() {
-        return Err("provider and model are required".into());
-    }
-    if profile.name.trim().is_empty() {
-        profile.name = format!("{}/{}", profile.provider, profile.model);
-    }
-    let paths = resolve_paths();
-    let mut profiles = load_model_profiles(&paths);
-    fill_profile_auth_from_existing_or_provider_donor(&mut profile, &profiles);
-    let has_api_key = profile
-        .api_key
-        .as_ref()
-        .is_some_and(|k| !k.trim().is_empty());
-    if has_api_key && profile.auth_ref.trim().is_empty() {
-        profile.auth_ref = format!("{}:default", profile.provider.trim());
-    }
-    if profile.auth_ref.trim().is_empty() && !has_api_key {
-        // Auto-resolve auth ref from openclaw config or env vars
-        if let Ok(cfg) = read_openclaw_config(&paths) {
-            if let Some(auth_ref) = resolve_auth_ref_for_provider(&cfg, &profile.provider) {
-                profile.auth_ref = auth_ref;
-            }
-        }
-        if profile.auth_ref.trim().is_empty() {
-            // Try env var convention
-            let provider_upper = profile.provider.trim().to_uppercase().replace('-', "_");
-            for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-                let env_name = format!("{provider_upper}{suffix}");
-                if std::env::var(&env_name)
-                    .map(|v| !v.trim().is_empty())
-                    .unwrap_or(false)
-                {
-                    profile.auth_ref = env_name;
-                    break;
-                }
-            }
-        }
-        if profile.auth_ref.trim().is_empty() {
-            return Err("API key or auth env var is required".into());
-        }
-    }
-    profile = upsert_profile_in_storage(&mut profiles, profile);
-    save_model_profiles(&paths, &profiles)?;
-    sync_profile_auth_to_main_agent(&paths, &profile)?;
+    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+    profile = model_profile_from_core(
+        clawpal_core::profile::upsert_profile(&openclaw, model_profile_to_core(profile))
+            .map_err(|e| e.to_string())?,
+    );
     Ok(profile)
 }
 
 #[tauri::command]
 pub fn delete_model_profile(profile_id: String) -> Result<bool, String> {
-    let paths = resolve_paths();
-    let mut profiles = load_model_profiles(&paths);
-    let before = profiles.len();
-    profiles.retain(|p| p.id != profile_id);
-    if profiles.len() == before {
-        return Ok(false);
-    }
-    save_model_profiles(&paths, &profiles)?;
-    Ok(true)
+    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+    clawpal_core::profile::delete_profile(&openclaw, &profile_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -4865,41 +4848,10 @@ fn run_provider_probe(
 
 #[tauri::command]
 pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
-    let paths = resolve_paths();
-    tauri::async_runtime::spawn_blocking(move || {
-        let profile = load_model_profiles(&paths)
-            .into_iter()
-            .find(|p| p.id == profile_id)
-            .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
-
-        if !profile.enabled {
-            return Err("Profile is disabled".into());
-        }
-
-        let api_key = resolve_profile_api_key(&profile, &paths.base_dir);
-        if api_key.trim().is_empty() {
-            return Err("No API key resolved for this profile".into());
-        }
-
-        let resolved_base_url = profile
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                fs::read_to_string(&paths.config_path)
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-                    .and_then(|cfg| resolve_model_provider_base_url(&cfg, &profile.provider))
-            });
-
-        run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
-    })
-    .await
-    .map_err(|e| format!("Task join failed: {e}"))??;
-
-    Ok(true)
+    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+    let result =
+        clawpal_core::profile::test_profile(&openclaw, &profile_id).map_err(|e| e.to_string())?;
+    Ok(result.ok)
 }
 
 fn resolve_profile_api_key(profile: &ModelProfile, base_dir: &Path) -> String {
