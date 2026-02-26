@@ -1,5 +1,4 @@
 use std::fs;
-use std::net::TcpListener;
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -35,10 +34,6 @@ fn cleanup_compose(repo_dir: &str, state_dir: &str) {
     let _ = down.output();
 }
 
-fn is_local_port_available(port: u16) -> bool {
-    TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
 #[test]
 fn install_docker_real_run_smoke() {
     if !should_run_live_docker_test() {
@@ -47,11 +42,6 @@ fn install_docker_real_run_smoke() {
     }
 
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if !is_local_port_available(18789) {
-        eprintln!("skip docker live test: local port 18789 is already occupied");
-        return;
-    }
-
     let data_dir = std::env::temp_dir().join(format!("clawpal-docker-live-data-{}", Uuid::new_v4()));
     let home_dir = std::env::temp_dir().join(format!("clawpal-docker-live-home-{}", Uuid::new_v4()));
     fs::create_dir_all(&data_dir).expect("create data dir");
@@ -71,8 +61,11 @@ fn install_docker_real_run_smoke() {
     let result = install_docker(options);
     if let Err(err) = result {
         let message = err.to_string();
-        if message.contains("port is already allocated") {
-            eprintln!("skip docker live test: openclaw gateway port 18789 already allocated");
+        if message.contains("port is already allocated")
+            || message.contains("address already in use")
+            || message.contains("bind: address in use")
+        {
+            eprintln!("skip docker live test: openclaw gateway port is already occupied");
             cleanup_compose(&repo_dir, &state_dir);
             return;
         }

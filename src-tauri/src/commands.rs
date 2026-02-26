@@ -5603,7 +5603,7 @@ mod rescue_bot_tests {
     #[test]
     fn test_ensure_rescue_port_spacing_rejects_small_gap() {
         let err = ensure_rescue_port_spacing(18789, 18800).unwrap_err();
-        assert!(err.contains("at least 20"));
+        assert!(err.contains(">= +20"));
     }
 
     #[test]
