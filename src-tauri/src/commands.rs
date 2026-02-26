@@ -7129,263 +7129,16 @@ fn ssh_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".ssh").join("config"))
 }
 
-fn push_ssh_config_hosts(
-    out: &mut Vec<SshConfigHostSuggestion>,
-    aliases: &[String],
-    host_name: &Option<String>,
-    user: &Option<String>,
-    port: &Option<u16>,
-    identity_file: &Option<String>,
-) {
-    for alias in aliases {
-        if alias.is_empty()
-            || alias == "*"
-            || alias.starts_with('!')
-            || alias.contains('*')
-            || alias.contains('?')
-        {
-            continue;
-        }
-        out.push(SshConfigHostSuggestion {
-            host_alias: alias.clone(),
-            host_name: host_name.clone(),
-            user: user.clone(),
-            port: *port,
-            identity_file: identity_file.clone(),
-        });
+fn map_ssh_config_suggestion(
+    value: clawpal_core::ssh::config::SshConfigHostSuggestion,
+) -> SshConfigHostSuggestion {
+    SshConfigHostSuggestion {
+        host_alias: value.host_alias,
+        host_name: value.host_name,
+        user: value.user,
+        port: value.port,
+        identity_file: value.identity_file,
     }
-}
-
-fn parse_quoted_ssh_value(mut value: &str) -> String {
-    value = value.trim();
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        if (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
-            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
-        {
-            return value[1..value.len() - 1].to_string();
-        }
-    }
-    value.to_string()
-}
-
-fn strip_ssh_comment(value: &str) -> String {
-    let mut output = String::new();
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-
-    for ch in value.chars() {
-        if escaped {
-            output.push(ch);
-            escaped = false;
-            continue;
-        }
-
-        if ch == '\\' {
-            output.push(ch);
-            escaped = true;
-            continue;
-        }
-
-        if quote.is_some() {
-            if quote == Some(ch) {
-                quote = None;
-            }
-            output.push(ch);
-            continue;
-        }
-
-        if matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-            output.push(ch);
-            continue;
-        }
-
-        if ch == '#' {
-            break;
-        }
-
-        output.push(ch);
-    }
-
-    output.trim().to_string()
-}
-
-fn parse_ssh_config_entry(line: &str) -> Option<(String, String)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-
-    let mut sep = None;
-    let mut quote: Option<char> = None;
-
-    for (idx, ch) in line.char_indices() {
-        if let Some(q) = quote {
-            if ch == q {
-                quote = None;
-            }
-            continue;
-        }
-
-        if matches!(ch, '"' | '\'') {
-            quote = Some(ch);
-            continue;
-        }
-
-        if ch == '=' {
-            sep = Some((idx, true));
-            break;
-        }
-
-        if ch.is_whitespace() {
-            sep = Some((idx, false));
-            break;
-        }
-    }
-
-    let Some((sep_idx, is_eq)) = sep else {
-        return None;
-    };
-
-    let key = line[..sep_idx].trim().to_ascii_lowercase();
-    if key.is_empty() {
-        return None;
-    }
-
-    let raw_value = if is_eq {
-        line[sep_idx + 1..].trim()
-    } else {
-        line[sep_idx..].trim()
-    };
-    if raw_value.is_empty() {
-        return None;
-    }
-
-    let value = parse_quoted_ssh_value(&strip_ssh_comment(raw_value));
-    if value.is_empty() {
-        None
-    } else {
-        Some((key, value))
-    }
-}
-
-fn split_host_aliases(value: &str) -> Vec<String> {
-    let mut aliases = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-
-    for ch in value.trim().chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-
-        if let Some(q) = quote {
-            if ch == q {
-                quote = None;
-                continue;
-            }
-            current.push(ch);
-            continue;
-        }
-
-        if matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-            continue;
-        }
-
-        if ch.is_whitespace() {
-            if !current.is_empty() {
-                aliases.push(current.clone());
-                current.clear();
-            }
-            continue;
-        }
-
-        current.push(ch);
-    }
-
-    if !current.is_empty() {
-        aliases.push(current);
-    }
-
-    aliases
-}
-
-fn parse_ssh_config_hosts(data: &str) -> Vec<SshConfigHostSuggestion> {
-    let mut out = Vec::new();
-    let mut aliases: Vec<String> = Vec::new();
-    let mut host_name: Option<String> = None;
-    let mut user: Option<String> = None;
-    let mut port: Option<u16> = None;
-    let mut identity_file: Option<String> = None;
-
-    for raw in data.lines() {
-        let Some((key, value)) = parse_ssh_config_entry(raw) else {
-            continue;
-        };
-
-        if key == "host" {
-            if !aliases.is_empty() {
-                push_ssh_config_hosts(&mut out, &aliases, &host_name, &user, &port, &identity_file);
-            }
-            aliases = split_host_aliases(&value)
-                .into_iter()
-                .filter(|v| !v.is_empty())
-                .collect();
-            host_name = None;
-            user = None;
-            port = None;
-            identity_file = None;
-            continue;
-        }
-
-        if aliases.is_empty() {
-            continue;
-        }
-
-        match key.as_str() {
-            "hostname" => {
-                if host_name.is_none() {
-                    host_name = Some(value.to_string());
-                }
-            }
-            "user" => {
-                if user.is_none() {
-                    user = Some(value.to_string());
-                }
-            }
-            "port" => {
-                if port.is_none() {
-                    port = value.parse::<u16>().ok();
-                }
-            }
-            "identityfile" => {
-                if identity_file.is_none() {
-                    identity_file = Some(value.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !aliases.is_empty() {
-        push_ssh_config_hosts(&mut out, &aliases, &host_name, &user, &port, &identity_file);
-    }
-
-    let mut dedup = std::collections::BTreeMap::new();
-    for entry in out {
-        dedup.entry(entry.host_alias.clone()).or_insert(entry);
-    }
-    dedup.into_values().collect()
 }
 
 fn map_ssh_host_to_core(host: &SshHostConfig) -> clawpal_core::instance::SshHostConfig {
@@ -7415,23 +7168,8 @@ fn map_ssh_host_from_core(host: &clawpal_core::instance::SshHostConfig) -> SshHo
 }
 
 fn read_hosts_from_registry() -> Result<Vec<SshHostConfig>, String> {
-    let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    Ok(registry
-        .list()
-        .into_iter()
-        .filter(|instance| {
-            matches!(
-                instance.instance_type,
-                clawpal_core::instance::InstanceType::RemoteSsh
-            )
-        })
-        .filter_map(|instance| {
-            instance
-                .ssh_host_config
-                .as_ref()
-                .map(map_ssh_host_from_core)
-        })
-        .collect())
+    let hosts = clawpal_core::ssh::registry::list_ssh_hosts()?;
+    Ok(hosts.iter().map(map_ssh_host_from_core).collect())
 }
 
 #[tauri::command]
@@ -7449,42 +7187,21 @@ pub fn list_ssh_config_hosts() -> Result<Vec<SshConfigHostSuggestion>, String> {
     }
     let data =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    Ok(parse_ssh_config_hosts(&data))
+    Ok(clawpal_core::ssh::config::parse_ssh_config_hosts(&data)
+        .into_iter()
+        .map(map_ssh_config_suggestion)
+        .collect())
 }
 
 #[tauri::command]
 pub fn upsert_ssh_host(host: SshHostConfig) -> Result<SshHostConfig, String> {
-    let mut registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    let id = host.id.clone();
-    let existing = registry.get(&id).cloned();
-    if existing.is_some() {
-        let _ = registry.remove(&id);
-    }
-    let instance = clawpal_core::instance::Instance {
-        id: id.clone(),
-        instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
-        label: host.label.clone(),
-        openclaw_home: existing
-            .as_ref()
-            .and_then(|instance| instance.openclaw_home.clone()),
-        clawpal_data_dir: existing
-            .as_ref()
-            .and_then(|instance| instance.clawpal_data_dir.clone()),
-        ssh_host_config: Some(map_ssh_host_to_core(&host)),
-    };
-    registry.add(instance).map_err(|e| e.to_string())?;
-    registry.save().map_err(|e| e.to_string())?;
+    let _ = clawpal_core::ssh::registry::upsert_ssh_host(map_ssh_host_to_core(&host))?;
     Ok(host)
 }
 
 #[tauri::command]
 pub fn delete_ssh_host(host_id: String) -> Result<bool, String> {
-    let mut registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    let removed = registry.remove(&host_id).is_some();
-    registry.save().map_err(|e| e.to_string())?;
-    Ok(removed)
+    clawpal_core::ssh::registry::delete_ssh_host(&host_id)
 }
 
 // ---------------------------------------------------------------------------

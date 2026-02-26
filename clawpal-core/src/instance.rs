@@ -154,13 +154,7 @@ fn registry_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
     use uuid::Uuid;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn temp_data_dir() -> PathBuf {
         let path =
@@ -182,7 +176,9 @@ mod tests {
 
     #[test]
     fn load_returns_empty_when_file_missing() {
-        let _guard = env_lock().lock().expect("lock");
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = temp_data_dir();
         std::env::set_var("CLAWPAL_DATA_DIR", &dir);
 
@@ -192,7 +188,9 @@ mod tests {
 
     #[test]
     fn save_persists_instances_to_disk() {
-        let _guard = env_lock().lock().expect("lock");
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = temp_data_dir();
         std::env::set_var("CLAWPAL_DATA_DIR", &dir);
 
