@@ -423,6 +423,8 @@ static OPENCLAW_VERSION_CACHE: std::sync::Mutex<Option<Option<String>>> =
 pub fn get_status_light() -> Result<StatusLight, String> {
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
+    let local_health = clawpal_core::health::check_instance(&local_health_instance())
+        .map_err(|e| e.to_string())?;
     let explicit_count = cfg
         .get("agents")
         .and_then(|a| a.get("list"))
@@ -454,20 +456,13 @@ pub fn get_status_light() -> Result<StatusLight, String> {
         })
         .unwrap_or_default();
 
-    // Quick gateway health: TCP connect to gateway port
-    let gateway_port = cfg
-        .pointer("/gateway/port")
-        .and_then(Value::as_u64)
-        .unwrap_or(18789) as u16;
-    let healthy = std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], gateway_port)),
-        std::time::Duration::from_millis(200),
-    )
-    .is_ok();
-
     Ok(StatusLight {
-        healthy,
-        active_agents,
+        healthy: local_health.healthy,
+        active_agents: if local_health.active_agents == 0 {
+            active_agents
+        } else {
+            local_health.active_agents
+        },
         global_default_model,
         fallback_models,
     })
@@ -479,14 +474,10 @@ pub fn get_status_extra() -> Result<StatusExtra, String> {
     let openclaw_version = {
         let mut cache = OPENCLAW_VERSION_CACHE.lock().unwrap();
         if cache.is_none() {
-            *cache = Some(
-                std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin())
-                    .arg("--version")
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()),
-            );
+            let version = clawpal_core::health::check_instance(&local_health_instance())
+                .ok()
+                .and_then(|status| status.version);
+            *cache = Some(version);
         }
         cache.as_ref().unwrap().clone()
     };
@@ -494,6 +485,17 @@ pub fn get_status_extra() -> Result<StatusExtra, String> {
         openclaw_version,
         duplicate_installs: Vec::new(),
     })
+}
+
+fn local_health_instance() -> clawpal_core::instance::Instance {
+    clawpal_core::instance::Instance {
+        id: "local".to_string(),
+        instance_type: clawpal_core::instance::InstanceType::Local,
+        label: "Local".to_string(),
+        openclaw_home: crate::cli_runner::get_active_openclaw_home_override(),
+        clawpal_data_dir: crate::cli_runner::get_active_clawpal_data_override(),
+        ssh_host_config: None,
+    }
 }
 
 /// Returns cached catalog instantly without calling CLI. Returns empty if no cache.
