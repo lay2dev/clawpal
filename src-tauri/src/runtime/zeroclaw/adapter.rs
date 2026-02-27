@@ -11,6 +11,21 @@ use super::session::{append_history, build_prompt_with_history, reset_history};
 pub struct ZeroclawDoctorAdapter;
 
 impl ZeroclawDoctorAdapter {
+    fn infer_language_rule(message: &str) -> &'static str {
+        if message.contains("Chinese (简体中文)") || message.contains("简体中文") {
+            return "Simplified Chinese (简体中文)";
+        }
+        let cjk_count = message
+            .chars()
+            .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+            .count();
+        if cjk_count >= 4 {
+            "Simplified Chinese (简体中文)"
+        } else {
+            "English"
+        }
+    }
+
     fn extract_json_objects(raw: &str) -> Vec<String> {
         let bytes = raw.as_bytes();
         let mut out = Vec::new();
@@ -66,10 +81,12 @@ impl ZeroclawDoctorAdapter {
         } else {
             "Target is a non-local instance selected in ClawPal."
         };
+        let language_rule = Self::infer_language_rule(message);
         let template = crate::prompt_templates::doctor_domain_system();
         crate::prompt_templates::render_template(
             &template,
             &[
+                ("{{language_rule}}", language_rule),
                 ("{{target_line}}", target_line),
                 ("{{instance_id}}", key.instance_id.as_str()),
                 ("{{message}}", message),
@@ -101,46 +118,30 @@ impl ZeroclawDoctorAdapter {
     }
 
     fn parse_tool_intent(raw: &str) -> Option<(RuntimeEvent, String)> {
-        let trimmed = raw.trim();
-        let mut candidates = vec![trimmed.to_string()];
-        for extracted in Self::extract_json_objects(trimmed) {
-            if extracted != trimmed {
-                candidates.push(extracted);
-            }
-        }
-        for candidate in candidates {
-            if let Ok(v) = serde_json::from_str::<Value>(&candidate) {
-                let tool = v.get("tool").and_then(|x| x.as_str());
-                if tool == Some("clawpal") || tool == Some("openclaw") {
-                    let args = v.get("args")?.as_str()?.trim().to_string();
-                    if args.is_empty() {
-                        return None;
-                    }
-                    let reason = v
-                        .get("reason")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("需要执行命令以继续诊断。")
-                        .to_string();
-                    let payload = json!({
-                        "id": format!("zc-{}", uuid::Uuid::new_v4()),
-                        "command": tool.unwrap_or("clawpal"),
-                        "args": {
-                            "args": args,
-                            "instance": v.get("instance").and_then(|x| x.as_str()).unwrap_or(""),
-                        },
-                        "type": "read",
-                    });
-                    let note = format!(
-                        "建议执行诊断命令：`{} {}`\n原因：{}",
-                        payload["command"].as_str().unwrap_or(""),
-                        payload["args"]["args"].as_str().unwrap_or(""),
-                        reason
-                    );
-                    return Some((RuntimeEvent::Invoke { payload }, note));
-                }
-            }
-        }
-        None
+        let intent = crate::runtime::zeroclaw::tool_intent::parse_tool_intent(raw)?;
+        let reason = intent
+            .reason
+            .unwrap_or_else(|| "需要执行命令以继续诊断。".to_string());
+        let invoke_type = crate::runtime::zeroclaw::tool_intent::classify_invoke_type(
+            &intent.tool,
+            &intent.args,
+        );
+        let payload = json!({
+            "id": format!("zc-{}", uuid::Uuid::new_v4()),
+            "command": intent.tool,
+            "args": {
+                "args": intent.args,
+                "instance": intent.instance.unwrap_or_default(),
+            },
+            "type": invoke_type,
+        });
+        let note = format!(
+            "建议执行诊断命令：`{} {}`\n原因：{}",
+            payload["command"].as_str().unwrap_or(""),
+            payload["args"]["args"].as_str().unwrap_or(""),
+            reason
+        );
+        Some((RuntimeEvent::Invoke { payload }, note))
     }
 
     fn map_error(err: String) -> RuntimeError {
@@ -171,7 +172,7 @@ impl RuntimeAdapter for ZeroclawDoctorAdapter {
         let session_key = key.storage_key();
         reset_history(&session_key);
         let prompt = Self::doctor_domain_prompt(key, message);
-        let text = run_zeroclaw_message(&prompt, &key.instance_id)
+        let text = run_zeroclaw_message(&prompt, &key.instance_id, &key.storage_key())
             .map(Self::normalize_doctor_output)
             .map_err(Self::map_error)?;
         append_history(&session_key, "system", &prompt);
@@ -192,7 +193,7 @@ impl RuntimeAdapter for ZeroclawDoctorAdapter {
         append_history(&session_key, "user", message);
         let prompt = build_prompt_with_history(&session_key, message);
         let guarded = Self::doctor_domain_prompt(key, &prompt);
-        let text = run_zeroclaw_message(&guarded, &key.instance_id)
+        let text = run_zeroclaw_message(&guarded, &key.instance_id, &key.storage_key())
             .map(Self::normalize_doctor_output)
             .map_err(Self::map_error)?;
         if let Some((invoke, note)) = Self::parse_tool_intent(&text) {
@@ -224,5 +225,19 @@ mod tests {
             parsed.is_some(),
             "should parse tool JSON even if another JSON appears first"
         );
+    }
+
+    #[test]
+    fn infer_language_rule_prefers_chinese_when_prompt_declares_it() {
+        let rule = ZeroclawDoctorAdapter::infer_language_rule(
+            "Respond in Chinese (简体中文). Analyze issues directly.",
+        );
+        assert_eq!(rule, "Simplified Chinese (简体中文)");
+    }
+
+    #[test]
+    fn infer_language_rule_defaults_to_english() {
+        let rule = ZeroclawDoctorAdapter::infer_language_rule("Respond in English.");
+        assert_eq!(rule, "English");
     }
 }
