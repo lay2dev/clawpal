@@ -3,19 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SshHostConfig {
-    pub id: String,
-    pub label: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    /// "key" | "ssh_config" | "password"
-    pub auth_method: String,
-    pub key_path: Option<String>,
-    pub password: Option<String>,
-}
+pub type SshHostConfig = clawpal_core::instance::SshHostConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,8 +47,7 @@ impl SshConnectionPool {
         config: &SshHostConfig,
         _passphrase: Option<&str>,
     ) -> Result<(), String> {
-        let core_cfg = to_core_config(config);
-        let session = clawpal_core::ssh::SshSession::connect(&core_cfg)
+        let session = clawpal_core::ssh::SshSession::connect(config)
             .await
             .map_err(|e| e.to_string())?;
         let home = session
@@ -218,26 +205,13 @@ esac",
         let conn = guard
             .get(id)
             .ok_or_else(|| format!("No connection for id: {id}"))?;
-        Ok(to_core_config(&conn.config))
+        Ok(conn.config.clone())
     }
 }
 
 impl Default for SshConnectionPool {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn to_core_config(value: &SshHostConfig) -> clawpal_core::instance::SshHostConfig {
-    clawpal_core::instance::SshHostConfig {
-        id: value.id.clone(),
-        label: value.label.clone(),
-        host: value.host.clone(),
-        port: value.port,
-        username: value.username.clone(),
-        auth_method: value.auth_method.clone(),
-        key_path: value.key_path.clone(),
-        password: value.password.clone(),
     }
 }
 
