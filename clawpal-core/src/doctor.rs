@@ -201,6 +201,13 @@ first=\"$(find \"$root/agents\" -type f -path \"*/sessions/sessions.json\" 2>/de
 if [ -n \"$first\" ]; then printf \"%s\" \"$first\"; else printf \"%s\" \"$root/agents/test/sessions/sessions.json\"; fi"
 }
 
+pub fn remote_gateway_error_log_tail_script(lines: usize) -> String {
+    format!(
+        "tail -{} \"${{OPENCLAW_STATE_DIR:-${{OPENCLAW_HOME:-$HOME/.openclaw}}}}/logs/gateway.err.log\" 2>/dev/null || echo ''",
+        lines
+    )
+}
+
 pub fn doctor_domain_remote_root(base: &str, domain: &str) -> Result<String, String> {
     let base = base.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -320,6 +327,13 @@ mod tests {
         assert!(remote_openclaw_root_probe_script().contains("OPENCLAW_STATE_DIR"));
         assert!(remote_openclaw_config_path_probe_script().contains("openclaw.json"));
         assert!(remote_sessions_discovery_script().contains("sessions.json"));
+    }
+
+    #[test]
+    fn remote_gateway_error_log_tail_script_contains_lines_and_log_path() {
+        let script = remote_gateway_error_log_tail_script(100);
+        assert!(script.contains("tail -100"));
+        assert!(script.contains("gateway.err.log"));
     }
 
     #[test]

@@ -273,13 +273,7 @@ pub async fn collect_doctor_context_remote(
     let version = version_result.stdout.trim().to_string();
 
     // Resolve config path: check OPENCLAW_STATE_DIR / OPENCLAW_HOME, fallback to ~/.openclaw
-    let config_path_result = pool
-        .exec_login(
-            &host_id,
-            "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"",
-        )
-        .await?;
-    let config_path = config_path_result.stdout.trim().to_string();
+    let config_path = resolve_remote_config_path(&pool, &host_id).await?;
     validate_not_sensitive(&config_path)?;
     let config_content = pool
         .sftp_read(&host_id, &config_path)
@@ -301,9 +295,12 @@ pub async fn collect_doctor_context_remote(
     let gateway_running = matches!(pgrep_result, Ok(r) if r.exit_code == 0);
 
     // Collect recent error log (logs live under $OPENCLAW_STATE_DIR/logs/)
-    let error_log_result = pool.exec_login(&host_id,
-        "tail -100 \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/logs/gateway.err.log\" 2>/dev/null || echo ''"
-    ).await?;
+    let error_log_result = pool
+        .exec_login(
+            &host_id,
+            &clawpal_core::doctor::remote_gateway_error_log_tail_script(100),
+        )
+        .await?;
     let error_log = error_log_result.stdout;
 
     // System info
