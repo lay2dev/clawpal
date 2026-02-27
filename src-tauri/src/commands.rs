@@ -284,49 +284,7 @@ pub struct SessionSummary {
     pub by_agent: Vec<AgentSessionSummary>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelProfile {
-    pub id: String,
-    pub name: String,
-    pub provider: String,
-    pub model: String,
-    #[serde(default)]
-    pub auth_ref: String,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub description: Option<String>,
-    pub enabled: bool,
-}
-
-fn model_profile_to_core(value: ModelProfile) -> clawpal_core::profile::ModelProfile {
-    clawpal_core::profile::ModelProfile {
-        id: value.id,
-        name: value.name,
-        provider: value.provider,
-        model: value.model,
-        auth_ref: value.auth_ref,
-        api_key: value.api_key,
-        base_url: value.base_url,
-        description: value.description,
-        enabled: value.enabled,
-    }
-}
-
-fn model_profile_from_core(value: clawpal_core::profile::ModelProfile) -> ModelProfile {
-    ModelProfile {
-        id: value.id,
-        name: value.name,
-        provider: value.provider,
-        model: value.model,
-        auth_ref: value.auth_ref,
-        api_key: value.api_key,
-        base_url: value.base_url,
-        description: value.description,
-        enabled: value.enabled,
-    }
-}
+pub type ModelProfile = clawpal_core::profile::ModelProfile;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -597,8 +555,7 @@ pub fn get_system_status() -> Result<SystemStatus, String> {
 #[tauri::command]
 pub fn list_model_profiles() -> Result<Vec<ModelProfile>, String> {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    let profiles = clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
-    Ok(profiles.into_iter().map(model_profile_from_core).collect())
+    clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -687,10 +644,8 @@ pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult
 #[tauri::command]
 pub fn upsert_model_profile(mut profile: ModelProfile) -> Result<ModelProfile, String> {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    profile = model_profile_from_core(
-        clawpal_core::profile::upsert_profile(&openclaw, model_profile_to_core(profile))
-            .map_err(|e| e.to_string())?,
-    );
+    profile = clawpal_core::profile::upsert_profile(&openclaw, profile)
+        .map_err(|e| e.to_string())?;
     Ok(profile)
 }
 
