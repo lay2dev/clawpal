@@ -266,17 +266,7 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn build_login_shell_wrapper(command: &str) -> String {
-    format!(
-        "export CLAWPAL_LOGIN_CMD={cmd}; \
-LOGIN_SHELL=\"${{SHELL:-/bin/sh}}\"; \
-[ -x \"$LOGIN_SHELL\" ] || LOGIN_SHELL=\"/bin/sh\"; \
-case \"$LOGIN_SHELL\" in \
-  */zsh) \"$LOGIN_SHELL\" -ilc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-  */bash) \"$LOGIN_SHELL\" -ilc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-  *) \"$LOGIN_SHELL\" -lc '[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-esac",
-        cmd = shell_quote(command)
-    )
+    clawpal_core::shell::wrap_login_shell_eval(command)
 }
 
 fn is_retryable_session_error(message: &str) -> bool {
@@ -299,8 +289,7 @@ mod tests {
     #[test]
     fn login_wrapper_sources_common_profile_files() {
         let wrapped = build_login_shell_wrapper("openclaw --version");
-        assert!(wrapped.contains("*/zsh) \"$LOGIN_SHELL\" -ilc"));
-        assert!(wrapped.contains("*/bash) \"$LOGIN_SHELL\" -ilc"));
+        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -ilc"));
         assert!(wrapped.contains("[ -f ~/.profile ]"));
     }
 }

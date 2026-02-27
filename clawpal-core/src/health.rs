@@ -155,23 +155,10 @@ fn run_ssh_command(args: &[String]) -> Result<CliOutput> {
 }
 
 fn wrap_remote_health_command(command: &str) -> String {
-    let login_wrapped = wrap_login_shell_eval(command);
+    let login_wrapped = crate::shell::wrap_login_shell_eval(command);
     let escaped = shell_escape(&login_wrapped);
     format!(
         "if command -v timeout >/dev/null 2>&1; then timeout {HEALTH_REMOTE_COMMAND_TIMEOUT_SECS}s sh -lc {escaped}; else sh -lc {escaped}; fi"
-    )
-}
-
-fn wrap_login_shell_eval(command: &str) -> String {
-    let escaped = shell_escape(command);
-    format!(
-        "export CLAWPAL_LOGIN_CMD={escaped}; \
-LOGIN_SHELL=\"${{SHELL:-/bin/sh}}\"; \
-[ -x \"$LOGIN_SHELL\" ] || LOGIN_SHELL=\"/bin/sh\"; \
-case \"$LOGIN_SHELL\" in \
-  */zsh|*/bash) \"$LOGIN_SHELL\" -ilc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-  *) \"$LOGIN_SHELL\" -lc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-esac"
     )
 }
 

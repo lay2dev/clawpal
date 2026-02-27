@@ -413,9 +413,12 @@ async fn probe_openclaw_on_target(pool: &SshConnectionPool, target: &str) -> Res
         }));
     }
 
+    let probe_cmd = clawpal_core::shell::wrap_login_shell_eval(
+        clawpal_core::doctor::openclaw_which_probe_script(),
+    );
     let which = std::process::Command::new("sh")
         .arg("-lc")
-        .arg(clawpal_core::doctor::openclaw_which_probe_script())
+        .arg(&probe_cmd)
         .output()
         .map_err(|e| format!("probe which failed: {e}"))?;
     let version = clawpal_core::openclaw::OpenclawCli::new()

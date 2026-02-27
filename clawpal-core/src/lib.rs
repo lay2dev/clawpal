@@ -9,6 +9,7 @@ pub mod install;
 pub mod instance;
 pub mod openclaw;
 pub mod profile;
+pub mod shell;
 pub mod sessions;
 pub mod ssh;
 pub mod watchdog;

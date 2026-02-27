@@ -7,6 +7,7 @@ use clawpal_core::openclaw::OpenclawCli;
 use clawpal_core::profile::{
     delete_profile, list_profiles, test_profile, upsert_profile, ModelProfile,
 };
+use clawpal_core::shell::{shell_quote, wrap_login_shell_eval};
 use clawpal_core::ssh::SshSession;
 use serde_json::json;
 use std::process::Command;
@@ -580,8 +581,10 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
                 .output()
                 .map_err(|e| format!("failed to run openclaw --version: {e}"))?;
             let version = String::from_utf8_lossy(&version_out.stdout).trim().to_string();
-            let path_out = Command::new("bash")
-                .args(["-lc", clawpal_core::doctor::openclaw_which_probe_script()])
+            let probe_cmd =
+                wrap_login_shell_eval(clawpal_core::doctor::openclaw_which_probe_script());
+            let path_out = Command::new("sh")
+                .args(["-lc", &probe_cmd])
                 .output()
                 .map_err(|e| format!("failed to probe openclaw path: {e}"))?;
             let openclaw_path = String::from_utf8_lossy(&path_out.stdout).trim().to_string();
@@ -596,9 +599,8 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
             let path = session
-                .exec(&format!(
-                    "sh -lc {}",
-                    sh_quote(clawpal_core::doctor::openclaw_which_probe_script())
+                .exec(&wrap_login_shell_eval(
+                    clawpal_core::doctor::openclaw_which_probe_script(),
                 ))
                 .await
                 .map_err(|e| e.to_string())?
@@ -606,9 +608,8 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
                 .trim()
                 .to_string();
             let version = session
-                .exec(&format!(
-                    "sh -lc {}",
-                    sh_quote(clawpal_core::doctor::remote_openclaw_version_probe_script())
+                .exec(&wrap_login_shell_eval(
+                    clawpal_core::doctor::remote_openclaw_version_probe_script(),
                 ))
                 .await
                 .map_err(|e| e.to_string())?
@@ -616,9 +617,8 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
                 .trim()
                 .to_string();
             let env_path = session
-                .exec(&format!(
-                    "sh -lc {}",
-                    sh_quote(clawpal_core::doctor::shell_path_probe_script())
+                .exec(&wrap_login_shell_eval(
+                    clawpal_core::doctor::shell_path_probe_script(),
                 ))
                 .await
                 .map_err(|e| e.to_string())?
@@ -639,17 +639,15 @@ async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Va
         DoctorTarget::Local => Err("doctor fix-openclaw-path currently supports remote target only".to_string()),
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
-            let find_cmd = format!(
-                "sh -lc {}",
-                sh_quote(clawpal_core::doctor::remote_openclaw_fix_find_dir_script())
-            );
+            let find_cmd =
+                wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_fix_find_dir_script());
             let find = session.exec(&find_cmd).await.map_err(|e| e.to_string())?;
             let dir = find.stdout.trim().to_string();
             if dir.is_empty() {
                 return Err("cannot locate openclaw binary in known directories".to_string());
             }
             let patch = clawpal_core::doctor::remote_openclaw_fix_patch_script(&dir);
-            let patch_cmd = format!("sh -lc {}", sh_quote(&patch));
+            let patch_cmd = wrap_login_shell_eval(&patch);
             let result = session.exec(&patch_cmd).await.map_err(|e| e.to_string())?;
             let located = result.stdout.trim().to_string();
             Ok(json!({
@@ -667,10 +665,7 @@ async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Va
 }
 
 async fn resolve_remote_config_path(session: &SshSession) -> Result<String, String> {
-    let cmd = format!(
-        "sh -lc {}",
-        sh_quote(clawpal_core::doctor::remote_openclaw_config_path_probe_script())
-    );
+    let cmd = wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_config_path_probe_script());
     let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     Ok(out.stdout.trim().to_string())
 }
@@ -836,10 +831,7 @@ async fn doctor_config_upsert(
 }
 
 async fn resolve_remote_sessions_path(session: &SshSession) -> Result<String, String> {
-    let cmd = format!(
-        "sh -lc {}",
-        sh_quote(clawpal_core::doctor::remote_sessions_discovery_script())
-    );
+    let cmd = wrap_login_shell_eval(clawpal_core::doctor::remote_sessions_discovery_script());
     let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     Ok(out.stdout.trim().to_string())
 }
@@ -1020,10 +1012,7 @@ async fn doctor_sessions_delete(
 }
 
 async fn doctor_domain_remote_root(session: &SshSession, domain: &str) -> Result<String, String> {
-    let cmd = format!(
-        "sh -lc {}",
-        sh_quote(clawpal_core::doctor::remote_openclaw_root_probe_script())
-    );
+    let cmd = wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_root_probe_script());
     let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     let base = out.stdout.trim().to_string();
     clawpal_core::doctor::doctor_domain_remote_root(&base, domain)
@@ -1188,7 +1177,8 @@ async fn doctor_file_write(
             };
             clawpal_core::doctor::validate_doctor_relative_path(&rel)?;
             let full = format!("{}/{}", root.trim_end_matches('/'), rel);
-            let mkdir_cmd = format!("sh -lc 'mkdir -p \"$(dirname {})\"'", sh_quote(&full));
+            let mkdir_raw = format!("mkdir -p \"$(dirname {})\"", shell_quote(&full));
+            let mkdir_cmd = wrap_login_shell_eval(&mkdir_raw);
             let mkdir_out = session.exec(&mkdir_cmd).await.map_err(|e| e.to_string())?;
             if mkdir_out.exit_code != 0 {
                 return Err(format!(
@@ -1197,10 +1187,11 @@ async fn doctor_file_write(
                 ));
             }
             if backup {
-                let backup_cmd = format!(
-                    "sh -lc 'if [ -f {f} ]; then cp {f} {f}.bak.$(date +%Y%m%d%H%M%S); fi'",
-                    f = sh_quote(&full)
+                let backup_raw = format!(
+                    "if [ -f {f} ]; then cp {f} {f}.bak.$(date +%Y%m%d%H%M%S); fi",
+                    f = shell_quote(&full)
                 );
+                let backup_cmd = wrap_login_shell_eval(&backup_raw);
                 let backup_out = session.exec(&backup_cmd).await.map_err(|e| e.to_string())?;
                 if backup_out.exit_code != 0 {
                     return Err(format!(
@@ -1231,8 +1222,4 @@ async fn doctor_file_write(
             }))
         }
     }
-}
-
-fn sh_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
