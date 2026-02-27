@@ -39,7 +39,7 @@ import { Toaster } from "sonner";
 import type { DiscordGuildChannel, DockerInstance, InstallSession, RegisteredInstance, SshHost } from "./lib/types";
 
 const PING_URL = "https://api.clawpal.zhixian.io/ping";
-const DOCKER_INSTANCES_KEY = "clawpal_docker_instances";
+const LEGACY_DOCKER_INSTANCES_KEY = "clawpal_docker_instances";
 const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
 const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
 const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
@@ -177,58 +177,12 @@ export function App() {
 
   // SSH remote instance state
   const [activeInstance, setActiveInstance] = useState("local");
-  const [dockerInstances, setDockerInstances] = useState<DockerInstance[]>([]);
   const [sshHosts, setSshHosts] = useState<SshHost[]>([]);
   const [registeredInstances, setRegisteredInstances] = useState<RegisteredInstance[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<Record<string, "connected" | "disconnected" | "error">>({});
 
   const refreshHosts = useCallback(() => {
     api.listSshHosts().then(setSshHosts).catch((e) => console.error("Failed to load SSH hosts:", e));
-  }, []);
-
-  const refreshDockerInstances = useCallback(async () => {
-    try {
-      const raw = localStorage.getItem(DOCKER_INSTANCES_KEY);
-      if (!raw) {
-        setDockerInstances([]);
-        return;
-      }
-      const parsed = JSON.parse(raw) as DockerInstance[];
-      const normalized: DockerInstance[] = [];
-      const seen = new Set<string>();
-      for (const item of Array.isArray(parsed) ? parsed : []) {
-        if (!item?.id || typeof item.id !== "string") continue;
-        const id = item.id.trim();
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        normalized.push(normalizeDockerInstance({ ...item, id }));
-      }
-      // Optimistic update first to keep startup / tab transitions responsive.
-      setDockerInstances(normalized);
-      setActiveInstance((prev) => {
-        if (!prev.startsWith("docker:")) return prev;
-        return normalized.some((item) => item.id === prev) ? prev : "local";
-      });
-      // Validate in background; prune stale entries later.
-      void (async () => {
-        const checked = await Promise.all(
-          normalized.map(async (item) => {
-            try {
-              const exists = await api.localOpenclawConfigExists(item.openclawHome || "");
-              return exists ? item : null;
-            } catch {
-              return item;
-            }
-          }),
-        );
-        const next = checked.filter((item): item is DockerInstance => item !== null);
-        localStorage.setItem(DOCKER_INSTANCES_KEY, JSON.stringify(next));
-        setDockerInstances(next);
-      })();
-    } catch {
-      setDockerInstances([]);
-      setActiveInstance((prev) => (prev.startsWith("docker:") ? "local" : prev));
-    }
   }, []);
 
   const refreshRegisteredInstances = useCallback(() => {
@@ -240,31 +194,44 @@ export function App() {
       });
   }, []);
 
-  const upsertDockerInstance = useCallback((instance: DockerInstance) => {
+  const dockerInstances = useMemo<DockerInstance[]>(() => {
+    const seen = new Set<string>();
+    const out: DockerInstance[] = [];
+    for (const item of registeredInstances) {
+      if (item.instanceType !== "docker") continue;
+      if (!item.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push(normalizeDockerInstance({
+        id: item.id,
+        label: item.label || deriveDockerLabel(item.id),
+        openclawHome: item.openclawHome || undefined,
+        clawpalDataDir: item.clawpalDataDir || undefined,
+      }));
+    }
+    return out;
+  }, [registeredInstances]);
+
+  const upsertDockerInstance = useCallback(async (instance: DockerInstance) => {
     const normalized = normalizeDockerInstance(instance);
-    setDockerInstances((prev) => {
-      const next = [...prev];
-      const idx = next.findIndex((item) => item.id === normalized.id);
-      if (idx >= 0) next[idx] = normalized;
-      else next.push(normalized);
-      localStorage.setItem(DOCKER_INSTANCES_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+    await api.connectDockerInstance(
+      normalized.openclawHome || deriveDockerPaths(normalized.id).openclawHome,
+      normalized.label,
+    );
+    refreshRegisteredInstances();
+  }, [refreshRegisteredInstances]);
 
   const renameDockerInstance = useCallback((id: string, label: string) => {
     const nextLabel = label.trim();
     if (!nextLabel) return;
-    setDockerInstances((prev) => {
-      const next = prev.map((item) => (
-        item.id === id
-          ? { ...item, label: nextLabel }
-          : item
-      ));
-      localStorage.setItem(DOCKER_INSTANCES_KEY, JSON.stringify(next));
-      return next;
+    const instance = dockerInstances.find((item) => item.id === id);
+    if (!instance) return;
+    void api.connectDockerInstance(
+      instance.openclawHome || deriveDockerPaths(instance.id).openclawHome,
+      nextLabel,
+    ).then(() => {
+      refreshRegisteredInstances();
     });
-  }, []);
+  }, [dockerInstances, refreshRegisteredInstances]);
 
   const deleteDockerInstance = useCallback(async (instance: DockerInstance, deleteLocalData: boolean) => {
     const fallback = deriveDockerPaths(instance.id);
@@ -272,21 +239,17 @@ export function App() {
     if (deleteLocalData) {
       await api.deleteLocalInstanceHome(openclawHome);
     }
-    setDockerInstances((prev) => {
-      const next = prev.filter((item) => item.id !== instance.id);
-      localStorage.setItem(DOCKER_INSTANCES_KEY, JSON.stringify(next));
-      return next;
-    });
+    await api.deleteRegisteredInstance(instance.id);
+    refreshRegisteredInstances();
     setActiveInstance((prev) => (prev === instance.id ? "local" : prev));
-  }, []);
+  }, [refreshRegisteredInstances]);
 
   useEffect(() => {
     refreshHosts();
-    void refreshDockerInstances();
     refreshRegisteredInstances();
     const timer = setInterval(refreshRegisteredInstances, 30_000);
     return () => clearInterval(timer);
-  }, [refreshHosts, refreshDockerInstances, refreshRegisteredInstances]);
+  }, [refreshHosts, refreshRegisteredInstances]);
 
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
   const [hasEscalatedCron, setHasEscalatedCron] = useState(false);
@@ -402,7 +365,7 @@ export function App() {
 
   const readLegacyDockerInstances = useCallback((): DockerInstance[] => {
     try {
-      const raw = localStorage.getItem(DOCKER_INSTANCES_KEY);
+      const raw = localStorage.getItem(LEGACY_DOCKER_INSTANCES_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw) as DockerInstance[];
       if (!Array.isArray(parsed)) return [];
@@ -456,13 +419,13 @@ export function App() {
         ) {
           refreshRegisteredInstances();
           refreshHosts();
-          void refreshDockerInstances();
+          localStorage.removeItem(LEGACY_DOCKER_INSTANCES_KEY);
         }
       })
       .catch((e) => {
         console.error("Legacy instance migration failed:", e);
       });
-  }, [readLegacyDockerInstances, readLegacyOpenTabs, refreshRegisteredInstances, refreshHosts, refreshDockerInstances]);
+  }, [readLegacyDockerInstances, readLegacyOpenTabs, refreshRegisteredInstances, refreshHosts]);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -772,7 +735,7 @@ export function App() {
       const label = typeof artifacts.docker_instance_label === "string"
         ? artifacts.docker_instance_label
         : deriveDockerLabel(id);
-      upsertDockerInstance({ id, label, openclawHome, clawpalDataDir });
+      void upsertDockerInstance({ id, label, openclawHome, clawpalDataDir });
       openTab(id);
     } else if (session.method === "remote_ssh") {
       const hostId = typeof artifacts.ssh_host_id === "string"
@@ -1105,6 +1068,7 @@ export function App() {
               <Button
                 size="sm"
                 onClick={() => {
+                  setAgentGuidanceOpen(false);
                   setInStart(false);
                   setRoute("doctor");
                 }}

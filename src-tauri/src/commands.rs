@@ -6951,6 +6951,20 @@ pub fn list_registered_instances() -> Result<Vec<clawpal_core::instance::Instanc
 }
 
 #[tauri::command]
+pub fn delete_registered_instance(instance_id: String) -> Result<bool, String> {
+    let id = instance_id.trim();
+    if id.is_empty() || id == "local" {
+        return Ok(false);
+    }
+    let mut registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+    let removed = registry.remove(id).is_some();
+    if removed {
+        registry.save().map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
 pub async fn connect_docker_instance(
     home: String,
     label: Option<String>,

@@ -47,6 +47,8 @@ export const api = {
     invoke("get_system_status", {}),
   listRegisteredInstances: (): Promise<RegisteredInstance[]> =>
     invoke("list_registered_instances", {}),
+  deleteRegisteredInstance: (instanceId: string): Promise<boolean> =>
+    invoke("delete_registered_instance", { instanceId }),
   connectDockerInstance: (
     home: string,
     label?: string,
