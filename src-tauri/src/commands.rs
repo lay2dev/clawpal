@@ -2236,17 +2236,16 @@ pub async fn remote_fix_issues(
 
     for id in &ids {
         match id.as_str() {
-            "field.agents" if cfg.get("agents").is_none() => {
-                let mut agents = serde_json::Map::new();
-                let mut defaults = serde_json::Map::new();
-                defaults.insert(
-                    "model".into(),
-                    Value::String("anthropic/claude-sonnet-4-5".into()),
-                );
-                agents.insert("defaults".into(), Value::Object(defaults));
-                if let Value::Object(map) = &mut cfg {
-                    map.insert("agents".into(), Value::Object(agents));
-                }
+            "field.agents" if clawpal_core::doctor::json_path_get(&cfg, "agents").is_none() => {
+                clawpal_core::doctor::upsert_json_path(
+                    &mut cfg,
+                    "agents",
+                    serde_json::json!({
+                        "defaults": {
+                            "model": "anthropic/claude-sonnet-4-5"
+                        }
+                    }),
+                )?;
                 applied.push(id.clone());
             }
             "json.syntax" => {
@@ -2254,18 +2253,11 @@ pub async fn remote_fix_issues(
                 applied.push(id.clone());
             }
             "field.port" => {
-                let mut gateway = cfg
-                    .get("gateway")
-                    .and_then(|v| v.as_object())
-                    .cloned()
-                    .unwrap_or_default();
-                gateway.insert(
-                    "port".into(),
+                clawpal_core::doctor::upsert_json_path(
+                    &mut cfg,
+                    "gateway.port",
                     Value::Number(serde_json::Number::from(18789_u64)),
-                );
-                if let Value::Object(map) = &mut cfg {
-                    map.insert("gateway".into(), Value::Object(gateway));
-                }
+                )?;
                 applied.push(id.clone());
             }
             _ => {}
