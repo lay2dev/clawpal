@@ -569,6 +569,31 @@ pub fn is_gateway_restart_command(command: &[String]) -> bool {
         && command[command.len() - 1] == "restart"
 }
 
+pub fn suggest_rescue_port(main_port: u16) -> u16 {
+    let with_large_gap = main_port.saturating_add(1000);
+    let min_gap = main_port.saturating_add(20);
+    with_large_gap.max(min_gap)
+}
+
+pub fn ensure_rescue_port_spacing(main_port: u16, rescue_port: u16) -> Result<(), String> {
+    let min_recommended_port = main_port.saturating_add(20);
+    if rescue_port < min_recommended_port {
+        return Err(format!(
+            "rescue port {rescue_port} is too close to primary gateway port {main_port}; \
+             choose at least {min_recommended_port} (>= +20)"
+        ));
+    }
+    Ok(())
+}
+
+pub fn parse_rescue_port_value(value: &Value) -> Option<u16> {
+    match value {
+        Value::Number(n) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
+        Value::String(s) => s.trim().parse::<u16>().ok(),
+        _ => None,
+    }
+}
+
 pub fn apply_issue_fixes(config: &mut Value, ids: &[String]) -> Result<Vec<String>, String> {
     let mut applied = Vec::new();
     for id in ids {
@@ -1188,6 +1213,27 @@ mod tests {
             "gateway".to_string(),
             "status".to_string()
         ]));
+    }
+
+    #[test]
+    fn suggest_rescue_port_prefers_large_gap() {
+        assert_eq!(suggest_rescue_port(18789), 19789);
+    }
+
+    #[test]
+    fn ensure_rescue_port_spacing_rejects_small_gap() {
+        let err = ensure_rescue_port_spacing(18789, 18800).expect_err("must fail");
+        assert!(err.contains("too close"));
+    }
+
+    #[test]
+    fn parse_rescue_port_value_supports_number_and_string() {
+        assert_eq!(parse_rescue_port_value(&serde_json::json!(19789)), Some(19789));
+        assert_eq!(
+            parse_rescue_port_value(&serde_json::json!("19789")),
+            Some(19789)
+        );
+        assert_eq!(parse_rescue_port_value(&serde_json::json!(true)), None);
     }
 
     #[test]

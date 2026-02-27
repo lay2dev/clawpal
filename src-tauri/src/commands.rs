@@ -1963,16 +1963,16 @@ pub async fn manage_rescue_bot(
         let (already_configured, existing_port) = resolve_local_rescue_profile_state(&profile)?;
         let should_configure = !already_configured || action == RescueBotAction::Set;
         let rescue_port = if should_configure {
-            rescue_port.unwrap_or_else(|| suggest_rescue_port(main_port))
+            rescue_port.unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
         } else {
             existing_port
                 .or(rescue_port)
-                .unwrap_or_else(|| suggest_rescue_port(main_port))
+                .unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
         };
         let min_recommended_port = main_port.saturating_add(20);
 
         if should_configure && matches!(action, RescueBotAction::Set | RescueBotAction::Activate) {
-            ensure_rescue_port_spacing(main_port, rescue_port)?;
+            clawpal_core::doctor::ensure_rescue_port_spacing(main_port, rescue_port)?;
         }
 
         if action == RescueBotAction::Status && !already_configured {
@@ -2848,32 +2848,6 @@ async fn repair_primary_via_rescue_remote(
     })
 }
 
-fn suggest_rescue_port(main_port: u16) -> u16 {
-    // Keep trailing digits stable (18789 -> 19789) while preserving at least +20 gap.
-    let with_large_gap = main_port.saturating_add(1000);
-    let min_gap = main_port.saturating_add(20);
-    with_large_gap.max(min_gap)
-}
-
-fn ensure_rescue_port_spacing(main_port: u16, rescue_port: u16) -> Result<(), String> {
-    let min_recommended_port = main_port.saturating_add(20);
-    if rescue_port < min_recommended_port {
-        return Err(format!(
-            "rescue port {rescue_port} is too close to primary gateway port {main_port}; \
-             choose at least {min_recommended_port} (>= +20)"
-        ));
-    }
-    Ok(())
-}
-
-fn parse_rescue_port_value(value: &Value) -> Option<u16> {
-    match value {
-        Value::Number(n) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
-        Value::String(s) => s.trim().parse::<u16>().ok(),
-        _ => None,
-    }
-}
-
 fn resolve_local_rescue_profile_state(profile: &str) -> Result<(bool, Option<u16>), String> {
     let output = crate::cli_runner::run_openclaw(&[
         "--profile",
@@ -2888,7 +2862,7 @@ fn resolve_local_rescue_profile_state(profile: &str) -> Result<(bool, Option<u16
     }
     let port = crate::cli_runner::parse_json_output(&output)
         .ok()
-        .and_then(|value| parse_rescue_port_value(&value));
+        .and_then(|value| clawpal_core::doctor::parse_rescue_port_value(&value));
     Ok((true, port))
 }
 
@@ -3012,7 +2986,7 @@ async fn resolve_remote_rescue_profile_state(
     }
     let port = crate::cli_runner::parse_json_output(&output)
         .ok()
-        .and_then(|value| parse_rescue_port_value(&value));
+        .and_then(|value| clawpal_core::doctor::parse_rescue_port_value(&value));
     Ok((true, port))
 }
 
@@ -5010,12 +4984,12 @@ mod rescue_bot_tests {
 
     #[test]
     fn test_suggest_rescue_port_prefers_large_gap() {
-        assert_eq!(suggest_rescue_port(18789), 19789);
+        assert_eq!(clawpal_core::doctor::suggest_rescue_port(18789), 19789);
     }
 
     #[test]
     fn test_ensure_rescue_port_spacing_rejects_small_gap() {
-        let err = ensure_rescue_port_spacing(18789, 18800).unwrap_err();
+        let err = clawpal_core::doctor::ensure_rescue_port_spacing(18789, 18800).unwrap_err();
         assert!(err.contains(">= +20"));
     }
 
@@ -7269,16 +7243,16 @@ pub async fn remote_manage_rescue_bot(
         resolve_remote_rescue_profile_state(&pool, &host_id, &profile).await?;
     let should_configure = !already_configured || action == RescueBotAction::Set;
     let rescue_port = if should_configure {
-        rescue_port.unwrap_or_else(|| suggest_rescue_port(main_port))
+        rescue_port.unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
     } else {
         existing_port
             .or(rescue_port)
-            .unwrap_or_else(|| suggest_rescue_port(main_port))
+            .unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
     };
     let min_recommended_port = main_port.saturating_add(20);
 
     if should_configure && matches!(action, RescueBotAction::Set | RescueBotAction::Activate) {
-        ensure_rescue_port_spacing(main_port, rescue_port)?;
+        clawpal_core::doctor::ensure_rescue_port_spacing(main_port, rescue_port)?;
     }
 
     if action == RescueBotAction::Status && !already_configured {
