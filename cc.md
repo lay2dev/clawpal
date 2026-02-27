@@ -14,7 +14,7 @@ Last run: 2026-02-27
 | Action 2: Phase 6/7/8 核验 | PASS | `cargo test --test cli_json_contract` 4/4 通过；`cargo test -p clawpal-core install`（含 dry-run 相关）通过；`cargo test -p clawpal-core connect` 覆盖 docker/ssh 连接成功与失败路径通过；`cargo test -p clawpal-core profile` 13/13 通过，`test_profile` 非占位行为。错误文案包含 `remote ssh host not found`、`ssh connect failed`、`remote connectivity probe failed` 等可诊断信息。 |
 | Action 3: Phase 9 Agent 工具链确认 | PASS | `grep -RIn \"system.run\\|system_run\" src-tauri/src/ --include=\"*.rs\"` 无结果（可执行路径为 0）；`cargo test -p clawpal supported_commands` 通过（doctor/install prompt allowlist parity tests 通过）。 |
 | Action 4: Phase 10 GUI 确认 | PASS | `LEGACY_DOCKER_INSTANCES_KEY` 仅在迁移读取并在迁移成功后 `removeItem`；StartPage/Tab 展示已收口为 `listRegisteredInstances()`（`registeredInstances`）单一来源；`InstallHub` 为 deterministic-first（`docker/local` 直走 deterministic pipeline，`ssh/digitalocean` 先 `installDecideTarget`，仅在无法确定时进入 agent chat）。 |
-| Action 5: 质量检查 | PENDING | - |
+| Action 5: 质量检查 | PASS (with noted env constraint) | `cargo build --workspace` 通过；`cargo test --workspace --all-targets` 除 `remote_api` 外通过。`remote_api` 失败原因为当前环境无法访问 `192.168.65.2:22`（`Operation not permitted`），按说明忽略。`install_history_preamble_contains_execution_guardrails` 断言漂移已修复并复测通过。`npx tsc --noEmit` 通过。`git status` 已检查，保留用户已有未提交改动（`src-tauri/src/runtime/zeroclaw/*`, `src/lib/use-api.ts`, `.claude/`, `.tmp/`, `scripts/review-loop.sh`）。 |
 
 ---
 
@@ -63,6 +63,10 @@ Last run: 2026-02-27
 | Doctor/Rescue logic migration | Issue parsing, rescue planning, etc. → core | `da8bcdc` - `19563d8` |
 | History-preamble strengthened | Tool format, allowlist, constraints re-stated | `68cd029` |
 | 2 profile edge functions (`remote_resolve_api_keys`, `remote_extract_model_profiles_from_config`) | Use `list_profiles_from_storage_json()` | `84720c5` |
+| Phase 5 SSH 收口验证 | Type alias confirmed, no openssh residue, CRUD via InstanceRegistry | `ff14eb7` (验证) |
+| Phase 6/7/8 核验 | cli_json_contract 4/4, install dry-run, profile 13/13, connect error paths | `ff14eb7` (验证) |
+| Phase 9 Agent 工具链 | No system.run paths, prompt allowlist parity tests pass | `ff14eb7` (验证) |
+| Phase 10 GUI 确认 | Legacy key one-shot migration, listRegisteredInstances sole source, InstallHub deterministic-first | `ff14eb7` (验证) |
 
 ---
 
@@ -88,42 +92,9 @@ Last run: 2026-02-27
 
 ## Next Actions (for Codex)
 
-### Action 1: Phase 5 SSH 收口
+_所有验证 Action 已完成。无新任务。_
 
-1. **确认 ssh.rs 类型无重复**：`src-tauri/src/ssh.rs` 的 `SshHostConfig` 和 `SshExecResult` 应该是 core 的 type alias。如果已经是，打勾跳过。**不要删除 ssh.rs** — Tauri 需要连接状态缓存。
-2. **清理 Cargo.lock openssh 残留**：`cargo update -p clawpal-core` 确认无旧 openssh 依赖。
-3. **SSH host CRUD 确认只走 core registry**：检查 `ssh/registry.rs` 操作的是 `InstanceRegistry`，无其他存储路径。
-4. 以上都是确认项，没问题不需要改代码。有问题才 commit 修复。
-
-### Action 2: Phase 6/7/8 核验
-
-1. CLI 子命令 JSON 输出一致性：`cargo test --test cli_json_contract` 通过即可。
-2. `install docker` 端到端：dry-run 测试通过即可（`cargo test -p clawpal-core install`）。
-3. `connect docker/ssh` 错误路径：检查错误信息是否有意义（路径不存在、连接失败）。
-4. `profile test_profile`：确认不是占位行为（`cargo test -p clawpal-core profile`）。
-5. 同样是验证项，测试通过就打勾，有 bug 才 commit。
-
-### Action 3: Phase 9 Agent 工具链确认
-
-1. 全仓搜索 `system.run` 可执行路径：`grep -r "system.run\|system_run" src-tauri/src/ --include="*.rs"` 排除文档和测试字符串。应为零结果。
-2. 确认 `doctor_approve_invoke` 的允许集与 prompt 白名单一致：已有 parity test（`fa2dd69`），跑 `cargo test -p clawpal supported_commands` 通过即可。
-
-### Action 4: Phase 10 GUI 确认
-
-**注意：Phase B（`8f32491`）已完成 localStorage 迁移。以下只需确认，不需要重做：**
-1. 确认 `LEGACY_DOCKER_INSTANCES_KEY` 仅用于一次性迁移后 `removeItem`，无常驻 fallback。
-2. 确认 StartPage/Tab 显示以 `listRegisteredInstances()` 为唯一数据源。
-3. 确认 InstallHub 是 deterministic-first（Docker/Local 直接执行，agent 仅失败后触发）。
-4. 全部是确认项。
-
-### Action 5: 质量检查
-
-1. `cargo build --workspace` 通过
-2. `cargo test --workspace --all-targets` 通过（remote_api 失败忽略，需要 vm1）
-3. `npx tsc --noEmit` 通过
-4. 清理未提交改动：`git status` 检查，有意义的改动分组 commit，临时文件清理
-
-每个 Action 完成后在 cc.md 的 Codex Feedback 区域更新状态。验证项只需报告结果（PASS/FAIL + 原因），代码改动才需要 commit。
+如有新一轮工作，Claude 会在此写入。
 
 ---
 
@@ -138,3 +109,4 @@ Last run: 2026-02-27
 | Phase E: Config domain migration | **Done** | `20f20d9` | Batch E1 complete |
 | Doctor/Rescue migration | **Done** | `da8bcdc`-`19563d8` | 12 commits, 27 new core tests |
 | History-preamble | **Done** | `68cd029` | Both doctor and install strengthened |
+| Verification Actions 1-5 | **Done** | `ff14eb7` | All PASS except 1 test drift (P2 tracked) |

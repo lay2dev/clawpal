@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn install_history_preamble_contains_execution_guardrails() {
         let prompt = install_history_preamble();
-        assert!(prompt.contains("output only the allowed tool JSON format"));
+        assert!(prompt.contains("output ONLY one JSON object in this exact shape"));
         assert!(prompt.contains("Never invent unsupported clawpal commands"));
     }
 
