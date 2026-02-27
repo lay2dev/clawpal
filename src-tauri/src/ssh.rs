@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::{Duration as StdDuration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Semaphore};
@@ -28,13 +27,6 @@ struct ConnectedHost {
     home_dir: String,
     session: std::sync::Arc<clawpal_core::ssh::SshSession>,
     op_limiter: std::sync::Arc<Semaphore>,
-    runtime: std::sync::Arc<Mutex<HostRuntimeState>>,
-}
-
-#[derive(Debug)]
-struct HostRuntimeState {
-    consecutive_timeouts: u32,
-    cool_down_until: Option<Instant>,
 }
 
 pub struct SshConnectionPool {
@@ -42,8 +34,6 @@ pub struct SshConnectionPool {
 }
 
 const SSH_OP_MAX_CONCURRENCY_PER_HOST: usize = 2;
-const SSH_TIMEOUT_COOLDOWN_BASE_SECS: u64 = 20;
-const SSH_TIMEOUT_COOLDOWN_MAX_SECS: u64 = 120;
 
 impl SshConnectionPool {
     pub fn new() -> Self {
@@ -81,10 +71,6 @@ impl SshConnectionPool {
                 home_dir: home,
                 session,
                 op_limiter: std::sync::Arc::new(Semaphore::new(SSH_OP_MAX_CONCURRENCY_PER_HOST)),
-                runtime: std::sync::Arc::new(Mutex::new(HostRuntimeState {
-                    consecutive_timeouts: 0,
-                    cool_down_until: None,
-                })),
             },
         );
         Ok(())
@@ -135,25 +121,13 @@ impl SshConnectionPool {
 
     pub async fn exec(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
         let conn = self.lookup_connected_host(id).await?;
-        self.ensure_not_in_timeout_cooldown(id, &conn).await?;
         let _permit = conn
             .op_limiter
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("ssh limiter acquire failed: {e}"))?;
-        let result = conn.session.exec(command).await;
-        let result = match result {
-            Ok(v) => v,
-            Err(e) => {
-                let msg = e.to_string();
-                if is_timeout_error_message(&msg) {
-                    self.mark_timeout_and_cooldown(&conn).await;
-                }
-                return Err(msg);
-            }
-        };
-        self.clear_timeout_cooldown(&conn).await;
+        let result = conn.session.exec(command).await.map_err(|e| e.to_string())?;
         Ok(SshExecResult {
             stdout: result.stdout,
             stderr: result.stderr,
@@ -179,52 +153,33 @@ esac",
     pub async fn sftp_read(&self, id: &str, path: &str) -> Result<String, String> {
         let resolved = self.resolve_path(id, path).await?;
         let conn = self.lookup_connected_host(id).await?;
-        self.ensure_not_in_timeout_cooldown(id, &conn).await?;
         let _permit = conn
             .op_limiter
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("ssh limiter acquire failed: {e}"))?;
-        let bytes = conn.session.sftp_read(&resolved).await;
-        let bytes = match bytes {
-            Ok(v) => v,
-            Err(e) => {
-                let msg = e.to_string();
-                if is_timeout_error_message(&msg) {
-                    self.mark_timeout_and_cooldown(&conn).await;
-                }
-                return Err(msg);
-            }
-        };
-        self.clear_timeout_cooldown(&conn).await;
+        let bytes = conn
+            .session
+            .sftp_read(&resolved)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 
     pub async fn sftp_write(&self, id: &str, path: &str, content: &str) -> Result<(), String> {
         let resolved = self.resolve_path(id, path).await?;
         let conn = self.lookup_connected_host(id).await?;
-        self.ensure_not_in_timeout_cooldown(id, &conn).await?;
         let _permit = conn
             .op_limiter
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("ssh limiter acquire failed: {e}"))?;
-        let write_res = conn.session.sftp_write(&resolved, content.as_bytes()).await;
-        match write_res {
-            Ok(()) => {
-                self.clear_timeout_cooldown(&conn).await;
-                Ok(())
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if is_timeout_error_message(&msg) {
-                    self.mark_timeout_and_cooldown(&conn).await;
-                }
-                Err(msg)
-            }
-        }
+        conn.session
+            .sftp_write(&resolved, content.as_bytes())
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn sftp_list(&self, id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
@@ -269,38 +224,6 @@ esac",
             .ok_or_else(|| format!("No connection for id: {id}"))?;
         Ok(conn.clone())
     }
-
-    async fn ensure_not_in_timeout_cooldown(
-        &self,
-        id: &str,
-        conn: &ConnectedHost,
-    ) -> Result<(), String> {
-        let mut state = conn.runtime.lock().await;
-        if let Some(until) = state.cool_down_until {
-            if Instant::now() < until {
-                let left = until.saturating_duration_since(Instant::now()).as_secs();
-                return Err(format!(
-                    "SSH_COOLDOWN: operations for {id} are cooling down after repeated timeouts; retry in {left}s"
-                ));
-            }
-            state.cool_down_until = None;
-        }
-        Ok(())
-    }
-
-    async fn mark_timeout_and_cooldown(&self, conn: &ConnectedHost) {
-        let mut state = conn.runtime.lock().await;
-        state.consecutive_timeouts = state.consecutive_timeouts.saturating_add(1);
-        let factor = 1_u64 << state.consecutive_timeouts.saturating_sub(1).min(3);
-        let secs = (SSH_TIMEOUT_COOLDOWN_BASE_SECS * factor).min(SSH_TIMEOUT_COOLDOWN_MAX_SECS);
-        state.cool_down_until = Some(Instant::now() + StdDuration::from_secs(secs));
-    }
-
-    async fn clear_timeout_cooldown(&self, conn: &ConnectedHost) {
-        let mut state = conn.runtime.lock().await;
-        state.consecutive_timeouts = 0;
-        state.cool_down_until = None;
-    }
 }
 
 impl Default for SshConnectionPool {
@@ -311,11 +234,6 @@ impl Default for SshConnectionPool {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn is_timeout_error_message(message: &str) -> bool {
-    let lowered = message.to_ascii_lowercase();
-    lowered.contains("timeout") || lowered.contains("timed out")
 }
 
 #[cfg(test)]
