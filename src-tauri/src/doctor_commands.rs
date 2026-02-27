@@ -1678,8 +1678,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    fn prompt_supported_clawpal_commands() -> BTreeSet<String> {
-        let prompt = crate::prompt_templates::doctor_domain_system();
+    fn prompt_supported_clawpal_commands_from(prompt: &str) -> BTreeSet<String> {
         let mut in_section = false;
         let mut commands = BTreeSet::new();
         for line in prompt.lines() {
@@ -1699,6 +1698,16 @@ mod tests {
             }
         }
         commands
+    }
+
+    fn doctor_prompt_supported_clawpal_commands() -> BTreeSet<String> {
+        let prompt = crate::prompt_templates::doctor_domain_system();
+        prompt_supported_clawpal_commands_from(&prompt)
+    }
+
+    fn install_prompt_supported_clawpal_commands() -> BTreeSet<String> {
+        let prompt = crate::prompt_templates::install_domain_system();
+        prompt_supported_clawpal_commands_from(&prompt)
     }
 
     #[test]
@@ -1791,7 +1800,17 @@ mod tests {
 
     #[test]
     fn doctor_prompt_supported_commands_match_backend_list() {
-        let prompt_commands = prompt_supported_clawpal_commands();
+        let prompt_commands = doctor_prompt_supported_clawpal_commands();
+        let backend_commands = DOCTOR_SUPPORTED_CLAWPAL_COMMANDS
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(prompt_commands, backend_commands);
+    }
+
+    #[test]
+    fn install_prompt_supported_commands_match_backend_list() {
+        let prompt_commands = install_prompt_supported_clawpal_commands();
         let backend_commands = DOCTOR_SUPPORTED_CLAWPAL_COMMANDS
             .iter()
             .map(|v| v.to_string())
