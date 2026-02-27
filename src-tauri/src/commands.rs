@@ -1471,7 +1471,7 @@ pub async fn remote_setup_agent_identity(
     }
 
     // Read remote config to find agent workspace
-    let (_raw, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id)
+    let (_config_path, _raw, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id)
         .await
         .map_err(|e| format!("Failed to parse config: {e}"))?;
 
@@ -2188,14 +2188,13 @@ pub async fn remote_fix_issues(
     host_id: String,
     ids: Vec<String>,
 ) -> Result<FixResult, String> {
-    let raw = pool
-        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
-        .await?;
+    let (config_path, raw, _cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
     let mut cfg = clawpal_core::doctor::parse_json5_document_or_default(&raw);
     let applied = clawpal_core::doctor::apply_issue_fixes(&mut cfg, &ids)?;
 
     if !applied.is_empty() {
-        remote_write_config_with_snapshot(&pool, &host_id, &raw, &cfg, "doctor-fix").await?;
+        remote_write_config_with_snapshot(&pool, &host_id, &config_path, &raw, &cfg, "doctor-fix")
+            .await?;
     }
 
     let remaining: Vec<String> = ids.into_iter().filter(|id| !applied.contains(id)).collect();
@@ -7246,7 +7245,8 @@ pub async fn remote_read_raw_config(
 ) -> Result<String, String> {
     // openclaw config get requires a path — there's no way to dump the full config via CLI.
     // Use sftp_read directly since this function's purpose is returning the entire raw config.
-    pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await
+    let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
+    pool.sftp_read(&host_id, &config_path).await
 }
 
 fn is_owner_display_parse_error(text: &str) -> bool {
@@ -7539,6 +7539,7 @@ pub async fn remote_list_bindings(
 async fn remote_write_config_with_snapshot(
     pool: &SshConnectionPool,
     host_id: &str,
+    config_path: &str,
     current_text: &str,
     next: &Value,
     source: &str,
@@ -7556,19 +7557,45 @@ async fn remote_write_config_with_snapshot(
     // Write new config
     let new_text =
         clawpal_core::doctor::render_json_document(next, "remote config").map_err(|e| e.to_string())?;
-    pool.sftp_write(host_id, "~/.openclaw/openclaw.json", &new_text)
+    pool.sftp_write(host_id, config_path, &new_text)
         .await?;
     Ok(())
+}
+
+async fn remote_resolve_openclaw_config_path(
+    pool: &SshConnectionPool,
+    host_id: &str,
+) -> Result<String, String> {
+    let result = pool
+        .exec_login(
+            host_id,
+            clawpal_core::doctor::remote_openclaw_config_path_probe_script(),
+        )
+        .await?;
+    if result.exit_code != 0 {
+        let details = format!("{}\n{}", result.stderr.trim(), result.stdout.trim());
+        return Err(format!(
+            "Failed to resolve remote openclaw config path ({}): {}",
+            result.exit_code,
+            details.trim()
+        ));
+    }
+    let path = result.stdout.trim();
+    if path.is_empty() {
+        return Err("Remote openclaw config path probe returned empty output".into());
+    }
+    Ok(path.to_string())
 }
 
 async fn remote_read_openclaw_config_text_and_json(
     pool: &SshConnectionPool,
     host_id: &str,
-) -> Result<(String, Value), String> {
-    let raw = pool.sftp_read(host_id, "~/.openclaw/openclaw.json").await?;
+) -> Result<(String, String, Value), String> {
+    let config_path = remote_resolve_openclaw_config_path(pool, host_id).await?;
+    let raw = pool.sftp_read(host_id, &config_path).await?;
     let parsed = clawpal_core::doctor::parse_json_document(&raw, "remote config")
         .map_err(|e| format!("Failed to parse remote config: {e}"))?;
-    Ok((raw, parsed))
+    Ok((config_path, raw, parsed))
 }
 
 #[tauri::command]
@@ -7597,13 +7624,16 @@ pub async fn remote_manage_rescue_bot(
         .unwrap_or("rescue")
         .to_string();
 
-    let main_port = pool
-        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
-        .await
-        .ok()
-        .map(|raw| clawpal_core::doctor::parse_json5_document_or_default(&raw))
-        .map(|cfg| clawpal_core::doctor::resolve_gateway_port_from_config(&cfg))
-        .unwrap_or(18789);
+    let main_port = match remote_resolve_openclaw_config_path(&pool, &host_id).await {
+        Ok(path) => match pool.sftp_read(&host_id, &path).await {
+            Ok(raw) => {
+                let cfg = clawpal_core::doctor::parse_json5_document_or_default(&raw);
+                clawpal_core::doctor::resolve_gateway_port_from_config(&cfg)
+            }
+            Err(_) => 18789,
+        },
+        Err(_) => 18789,
+    };
     let (already_configured, existing_port) =
         resolve_remote_rescue_profile_state(&pool, &host_id, &profile).await?;
     let should_configure = !already_configured || action == RescueBotAction::Set;
@@ -7786,18 +7816,25 @@ pub async fn remote_apply_config_patch(
     patch_template: String,
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
-    let (_raw, current) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+    let (config_path, _raw, current) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
     let current_text =
         clawpal_core::doctor::render_json_document(&current, "remote config")
             .map_err(|e| e.to_string())?;
     let (candidate, _changes) =
         build_candidate_config_from_template(&current, &patch_template, &params)?;
-    remote_write_config_with_snapshot(&pool, &host_id, &current_text, &candidate, "config-patch")
-        .await?;
+    remote_write_config_with_snapshot(
+        &pool,
+        &host_id,
+        &config_path,
+        &current_text,
+        &candidate,
+        "config-patch",
+    )
+    .await?;
     Ok(ApplyResult {
         ok: true,
         snapshot_id: None,
-        config_path: "~/.openclaw/openclaw.json".to_string(),
+        config_path,
         backup_path: None,
         warnings: Vec::new(),
         errors: Vec::new(),
@@ -7881,7 +7918,8 @@ pub async fn remote_preview_rollback(
     let target = clawpal_core::doctor::parse_json_document(&snapshot_text, "snapshot")
         .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
 
-    let (_current_text, current) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+    let (_config_path, _current_text, current) =
+        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
     let before = clawpal_core::doctor::render_json_document(&current, "config")
         .unwrap_or_else(|_| "{}".into());
@@ -7911,13 +7949,22 @@ pub async fn remote_rollback(
     let target = clawpal_core::doctor::parse_json_document(&target_text, "snapshot")
         .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
 
-    let (current_text, _current) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    remote_write_config_with_snapshot(&pool, &host_id, &current_text, &target, "rollback").await?;
+    let (config_path, current_text, _current) =
+        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+    remote_write_config_with_snapshot(
+        &pool,
+        &host_id,
+        &config_path,
+        &current_text,
+        &target,
+        "rollback",
+    )
+    .await?;
 
     Ok(ApplyResult {
         ok: true,
         snapshot_id: Some(snapshot_id),
-        config_path: "~/.openclaw/openclaw.json".into(),
+        config_path,
         backup_path: None,
         warnings: vec!["rolled back".into()],
         errors: Vec::new(),
@@ -8238,11 +8285,13 @@ pub async fn remote_write_raw_config(
     let next = clawpal_core::doctor::parse_json_document(&content, "config")
         .map_err(|e| format!("Invalid JSON: {e}"))?;
     // Read current for snapshot
+    let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
     let current = pool
-        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
+        .sftp_read(&host_id, &config_path)
         .await
         .unwrap_or_default();
-    remote_write_config_with_snapshot(&pool, &host_id, &current, &next, "raw-edit").await?;
+    remote_write_config_with_snapshot(&pool, &host_id, &config_path, &current, &next, "raw-edit")
+        .await?;
     Ok(true)
 }
 
@@ -8792,7 +8841,11 @@ async fn resolve_remote_profile_base_url(
         return Ok(Some(base.to_string()));
     }
 
-    let raw = match pool.sftp_read(host_id, "~/.openclaw/openclaw.json").await {
+    let config_path = match remote_resolve_openclaw_config_path(pool, host_id).await {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    let raw = match pool.sftp_read(host_id, &config_path).await {
         Ok(raw) => raw,
         Err(e) if is_remote_missing_path_error(&e) => return Ok(None),
         Err(e) => {
@@ -8897,7 +8950,7 @@ pub async fn remote_extract_model_profiles_from_config(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<ExtractModelProfilesResult, String> {
-    let (_raw, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+    let (_config_path, _raw, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
     let profiles_raw = pool
         .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
