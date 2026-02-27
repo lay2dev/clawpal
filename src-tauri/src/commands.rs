@@ -8750,15 +8750,9 @@ pub async fn remote_resolve_api_keys(
         Err(e) if is_remote_missing_path_error(&e) => r#"{"profiles":[]}"#.to_string(),
         Err(e) => return Err(format!("Failed to read remote model profiles: {e}")),
     };
-    #[derive(serde::Deserialize)]
-    struct Storage {
-        #[serde(default)]
-        profiles: Vec<ModelProfile>,
-    }
-    let storage: Storage = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse remote model profiles: {e}"))?;
+    let profiles = clawpal_core::profile::list_profiles_from_storage_json(&content);
     let mut out = Vec::new();
-    for profile in &storage.profiles {
+    for profile in &profiles {
         let masked = if let Some(ref key) = profile.api_key {
             if key.len() > 8 {
                 format!("{}...{}", &key[..4], &key[key.len() - 4..])
@@ -8992,15 +8986,7 @@ pub async fn remote_extract_model_profiles_from_config(
         .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
         .await
         .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
-    #[derive(serde::Deserialize)]
-    struct StorageIn {
-        #[serde(default)]
-        profiles: Vec<ModelProfile>,
-    }
-    let existing: StorageIn = serde_json::from_str(&profiles_raw).unwrap_or(StorageIn {
-        profiles: Vec::new(),
-    });
-    let profiles = existing.profiles;
+    let profiles = clawpal_core::profile::list_profiles_from_storage_json(&profiles_raw);
 
     let bindings = collect_model_bindings(&cfg, &profiles);
     let mut created = 0usize;
@@ -9064,16 +9050,8 @@ pub async fn remote_extract_model_profiles_from_config(
     }
 
     if created > 0 {
-        #[derive(serde::Serialize)]
-        struct StorageOut<'a> {
-            profiles: &'a [ModelProfile],
-            version: u8,
-        }
-        let payload = StorageOut {
-            profiles: &next_profiles,
-            version: 1,
-        };
-        let text = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+        let text = clawpal_core::profile::render_profiles_storage_json(&next_profiles)
+            .map_err(|e| e.to_string())?;
         let _ = pool.exec(&host_id, "mkdir -p ~/.clawpal").await;
         pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &text)
             .await?;

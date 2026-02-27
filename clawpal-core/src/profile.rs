@@ -186,6 +186,14 @@ pub fn delete_profile_from_storage_json(content: &str, profile_id: &str) -> Resu
     Ok((removed, text))
 }
 
+pub fn render_profiles_storage_json(profiles: &[ModelProfile]) -> Result<String> {
+    let storage = ProfileStorageWrapped {
+        profiles: profiles.to_vec(),
+        version: default_storage_version(),
+    };
+    serialize_storage(&storage)
+}
+
 fn model_is_listed(raw: &str, provider: &str, model: &str) -> bool {
     let Ok(json) = serde_json::from_str::<Value>(raw) else {
         return raw.contains(model);
@@ -590,5 +598,20 @@ mod tests {
             .expect("find profile")
             .expect("profile present");
         assert_eq!(found.id, "p-find");
+    }
+
+    #[test]
+    fn render_profiles_storage_json_writes_versioned_payload() {
+        let profiles = vec![profile("p-render")];
+        let text = render_profiles_storage_json(&profiles).expect("render");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+        assert_eq!(value.get("version").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            value
+                .get("profiles")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.len()),
+            Some(1)
+        );
     }
 }
