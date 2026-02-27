@@ -431,6 +431,117 @@ pub fn rescue_cleanup_noop(
     false
 }
 
+pub fn build_rescue_bot_command_plan(
+    action: &str,
+    profile: &str,
+    rescue_port: u16,
+    include_configure: bool,
+) -> Vec<Vec<String>> {
+    let mut commands = Vec::new();
+    let profile_arg = vec!["--profile".to_string(), profile.to_string()];
+    let rescue_port_str = rescue_port.to_string();
+
+    match action {
+        "set" => {
+            if include_configure {
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.push("setup".into());
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend([
+                        "config".into(),
+                        "set".into(),
+                        "gateway.port".into(),
+                        rescue_port_str,
+                        "--json".into(),
+                    ]);
+                    cmd
+                });
+            }
+        }
+        "activate" => {
+            commands.extend(build_rescue_bot_command_plan(
+                "set",
+                profile,
+                rescue_port,
+                include_configure,
+            ));
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend(["gateway".into(), "install".into()]);
+                cmd
+            });
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend(["gateway".into(), "restart".into()]);
+                cmd
+            });
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend([
+                    "gateway".into(),
+                    "status".into(),
+                    "--no-probe".into(),
+                    "--json".into(),
+                ]);
+                cmd
+            });
+        }
+        "status" => {
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend([
+                    "gateway".into(),
+                    "status".into(),
+                    "--no-probe".into(),
+                    "--json".into(),
+                ]);
+                cmd
+            });
+        }
+        "deactivate" => {
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend(["gateway".into(), "stop".into()]);
+                cmd
+            });
+            commands.push({
+                let mut cmd = profile_arg;
+                cmd.extend([
+                    "gateway".into(),
+                    "status".into(),
+                    "--no-probe".into(),
+                    "--json".into(),
+                ]);
+                cmd
+            });
+        }
+        "unset" => {
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend(["gateway".into(), "stop".into()]);
+                cmd
+            });
+            commands.push({
+                let mut cmd = profile_arg.clone();
+                cmd.extend(["gateway".into(), "uninstall".into()]);
+                cmd
+            });
+            commands.push({
+                let mut cmd = profile_arg;
+                cmd.extend(["config".into(), "unset".into(), "gateway.port".into()]);
+                cmd
+            });
+        }
+        _ => {}
+    }
+
+    commands
+}
+
 pub fn apply_issue_fixes(config: &mut Value, ids: &[String]) -> Result<Vec<String>, String> {
     let mut applied = Vec::new();
     for id in ids {
@@ -1013,6 +1124,22 @@ mod tests {
             "config key gateway.port not found",
             ""
         ));
+    }
+
+    #[test]
+    fn build_rescue_bot_command_plan_for_unset() {
+        let commands = build_rescue_bot_command_plan("unset", "rescue", 19789, false);
+        assert_eq!(
+            commands,
+            vec![
+                vec!["--profile", "rescue", "gateway", "stop"],
+                vec!["--profile", "rescue", "gateway", "uninstall"],
+                vec!["--profile", "rescue", "config", "unset", "gateway.port"],
+            ]
+            .into_iter()
+            .map(|items| items.into_iter().map(String::from).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+        );
     }
 
     #[test]

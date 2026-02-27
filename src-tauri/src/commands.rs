@@ -2898,108 +2898,12 @@ fn build_rescue_bot_command_plan(
     rescue_port: u16,
     include_configure: bool,
 ) -> Vec<Vec<String>> {
-    let mut commands = Vec::new();
-    let profile_arg = vec!["--profile".to_string(), profile.to_string()];
-    let rescue_port_str = rescue_port.to_string();
-
-    match action {
-        RescueBotAction::Set => {
-            if include_configure {
-                commands.push({
-                    let mut cmd = profile_arg.clone();
-                    cmd.push("setup".into());
-                    cmd
-                });
-                commands.push({
-                    let mut cmd = profile_arg.clone();
-                    cmd.extend([
-                        "config".into(),
-                        "set".into(),
-                        "gateway.port".into(),
-                        rescue_port_str,
-                        "--json".into(),
-                    ]);
-                    cmd
-                });
-            }
-        }
-        RescueBotAction::Activate => {
-            commands.extend(build_rescue_bot_command_plan(
-                RescueBotAction::Set,
-                profile,
-                rescue_port,
-                include_configure,
-            ));
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "install".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "restart".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend([
-                    "gateway".into(),
-                    "status".into(),
-                    "--no-probe".into(),
-                    "--json".into(),
-                ]);
-                cmd
-            });
-        }
-        RescueBotAction::Status => {
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend([
-                    "gateway".into(),
-                    "status".into(),
-                    "--no-probe".into(),
-                    "--json".into(),
-                ]);
-                cmd
-            });
-        }
-        RescueBotAction::Deactivate => {
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "stop".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg;
-                cmd.extend([
-                    "gateway".into(),
-                    "status".into(),
-                    "--no-probe".into(),
-                    "--json".into(),
-                ]);
-                cmd
-            });
-        }
-        RescueBotAction::Unset => {
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "stop".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "uninstall".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg;
-                cmd.extend(["config".into(), "unset".into(), "gateway.port".into()]);
-                cmd
-            });
-        }
-    }
-
-    commands
+    clawpal_core::doctor::build_rescue_bot_command_plan(
+        action.as_str(),
+        profile,
+        rescue_port,
+        include_configure,
+    )
 }
 
 fn command_failure_message(command: &[String], output: &OpenclawCommandOutput) -> String {
