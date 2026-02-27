@@ -208,6 +208,22 @@ pub fn remote_gateway_error_log_tail_script(lines: usize) -> String {
     )
 }
 
+pub fn remote_openclaw_fix_find_dir_script() -> &'static str {
+    "for d in \"$HOME/.npm-global/bin\" \"/opt/homebrew/bin\" \"/usr/local/bin\"; do [ -x \"$d/openclaw\" ] && echo \"$d\" && break; done"
+}
+
+pub fn remote_openclaw_fix_patch_script(path_dir: &str) -> String {
+    let escaped_dir = path_dir.replace('\'', "'\\''");
+    format!(
+        "line='export PATH=\"{escaped_dir}:$PATH\"'; \
+for f in \"$HOME/.zshrc\" \"$HOME/.bashrc\"; do \
+  touch \"$f\"; \
+  grep -Fq \"$line\" \"$f\" || printf '\\n%s\\n' \"$line\" >> \"$f\"; \
+done; \
+command -v openclaw 2>/dev/null || true"
+    )
+}
+
 pub fn doctor_domain_remote_root(base: &str, domain: &str) -> Result<String, String> {
     let base = base.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -334,6 +350,14 @@ mod tests {
         let script = remote_gateway_error_log_tail_script(100);
         assert!(script.contains("tail -100"));
         assert!(script.contains("gateway.err.log"));
+    }
+
+    #[test]
+    fn remote_openclaw_fix_scripts_include_openclaw_lookup_and_path_export() {
+        assert!(remote_openclaw_fix_find_dir_script().contains("openclaw"));
+        let patch = remote_openclaw_fix_patch_script("/opt/homebrew/bin");
+        assert!(patch.contains("export PATH="));
+        assert!(patch.contains("command -v openclaw"));
     }
 
     #[test]

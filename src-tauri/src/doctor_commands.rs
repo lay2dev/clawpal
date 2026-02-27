@@ -427,21 +427,13 @@ async fn fix_openclaw_path_on_target(pool: &SshConnectionPool, target: &str) -> 
     }
     let find_dir = pool.exec_login(
         target,
-        "for d in \"$HOME/.npm-global/bin\" \"/opt/homebrew/bin\" \"/usr/local/bin\"; do [ -x \"$d/openclaw\" ] && echo \"$d\" && break; done",
+        clawpal_core::doctor::remote_openclaw_fix_find_dir_script(),
     ).await?;
     let dir = find_dir.stdout.trim().to_string();
     if dir.is_empty() {
         return Err("cannot locate openclaw binary in known directories".to_string());
     }
-    let escaped_dir = dir.replace('\'', "'\\''");
-    let patch_script = format!(
-        "line='export PATH=\"{escaped_dir}:$PATH\"'; \
-for f in \"$HOME/.zshrc\" \"$HOME/.bashrc\"; do \
-  touch \"$f\"; \
-  grep -Fq \"$line\" \"$f\" || printf '\\n%s\\n' \"$line\" >> \"$f\"; \
-done; \
-command -v openclaw 2>/dev/null || true"
-    );
+    let patch_script = clawpal_core::doctor::remote_openclaw_fix_patch_script(&dir);
     let apply = pool.exec_login(target, &patch_script).await?;
     let located = apply.stdout.trim().to_string();
     Ok(json!({

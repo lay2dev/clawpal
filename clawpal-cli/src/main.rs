@@ -630,14 +630,25 @@ async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Va
         DoctorTarget::Local => Err("doctor fix-openclaw-path currently supports remote target only".to_string()),
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
-            let result = session
-                .exec("sh -lc 'if command -v openclaw >/dev/null 2>&1; then command -v openclaw; elif [ -x /usr/local/bin/openclaw ]; then ln -sf /usr/local/bin/openclaw ~/.local/bin/openclaw 2>/dev/null || true; command -v openclaw || true; else echo missing; fi'")
-                .await
-                .map_err(|e| e.to_string())?;
+            let find_cmd = format!(
+                "sh -lc {}",
+                sh_quote(clawpal_core::doctor::remote_openclaw_fix_find_dir_script())
+            );
+            let find = session.exec(&find_cmd).await.map_err(|e| e.to_string())?;
+            let dir = find.stdout.trim().to_string();
+            if dir.is_empty() {
+                return Err("cannot locate openclaw binary in known directories".to_string());
+            }
+            let patch = clawpal_core::doctor::remote_openclaw_fix_patch_script(&dir);
+            let patch_cmd = format!("sh -lc {}", sh_quote(&patch));
+            let result = session.exec(&patch_cmd).await.map_err(|e| e.to_string())?;
+            let located = result.stdout.trim().to_string();
             Ok(json!({
                 "target": id,
                 "remote": true,
-                "fixed": result.exit_code == 0,
+                "updatedPathDir": dir,
+                "openclawPathAfterFix": if located.is_empty() { serde_json::Value::Null } else { json!(located) },
+                "ok": !located.is_empty(),
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "exitCode": result.exit_code,
