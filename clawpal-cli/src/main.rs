@@ -661,9 +661,7 @@ async fn doctor_config_delete(target: DoctorTarget, dotted_path: &str) -> Result
     }
     match target {
         DoctorTarget::Local => {
-            let openclaw_dir =
-                std::env::var("OPENCLAW_HOME").unwrap_or_else(|_| format!("{}/.openclaw", dirs::home_dir().map(|p| p.display().to_string()).unwrap_or_default()));
-            let config_path = std::path::PathBuf::from(openclaw_dir).join("openclaw.json");
+            let config_path = clawpal_core::doctor::local_openclaw_config_path_from_env();
             let raw = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("failed to read local config: {e}"))?;
             let (rendered, deleted) = clawpal_core::doctor::delete_json_path_in_str(
@@ -721,9 +719,7 @@ async fn doctor_config_read(
 ) -> Result<serde_json::Value, String> {
     match target {
         DoctorTarget::Local => {
-            let openclaw_dir = std::env::var("OPENCLAW_HOME")
-                .unwrap_or_else(|_| format!("{}/.openclaw", dirs::home_dir().map(|p| p.display().to_string()).unwrap_or_default()));
-            let config_path = std::path::PathBuf::from(openclaw_dir).join("openclaw.json");
+            let config_path = clawpal_core::doctor::local_openclaw_config_path_from_env();
             let raw = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("failed to read local config: {e}"))?;
             let value =
@@ -769,9 +765,7 @@ async fn doctor_config_upsert(
         .map_err(|e| format!("doctor config-upsert requires valid JSON value: {e}"))?;
     match target {
         DoctorTarget::Local => {
-            let openclaw_dir = std::env::var("OPENCLAW_HOME")
-                .unwrap_or_else(|_| format!("{}/.openclaw", dirs::home_dir().map(|p| p.display().to_string()).unwrap_or_default()));
-            let config_path = std::path::PathBuf::from(openclaw_dir).join("openclaw.json");
+            let config_path = clawpal_core::doctor::local_openclaw_config_path_from_env();
             let raw = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("failed to read local config: {e}"))?;
             let rendered = clawpal_core::doctor::upsert_json_path_in_str(

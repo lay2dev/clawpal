@@ -139,6 +139,10 @@ pub fn local_openclaw_root_from_env() -> PathBuf {
         })
 }
 
+pub fn local_openclaw_config_path_from_env() -> PathBuf {
+    local_openclaw_root_from_env().join("openclaw.json")
+}
+
 pub fn resolve_local_sessions_path(openclaw_root: &Path) -> PathBuf {
     let agents_dir = openclaw_root.join("agents");
     if let Ok(agent_entries) = std::fs::read_dir(&agents_dir) {
@@ -269,6 +273,12 @@ mod tests {
         let root = std::env::temp_dir().join("clawpal-doctor-test-root-empty");
         let path = resolve_local_sessions_path(&root);
         assert!(path.ends_with("agents/test/sessions/sessions.json"));
+    }
+
+    #[test]
+    fn local_openclaw_config_path_from_env_ends_with_openclaw_json() {
+        let path = local_openclaw_config_path_from_env();
+        assert!(path.ends_with("openclaw.json"));
     }
 
     #[test]
