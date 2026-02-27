@@ -2321,21 +2321,6 @@ fn parse_doctor_issues(report: &Value, source: &str) -> Vec<RescuePrimaryIssue> 
         .collect()
 }
 
-fn dedupe_rescue_primary_issues(issues: &mut Vec<RescuePrimaryIssue>) {
-    let mut seen = HashSet::new();
-    issues.retain(|issue| seen.insert(issue.id.clone()));
-}
-
-fn classify_rescue_primary_status(issues: &[RescuePrimaryIssue]) -> String {
-    if issues.iter().any(|issue| issue.severity == "error") {
-        return "broken".into();
-    }
-    if issues.is_empty() {
-        return "healthy".into();
-    }
-    "degraded".into()
-}
-
 fn summarize_gateway_status(status: &Value) -> Option<String> {
     let running = status
         .get("running")
@@ -2517,10 +2502,35 @@ fn build_rescue_primary_diagnosis(
         });
     }
 
-    dedupe_rescue_primary_issues(&mut issues);
+    let mut core_issues: Vec<clawpal_core::doctor::DoctorIssue> = issues
+        .iter()
+        .map(|issue| clawpal_core::doctor::DoctorIssue {
+            id: issue.id.clone(),
+            code: issue.code.clone(),
+            severity: issue.severity.clone(),
+            message: issue.message.clone(),
+            auto_fixable: issue.auto_fixable,
+            fix_hint: issue.fix_hint.clone(),
+            source: issue.source.clone(),
+        })
+        .collect();
+    clawpal_core::doctor::dedupe_doctor_issues(&mut core_issues);
+    let status = clawpal_core::doctor::classify_doctor_issue_status(&core_issues);
+    let issues: Vec<RescuePrimaryIssue> = core_issues
+        .into_iter()
+        .map(|issue| RescuePrimaryIssue {
+            id: issue.id,
+            code: issue.code,
+            severity: issue.severity,
+            message: issue.message,
+            auto_fixable: issue.auto_fixable,
+            fix_hint: issue.fix_hint,
+            source: issue.source,
+        })
+        .collect();
 
     RescuePrimaryDiagnosisResult {
-        status: classify_rescue_primary_status(&issues),
+        status,
         checked_at: format_timestamp_from_unix(unix_timestamp_secs()),
         target_profile: target_profile.to_string(),
         rescue_profile: rescue_profile.to_string(),
@@ -5524,7 +5534,7 @@ mod rescue_bot_tests {
     }
 
     #[test]
-    fn test_classify_rescue_primary_status_prioritizes_error() {
+    fn test_classify_doctor_issue_status_prioritizes_error() {
         let issues = vec![
             RescuePrimaryIssue {
                 id: "a".into(),
@@ -5545,7 +5555,19 @@ mod rescue_bot_tests {
                 source: "primary".into(),
             },
         ];
-        assert_eq!(classify_rescue_primary_status(&issues), "broken");
+        let core: Vec<clawpal_core::doctor::DoctorIssue> = issues
+            .into_iter()
+            .map(|issue| clawpal_core::doctor::DoctorIssue {
+                id: issue.id,
+                code: issue.code,
+                severity: issue.severity,
+                message: issue.message,
+                auto_fixable: issue.auto_fixable,
+                fix_hint: issue.fix_hint,
+                source: issue.source,
+            })
+            .collect();
+        assert_eq!(clawpal_core::doctor::classify_doctor_issue_status(&core), "broken");
     }
 
     #[test]

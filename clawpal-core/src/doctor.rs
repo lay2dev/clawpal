@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +190,21 @@ pub fn parse_doctor_issues(report: &Value, source: &str) -> Vec<DoctorIssue> {
         });
     }
     items
+}
+
+pub fn dedupe_doctor_issues(issues: &mut Vec<DoctorIssue>) {
+    let mut seen = HashSet::new();
+    issues.retain(|issue| seen.insert(issue.id.clone()));
+}
+
+pub fn classify_doctor_issue_status(issues: &[DoctorIssue]) -> String {
+    if issues.iter().any(|issue| issue.severity == "error") {
+        return "broken".into();
+    }
+    if issues.is_empty() {
+        return "healthy".into();
+    }
+    "degraded".into()
 }
 
 pub fn apply_issue_fixes(config: &mut Value, ids: &[String]) -> Result<Vec<String>, String> {
@@ -608,6 +624,42 @@ mod tests {
         assert_eq!(normalize_issue_severity("ERROR"), "error");
         assert_eq!(normalize_issue_severity("warn"), "warn");
         assert_eq!(normalize_issue_severity("notice"), "info");
+    }
+
+    #[test]
+    fn dedupe_and_classify_doctor_issues() {
+        let mut issues = vec![
+            DoctorIssue {
+                id: "a".into(),
+                code: "a".into(),
+                severity: "warn".into(),
+                message: "warn".into(),
+                auto_fixable: false,
+                fix_hint: None,
+                source: "primary".into(),
+            },
+            DoctorIssue {
+                id: "a".into(),
+                code: "a".into(),
+                severity: "warn".into(),
+                message: "dup".into(),
+                auto_fixable: false,
+                fix_hint: None,
+                source: "primary".into(),
+            },
+            DoctorIssue {
+                id: "b".into(),
+                code: "b".into(),
+                severity: "error".into(),
+                message: "error".into(),
+                auto_fixable: false,
+                fix_hint: None,
+                source: "primary".into(),
+            },
+        ];
+        dedupe_doctor_issues(&mut issues);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(classify_doctor_issue_status(&issues), "broken");
     }
 
     #[test]
