@@ -52,6 +52,24 @@ Last run: 2026-02-28
 4. **russh 后台 task 泄漏** — `russh::client::connect()` spawn 的 tokio task 在 Handle drop 后，如果卡在死 TCP read，不会退出。
 5. **`resolve_remote_path` 额外连接**（`ssh/mod.rs:442-454`）— 含 `~` 的路径会多建一个 SSH 连接执行 `echo $HOME`（Tauri 层已有 `home_dir` 缓存，此处是 core 层冗余）。
 
+#### Latest Field Observation (2026-02-28)
+
+- 症状：Channels 页面在远程实例上出现“冷却期”错误；小龙虾误报已抑制，但远端 `sshd` 进程仍从 `1` 缓慢增长到 `7`。
+- 现状判断：这不是瞬时爆炸，而是“会话创建持续发生 + 回收慢于创建”的慢性增长。
+- 关键原因：当前仍是 stateless 模式（每次远程操作新建 SSH 连接）；在网络抖动/超时场景下，`russh` 会话回收不够及时时，远端 `sshd` 会出现滞留。
+- 与 OpenSSH 对比：OpenSSH CLI（尤其 ControlMaster 复用）在退出和连接复用上更成熟；当前 `russh + 短连接高频调用` 组合更容易暴露此类问题。
+
+#### Recommended Fix Strategy
+
+1. **Primary (长期方案)**：实现真正的会话复用池（每 host 维持 1 条可复用会话），`exec/sftp` 不再每次新建连接。
+2. **Required Guardrails with session pool**：
+   - 每 host 并发限制（建议 1-2）
+   - 操作级 timeout（exec/sftp）
+   - 会话健康检查 + 自动重建
+   - 空闲回收（60-120s）
+   - 熔断/冷却保留，但改为“连续重连失败”触发，而非单次超时
+3. **Transitional Option (短期止血)**：如需快速稳定，可临时切 OpenSSH CLI + ControlMaster 复用，再回到 russh session pool。
+
 ---
 
 ### P1: `run_doctor_exec_tool` 安全审查
