@@ -294,6 +294,78 @@ pub fn command_output_detail(stderr: &str, stdout: &str) -> String {
     "no output".into()
 }
 
+pub fn collect_safe_primary_issue_ids(
+    issues: &[DoctorIssue],
+    requested_ids: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut seen_safe = HashSet::new();
+    let safe_ids = issues
+        .iter()
+        .filter(|issue| issue.source == "primary" && issue.auto_fixable)
+        .filter_map(|issue| {
+            if seen_safe.insert(issue.id.clone()) {
+                Some(issue.id.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if requested_ids.is_empty() {
+        return (safe_ids, Vec::new());
+    }
+
+    let safe_set = safe_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut selected = Vec::new();
+    let mut skipped = Vec::new();
+    let mut seen_requested = HashSet::new();
+    for id in requested_ids {
+        if !seen_requested.insert(id.clone()) {
+            continue;
+        }
+        if safe_set.contains(id) {
+            selected.push(id.clone());
+        } else {
+            skipped.push(id.clone());
+        }
+    }
+    (selected, skipped)
+}
+
+pub fn build_primary_issue_fix_tail(issue_id: &str) -> Option<(String, Vec<String>)> {
+    let normalize_primary_model_tail = || {
+        vec![
+            "config".to_string(),
+            "set".to_string(),
+            "agents.defaults.model".to_string(),
+            "anthropic/claude-sonnet-4-5".to_string(),
+            "--json".to_string(),
+        ]
+    };
+
+    match issue_id {
+        "field.agents" => Some((
+            "Initialize agents.defaults.model".into(),
+            normalize_primary_model_tail(),
+        )),
+        "json.syntax" => Some((
+            "Normalize primary profile config".into(),
+            normalize_primary_model_tail(),
+        )),
+        "field.port" => Some((
+            "Normalize gateway port".into(),
+            vec![
+                "config".to_string(),
+                "set".to_string(),
+                "gateway.port".to_string(),
+                "18789".to_string(),
+                "--json".to_string(),
+            ],
+        )),
+        _ => None,
+    }
+}
+
 pub fn apply_issue_fixes(config: &mut Value, ids: &[String]) -> Result<Vec<String>, String> {
     let mut applied = Vec::new();
     for id in ids {
@@ -763,6 +835,64 @@ mod tests {
     fn command_output_detail_prefers_stderr_and_trims() {
         let detail = command_output_detail("  first error line\nsecond\n", "ok");
         assert_eq!(detail, "first error line");
+    }
+
+    #[test]
+    fn collect_safe_primary_issue_ids_filters_and_dedupes_requested() {
+        let issues = vec![
+            DoctorIssue {
+                id: "field.agents".into(),
+                code: "x".into(),
+                severity: "warn".into(),
+                message: "x".into(),
+                auto_fixable: true,
+                fix_hint: None,
+                source: "primary".into(),
+            },
+            DoctorIssue {
+                id: "field.port".into(),
+                code: "x".into(),
+                severity: "error".into(),
+                message: "x".into(),
+                auto_fixable: false,
+                fix_hint: None,
+                source: "primary".into(),
+            },
+            DoctorIssue {
+                id: "rescue.gateway.unhealthy".into(),
+                code: "x".into(),
+                severity: "warn".into(),
+                message: "x".into(),
+                auto_fixable: true,
+                fix_hint: None,
+                source: "rescue".into(),
+            },
+        ];
+        let (selected, skipped) = collect_safe_primary_issue_ids(
+            &issues,
+            &[
+                "field.agents".to_string(),
+                "field.port".to_string(),
+                "field.agents".to_string(),
+            ],
+        );
+        assert_eq!(selected, vec!["field.agents".to_string()]);
+        assert_eq!(skipped, vec!["field.port".to_string()]);
+    }
+
+    #[test]
+    fn build_primary_issue_fix_tail_returns_expected_port_command() {
+        let (_, args) = build_primary_issue_fix_tail("field.port").expect("port command");
+        assert_eq!(
+            args,
+            vec![
+                "config".to_string(),
+                "set".to_string(),
+                "gateway.port".to_string(),
+                "18789".to_string(),
+                "--json".to_string()
+            ]
+        );
     }
 
     #[test]

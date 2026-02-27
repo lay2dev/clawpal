@@ -2517,78 +2517,29 @@ fn collect_safe_primary_issue_ids(
     diagnosis: &RescuePrimaryDiagnosisResult,
     requested_ids: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let mut seen_safe = HashSet::new();
-    let safe_ids = diagnosis
+    let issues: Vec<clawpal_core::doctor::DoctorIssue> = diagnosis
         .issues
         .iter()
-        .filter(|issue| issue.source == "primary" && issue.auto_fixable)
-        .filter_map(|issue| {
-            if seen_safe.insert(issue.id.clone()) {
-                Some(issue.id.clone())
-            } else {
-                None
-            }
+        .map(|issue| clawpal_core::doctor::DoctorIssue {
+            id: issue.id.clone(),
+            code: issue.code.clone(),
+            severity: issue.severity.clone(),
+            message: issue.message.clone(),
+            auto_fixable: issue.auto_fixable,
+            fix_hint: issue.fix_hint.clone(),
+            source: issue.source.clone(),
         })
-        .collect::<Vec<_>>();
-
-    if requested_ids.is_empty() {
-        return (safe_ids, Vec::new());
-    }
-
-    let safe_set = safe_ids.iter().cloned().collect::<HashSet<_>>();
-    let mut selected = Vec::new();
-    let mut skipped = Vec::new();
-    let mut seen_requested = HashSet::new();
-    for id in requested_ids {
-        if !seen_requested.insert(id.clone()) {
-            continue;
-        }
-        if safe_set.contains(id) {
-            selected.push(id.clone());
-        } else {
-            skipped.push(id.clone());
-        }
-    }
-    (selected, skipped)
+        .collect();
+    clawpal_core::doctor::collect_safe_primary_issue_ids(&issues, requested_ids)
 }
 
 fn build_primary_issue_fix_command(
     target_profile: &str,
     issue_id: &str,
 ) -> Option<(String, Vec<String>)> {
-    let normalize_primary_model_command = || {
-        build_profile_command(
-            target_profile,
-            &[
-                "config",
-                "set",
-                "agents.defaults.model",
-                "anthropic/claude-sonnet-4-5",
-                "--json",
-            ],
-        )
-    };
-
-    match issue_id {
-        "field.agents" => Some((
-            "Initialize agents.defaults.model".into(),
-            normalize_primary_model_command(),
-        )),
-        "json.syntax" => Some((
-            "Normalize primary profile config".into(),
-            // For malformed JSON/JSON5 configs, writing a known-safe key through
-            // `openclaw config set` forces CLI parsing + canonical rewrite.
-            normalize_primary_model_command(),
-        )),
-        "field.port" => Some((
-            "Normalize gateway port".into(),
-            build_profile_command(
-                target_profile,
-                &["config", "set", "gateway.port", "18789", "--json"],
-            ),
-        )),
-        _ => None,
-    }
+    let (title, tail) = clawpal_core::doctor::build_primary_issue_fix_tail(issue_id)?;
+    let tail_refs: Vec<&str> = tail.iter().map(String::as_str).collect();
+    Some((title, build_profile_command(target_profile, &tail_refs)))
 }
 
 fn build_step_detail(command: &[String], output: &OpenclawCommandOutput) -> String {
