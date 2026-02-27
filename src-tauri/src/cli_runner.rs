@@ -119,12 +119,7 @@ fn build_remote_openclaw_command(
 
     cmd_str.push_str(
         "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN=\"$(command -v openclaw)\"; \
-         elif [ -x \"$HOME/.npm-global/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.npm-global/bin/openclaw\"; \
-         elif [ -x \"$HOME/.local/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.local/bin/openclaw\"; \
-         elif [ -x \"$HOME/.cargo/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.cargo/bin/openclaw\"; \
-         elif [ -x \"/usr/local/bin/openclaw\" ]; then OPENCLAW_BIN=\"/usr/local/bin/openclaw\"; \
-         elif [ -x \"/opt/homebrew/bin/openclaw\" ]; then OPENCLAW_BIN=\"/opt/homebrew/bin/openclaw\"; \
-         else echo \"openclaw command not found (PATH=$PATH)\" >&2; exit 127; fi; \
+         else echo \"openclaw command not found (PATH=$PATH SHELL=$SHELL)\" >&2; exit 127; fi; \
          \"$OPENCLAW_BIN\"",
     );
     for arg in args {
@@ -142,14 +137,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_remote_openclaw_command_includes_fallback_paths() {
+    fn build_remote_openclaw_command_reports_diagnostic_context_when_missing() {
         let cmd = build_remote_openclaw_command(&["agents", "list", "--json"], None);
-        assert!(cmd.contains("$HOME/.npm-global/bin/openclaw"));
-        assert!(cmd.contains("$HOME/.local/bin/openclaw"));
-        assert!(cmd.contains("$HOME/.cargo/bin/openclaw"));
-        assert!(cmd.contains("/usr/local/bin/openclaw"));
-        assert!(cmd.contains("/opt/homebrew/bin/openclaw"));
-        assert!(cmd.contains("openclaw command not found (PATH=$PATH)"));
+        assert!(cmd.contains("command -v openclaw"));
+        assert!(cmd.contains("openclaw command not found (PATH=$PATH SHELL=$SHELL)"));
     }
 
     #[test]

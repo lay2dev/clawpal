@@ -148,17 +148,7 @@ impl SshConnectionPool {
     }
 
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
-        let wrapped = format!(
-            "export CLAWPAL_LOGIN_CMD={cmd}; \
-LOGIN_SHELL=\"${{SHELL:-/bin/sh}}\"; \
-[ -x \"$LOGIN_SHELL\" ] || LOGIN_SHELL=\"/bin/sh\"; \
-case \"$LOGIN_SHELL\" in \
-  */zsh) \"$LOGIN_SHELL\" -lc '[ -f ~/.zprofile ] && . ~/.zprofile >/dev/null 2>&1 || true; [ -f ~/.zshrc ] && . ~/.zshrc >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-  */bash) \"$LOGIN_SHELL\" -lc '[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1 || true; [ -f ~/.bashrc ] && . ~/.bashrc >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-  *) \"$LOGIN_SHELL\" -lc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
-esac",
-            cmd = shell_quote(command)
-        );
+        let wrapped = build_login_shell_wrapper(command);
         self.exec(id, &wrapped).await
     }
 
@@ -275,6 +265,20 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn build_login_shell_wrapper(command: &str) -> String {
+    format!(
+        "export CLAWPAL_LOGIN_CMD={cmd}; \
+LOGIN_SHELL=\"${{SHELL:-/bin/sh}}\"; \
+[ -x \"$LOGIN_SHELL\" ] || LOGIN_SHELL=\"/bin/sh\"; \
+case \"$LOGIN_SHELL\" in \
+  */zsh) \"$LOGIN_SHELL\" -lc '[ -f ~/.zprofile ] && . ~/.zprofile >/dev/null 2>&1 || true; [ -f ~/.zshrc ] && . ~/.zshrc >/dev/null 2>&1 || true; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
+  */bash) \"$LOGIN_SHELL\" -lc '[ -f ~/.bash_profile ] && . ~/.bash_profile >/dev/null 2>&1 || true; [ -f ~/.bash_login ] && . ~/.bash_login >/dev/null 2>&1 || true; [ -f ~/.bashrc ] && . ~/.bashrc >/dev/null 2>&1 || true; [ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
+  *) \"$LOGIN_SHELL\" -lc '[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
+esac",
+        cmd = shell_quote(command)
+    )
+}
+
 fn is_retryable_session_error(message: &str) -> bool {
     let lowered = message.to_ascii_lowercase();
     lowered.contains("ssh open channel failed")
@@ -285,10 +289,21 @@ fn is_retryable_session_error(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::shell_quote;
+    use super::{build_login_shell_wrapper, shell_quote};
 
     #[test]
     fn shell_quote_escapes_single_quote() {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn login_wrapper_sources_common_profile_files() {
+        let wrapped = build_login_shell_wrapper("openclaw --version");
+        assert!(wrapped.contains("[ -f ~/.zprofile ]"));
+        assert!(wrapped.contains("[ -f ~/.zshrc ]"));
+        assert!(wrapped.contains("[ -f ~/.bash_profile ]"));
+        assert!(wrapped.contains("[ -f ~/.bash_login ]"));
+        assert!(wrapped.contains("[ -f ~/.bashrc ]"));
+        assert!(wrapped.contains("[ -f ~/.profile ]"));
     }
 }
