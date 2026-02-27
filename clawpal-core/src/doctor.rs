@@ -135,6 +135,20 @@ pub fn doctor_domain_default_relpath(domain: &str) -> Option<&'static str> {
     }
 }
 
+pub fn remote_openclaw_root_probe_script() -> &'static str {
+    "printf '%s' \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\""
+}
+
+pub fn remote_openclaw_config_path_probe_script() -> &'static str {
+    "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\""
+}
+
+pub fn remote_sessions_discovery_script() -> &'static str {
+    "root=\"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"; \
+first=\"$(find \"$root/agents\" -type f -path \"*/sessions/sessions.json\" 2>/dev/null | head -n 1)\"; \
+if [ -n \"$first\" ]; then printf \"%s\" \"$first\"; else printf \"%s\" \"$root/agents/test/sessions/sessions.json\"; fi"
+}
+
 pub fn doctor_domain_remote_root(base: &str, domain: &str) -> Result<String, String> {
     let base = base.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -235,5 +249,12 @@ mod tests {
     fn relpath_from_remote_abs_extracts_relative_path() {
         let rel = relpath_from_remote_abs("/a/b", "/a/b/c/d").expect("relpath");
         assert_eq!(rel, "c/d");
+    }
+
+    #[test]
+    fn remote_probe_scripts_reference_openclaw_state_env() {
+        assert!(remote_openclaw_root_probe_script().contains("OPENCLAW_STATE_DIR"));
+        assert!(remote_openclaw_config_path_probe_script().contains("openclaw.json"));
+        assert!(remote_sessions_discovery_script().contains("sessions.json"));
     }
 }

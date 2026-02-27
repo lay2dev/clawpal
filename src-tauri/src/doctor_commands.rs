@@ -539,15 +539,22 @@ async fn doctor_domain_remote_root(
     domain: &str,
 ) -> Result<String, String> {
     let base = pool
-        .exec_login(
-            target,
-            "printf '%s' \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"",
-        )
+        .exec_login(target, clawpal_core::doctor::remote_openclaw_root_probe_script())
         .await?
         .stdout
         .trim()
         .to_string();
     clawpal_core::doctor::doctor_domain_remote_root(&base, domain)
+}
+
+async fn resolve_remote_config_path(pool: &SshConnectionPool, target: &str) -> Result<String, String> {
+    let out = pool
+        .exec_login(
+            target,
+            clawpal_core::doctor::remote_openclaw_config_path_probe_script(),
+        )
+        .await?;
+    Ok(out.stdout.trim().to_string())
 }
 
 async fn doctor_file_read(
@@ -755,13 +762,7 @@ async fn doctor_config_delete(
         return Err("doctor config-delete requires <json.path>".to_string());
     }
     if target_is_remote_instance(target) {
-        let config_path_result = pool
-            .exec_login(
-                target,
-                "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"",
-            )
-            .await?;
-        let config_path = config_path_result.stdout.trim().to_string();
+        let config_path = resolve_remote_config_path(pool, target).await?;
         let raw = pool.sftp_read(target, &config_path).await?;
         let mut json: Value =
             serde_json::from_str(&raw).map_err(|e| format!("invalid remote config json: {e}"))?;
@@ -806,13 +807,7 @@ async fn doctor_config_read(
     dotted_path: Option<&str>,
 ) -> Result<Value, String> {
     if target_is_remote_instance(target) {
-        let config_path_result = pool
-            .exec_login(
-                target,
-                "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"",
-            )
-            .await?;
-        let config_path = config_path_result.stdout.trim().to_string();
+        let config_path = resolve_remote_config_path(pool, target).await?;
         let raw = pool.sftp_read(target, &config_path).await?;
         let json: Value =
             serde_json::from_str(&raw).map_err(|e| format!("invalid remote config json: {e}"))?;
@@ -858,13 +853,7 @@ async fn doctor_config_upsert(
     let next_value: Value = serde_json::from_str(value_json)
         .map_err(|e| format!("doctor config-upsert requires valid JSON value: {e}"))?;
     if target_is_remote_instance(target) {
-        let config_path_result = pool
-            .exec_login(
-                target,
-                "echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"",
-            )
-            .await?;
-        let config_path = config_path_result.stdout.trim().to_string();
+        let config_path = resolve_remote_config_path(pool, target).await?;
         let raw = pool.sftp_read(target, &config_path).await?;
         let mut json: Value =
             serde_json::from_str(&raw).map_err(|e| format!("invalid remote config json: {e}"))?;
@@ -902,12 +891,7 @@ async fn doctor_config_upsert(
 
 async fn resolve_remote_sessions_path(pool: &SshConnectionPool, target: &str) -> Result<String, String> {
     let out = pool
-        .exec_login(
-            target,
-            "root=\"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"; \
-             first=\"$(find \"$root/agents\" -type f -path '*/sessions/sessions.json' 2>/dev/null | head -n 1)\"; \
-             if [ -n \"$first\" ]; then printf '%s' \"$first\"; else printf '%s' \"$root/agents/test/sessions/sessions.json\"; fi",
-        )
+        .exec_login(target, clawpal_core::doctor::remote_sessions_discovery_script())
         .await?;
     Ok(out.stdout.trim().to_string())
 }

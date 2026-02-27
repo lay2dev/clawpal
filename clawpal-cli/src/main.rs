@@ -646,6 +646,15 @@ async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Va
     }
 }
 
+async fn resolve_remote_config_path(session: &SshSession) -> Result<String, String> {
+    let cmd = format!(
+        "sh -lc {}",
+        sh_quote(clawpal_core::doctor::remote_openclaw_config_path_probe_script())
+    );
+    let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
+    Ok(out.stdout.trim().to_string())
+}
+
 async fn doctor_config_delete(target: DoctorTarget, dotted_path: &str) -> Result<serde_json::Value, String> {
     if dotted_path.trim().is_empty() {
         return Err("doctor config-delete requires <json.path>".to_string());
@@ -676,13 +685,7 @@ async fn doctor_config_delete(target: DoctorTarget, dotted_path: &str) -> Result
         }
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
-            let config_path = session
-                .exec("sh -lc 'echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"'")
-                .await
-                .map_err(|e| e.to_string())?
-                .stdout
-                .trim()
-                .to_string();
+            let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
                 .await
@@ -735,13 +738,7 @@ async fn doctor_config_read(
         }
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
-            let config_path = session
-                .exec("sh -lc 'echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"'")
-                .await
-                .map_err(|e| e.to_string())?
-                .stdout
-                .trim()
-                .to_string();
+            let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
                 .await
@@ -796,13 +793,7 @@ async fn doctor_config_upsert(
         }
         DoctorTarget::Remote { id, host } => {
             let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
-            let config_path = session
-                .exec("sh -lc 'echo \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}/openclaw.json\"'")
-                .await
-                .map_err(|e| e.to_string())?
-                .stdout
-                .trim()
-                .to_string();
+            let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
                 .await
@@ -828,10 +819,11 @@ async fn doctor_config_upsert(
 }
 
 async fn resolve_remote_sessions_path(session: &SshSession) -> Result<String, String> {
-    let out = session
-        .exec("sh -lc 'root=\"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"; first=\"$(find \"$root/agents\" -type f -path \"*/sessions/sessions.json\" 2>/dev/null | head -n 1)\"; if [ -n \"$first\" ]; then printf \"%s\" \"$first\"; else printf \"%s\" \"$root/agents/test/sessions/sessions.json\"; fi'")
-        .await
-        .map_err(|e| e.to_string())?;
+    let cmd = format!(
+        "sh -lc {}",
+        sh_quote(clawpal_core::doctor::remote_sessions_discovery_script())
+    );
+    let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     Ok(out.stdout.trim().to_string())
 }
 
@@ -1002,10 +994,11 @@ async fn doctor_sessions_delete(
 }
 
 async fn doctor_domain_remote_root(session: &SshSession, domain: &str) -> Result<String, String> {
-    let out = session
-        .exec("sh -lc 'printf %s \"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"'")
-        .await
-        .map_err(|e| e.to_string())?;
+    let cmd = format!(
+        "sh -lc {}",
+        sh_quote(clawpal_core::doctor::remote_openclaw_root_probe_script())
+    );
+    let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     let base = out.stdout.trim().to_string();
     clawpal_core::doctor::doctor_domain_remote_root(&base, domain)
 }
