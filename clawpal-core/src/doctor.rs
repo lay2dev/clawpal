@@ -80,6 +80,33 @@ pub fn resolve_gateway_port_from_config(value: &Value) -> u16 {
         .unwrap_or(18789)
 }
 
+pub fn resolve_agent_workspace_from_config(
+    value: &Value,
+    agent_id: &str,
+    fallback_default_workspace: Option<&str>,
+) -> Result<String, String> {
+    let agents_list = json_path_get(value, "agents.list")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "agents.list not found".to_string())?;
+
+    let agent = agents_list
+        .iter()
+        .find(|a| a.get("id").and_then(Value::as_str) == Some(agent_id))
+        .ok_or_else(|| format!("Agent '{}' not found", agent_id))?;
+
+    let default_workspace = json_path_get(value, "agents.defaults.workspace")
+        .or_else(|| json_path_get(value, "agents.default.workspace"))
+        .and_then(Value::as_str)
+        .or(fallback_default_workspace);
+
+    agent
+        .get("workspace")
+        .and_then(Value::as_str)
+        .or(default_workspace)
+        .map(str::to_string)
+        .ok_or_else(|| format!("Agent '{}' has no workspace configured", agent_id))
+}
+
 pub fn apply_issue_fixes(config: &mut Value, ids: &[String]) -> Result<Vec<String>, String> {
     let mut applied = Vec::new();
     for id in ids {
@@ -379,6 +406,24 @@ mod tests {
     fn resolve_gateway_port_from_config_uses_default_when_missing() {
         let doc = json!({});
         assert_eq!(resolve_gateway_port_from_config(&doc), 18789);
+    }
+
+    #[test]
+    fn resolve_agent_workspace_from_config_prefers_agent_workspace() {
+        let doc = json!({
+            "agents": {
+                "list": [
+                    { "id": "main", "workspace": "~/workspace/main" }
+                ],
+                "defaults": {
+                    "workspace": "~/workspace/default"
+                }
+            }
+        });
+        let workspace =
+            resolve_agent_workspace_from_config(&doc, "main", Some("~/.openclaw/agents"))
+                .expect("workspace");
+        assert_eq!(workspace, "~/workspace/main");
     }
 
     #[test]

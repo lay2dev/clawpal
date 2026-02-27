@@ -1432,29 +1432,8 @@ pub fn setup_agent_identity(
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
 
-    // Find the agent's workspace
-    let agents_list = cfg
-        .pointer("/agents/list")
-        .and_then(Value::as_array)
-        .ok_or("agents.list not found")?;
-
-    let agent = agents_list
-        .iter()
-        .find(|a| a.get("id").and_then(Value::as_str) == Some(&agent_id))
-        .ok_or_else(|| format!("Agent '{}' not found", agent_id))?;
-
-    let default_workspace = cfg
-        .pointer("/agents/defaults/workspace")
-        .or_else(|| cfg.pointer("/agents/default/workspace"))
-        .and_then(Value::as_str)
-        .map(|s| expand_tilde(s));
-
-    let workspace = agent
-        .get("workspace")
-        .and_then(Value::as_str)
-        .map(|s| expand_tilde(s))
-        .or(default_workspace)
-        .ok_or_else(|| format!("Agent '{}' has no workspace configured", agent_id))?;
+    let workspace = clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
+        .map(|s| expand_tilde(&s))?;
 
     // Build IDENTITY.md content
     let mut content = format!("- Name: {}\n", name);
@@ -1496,24 +1475,11 @@ pub async fn remote_setup_agent_identity(
         .await
         .map_err(|e| format!("Failed to parse config: {e}"))?;
 
-    let agents_list = clawpal_core::doctor::json_path_get(&cfg, "agents.list")
-        .and_then(Value::as_array)
-        .ok_or("agents.list not found")?;
-
-    let agent = agents_list
-        .iter()
-        .find(|a| a.get("id").and_then(Value::as_str) == Some(&agent_id))
-        .ok_or_else(|| format!("Agent '{}' not found", agent_id))?;
-
-    let default_workspace = clawpal_core::doctor::json_path_get(&cfg, "agents.defaults.workspace")
-        .or_else(|| clawpal_core::doctor::json_path_get(&cfg, "agents.default.workspace"))
-        .and_then(Value::as_str)
-        .unwrap_or("~/.openclaw/agents");
-
-    let workspace = agent
-        .get("workspace")
-        .and_then(Value::as_str)
-        .unwrap_or(default_workspace);
+    let workspace = clawpal_core::doctor::resolve_agent_workspace_from_config(
+        &cfg,
+        &agent_id,
+        Some("~/.openclaw/agents"),
+    )?;
 
     // Build IDENTITY.md content
     let mut content = format!("- Name: {}\n", name);
