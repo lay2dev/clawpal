@@ -140,10 +140,25 @@ function isTransientSshChannelError(errorText: string): boolean {
   );
 }
 
+function isAlreadyExplainedGuidanceError(errorText: string): boolean {
+  const text = errorText.toLowerCase();
+  return (
+    text.includes("下一步建议")
+    || text.includes("建议执行诊断命令")
+    || text.includes("recommend")
+    || text.includes("next step")
+    || text.includes("ssh连接失败，无法打开通道")
+  );
+}
+
 function shouldEmitAgentGuidance(instanceId: string, operation: string, errorText: string): boolean {
   // Timeout cooldown is a protective throttle, not an actionable root-cause signal.
   // Surfacing it as agent guidance creates noisy false alarms.
-  if (isSshCooldownProtectionError(errorText) || isTransientSshChannelError(errorText)) {
+  if (
+    isSshCooldownProtectionError(errorText)
+    || isTransientSshChannelError(errorText)
+    || isAlreadyExplainedGuidanceError(errorText)
+  ) {
     return false;
   }
   const signature = `${instanceId}::${operation}::${normalizeErrorSignature(errorText)}`;
@@ -193,7 +208,11 @@ export function useApi() {
     async (method: string | undefined, rawError: unknown) => {
       const original = String(rawError);
       // Keep cooldown/throttle errors quiet: return as-is and skip guidance explanation.
-      if (isSshCooldownProtectionError(original) || isTransientSshChannelError(original)) {
+      if (
+        isSshCooldownProtectionError(original)
+        || isTransientSshChannelError(original)
+        || isAlreadyExplainedGuidanceError(original)
+      ) {
         return new Error(original);
       }
       try {
