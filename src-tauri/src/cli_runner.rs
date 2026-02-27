@@ -92,6 +92,19 @@ pub async fn run_openclaw_remote_with_env(
     args: &[&str],
     env: Option<&HashMap<String, String>>,
 ) -> Result<CliOutput, String> {
+    let cmd_str = build_remote_openclaw_command(args, env);
+    let result = pool.exec_login(host_id, &cmd_str).await?;
+    Ok(CliOutput {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code as i32,
+    })
+}
+
+fn build_remote_openclaw_command(
+    args: &[&str],
+    env: Option<&HashMap<String, String>>,
+) -> String {
     let mut cmd_str = String::new();
 
     if let Some(env_vars) = env {
@@ -105,24 +118,48 @@ pub async fn run_openclaw_remote_with_env(
     }
 
     cmd_str.push_str(
-        "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN='openclaw'; \
-         else echo 'openclaw command not found' >&2; exit 127; fi; \
+        "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN=\"$(command -v openclaw)\"; \
+         elif [ -x \"$HOME/.npm-global/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.npm-global/bin/openclaw\"; \
+         elif [ -x \"$HOME/.local/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.local/bin/openclaw\"; \
+         elif [ -x \"$HOME/.cargo/bin/openclaw\" ]; then OPENCLAW_BIN=\"$HOME/.cargo/bin/openclaw\"; \
+         elif [ -x \"/usr/local/bin/openclaw\" ]; then OPENCLAW_BIN=\"/usr/local/bin/openclaw\"; \
+         elif [ -x \"/opt/homebrew/bin/openclaw\" ]; then OPENCLAW_BIN=\"/opt/homebrew/bin/openclaw\"; \
+         else echo \"openclaw command not found (PATH=$PATH)\" >&2; exit 127; fi; \
          \"$OPENCLAW_BIN\"",
     );
     for arg in args {
         cmd_str.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
     }
-
-    let result = pool.exec_login(host_id, &cmd_str).await?;
-    Ok(CliOutput {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exit_code: result.exit_code as i32,
-    })
+    cmd_str
 }
 
 pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
     clawpal_core::openclaw::parse_json_output(output).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_remote_openclaw_command_includes_fallback_paths() {
+        let cmd = build_remote_openclaw_command(&["agents", "list", "--json"], None);
+        assert!(cmd.contains("$HOME/.npm-global/bin/openclaw"));
+        assert!(cmd.contains("$HOME/.local/bin/openclaw"));
+        assert!(cmd.contains("$HOME/.cargo/bin/openclaw"));
+        assert!(cmd.contains("/usr/local/bin/openclaw"));
+        assert!(cmd.contains("/opt/homebrew/bin/openclaw"));
+        assert!(cmd.contains("openclaw command not found (PATH=$PATH)"));
+    }
+
+    #[test]
+    fn build_remote_openclaw_command_escapes_args_and_env() {
+        let mut env = HashMap::new();
+        env.insert("OPENCLAW_HOME".to_string(), "/tmp/a'b".to_string());
+        let cmd = build_remote_openclaw_command(&["config", "get", "a'b"], Some(&env));
+        assert!(cmd.contains("export OPENCLAW_HOME='/tmp/a'\\''b';"));
+        assert!(cmd.contains(" 'a'\\''b'"));
+    }
 }
 
 // ---------------------------------------------------------------------------
