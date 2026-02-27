@@ -1,8 +1,11 @@
 pub mod config;
 pub mod registry;
 
-use std::process::Stdio;
+use std::sync::Arc;
+use std::{process::Stdio};
 
+use russh::client;
+use russh_keys::key;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -24,15 +27,45 @@ pub struct ExecResult {
 
 #[derive(Debug, Error)]
 pub enum SshError {
-    #[error("ssh spawn failed: {0}")]
-    Spawn(#[from] std::io::Error),
+    #[error("ssh connect failed: {0}")]
+    Connect(String),
+    #[error("ssh auth failed: {0}")]
+    Auth(String),
+    #[error("ssh open channel failed: {0}")]
+    Channel(String),
+    #[error("ssh command failed: {0}")]
+    CommandFailed(String),
     #[error("invalid host config: {0}")]
     InvalidConfig(String),
-    #[error("remote command failed: {0}")]
-    CommandFailed(String),
+    #[error("sftp failed: {0}")]
+    Sftp(String),
 }
 
 pub type Result<T> = std::result::Result<T, SshError>;
+
+#[derive(Clone)]
+struct SshHandler;
+
+#[async_trait::async_trait]
+impl client::Handler for SshHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &key::PublicKey,
+    ) -> std::result::Result<bool, Self::Error> {
+        // TODO: known_hosts verification
+        Ok(true)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTarget {
+    host: String,
+    port: u16,
+    username: String,
+    key_path: Option<String>,
+}
 
 impl SshSession {
     pub async fn connect(config: &SshHostConfig) -> Result<Self> {
@@ -41,7 +74,7 @@ impl SshSession {
         }
         if config.auth_method.trim().eq_ignore_ascii_case("password") {
             return Err(SshError::InvalidConfig(
-                "password auth is not supported in stateless ssh mode".to_string(),
+                "password auth is not supported in russh mode".to_string(),
             ));
         }
         Ok(Self {
@@ -50,7 +83,125 @@ impl SshSession {
     }
 
     pub async fn exec(&self, cmd: &str) -> Result<ExecResult> {
-        let output = self.run_ssh(&[cmd]).await?;
+        let (handle, _) = match connect_and_auth(&self.config).await {
+            Ok(v) => v,
+            Err(_) => return self.exec_legacy(cmd).await,
+        };
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?;
+        channel
+            .exec(true, cmd)
+            .await
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code = -1;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                russh::ChannelMsg::ExtendedData { data, ext } => {
+                    if ext == 1 {
+                        stderr.extend_from_slice(&data);
+                    }
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                _ => {}
+            }
+        }
+
+        let _ = handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await;
+
+        Ok(ExecResult {
+            stdout: String::from_utf8_lossy(&stdout).trim_end().to_string(),
+            stderr: String::from_utf8_lossy(&stderr).trim_end().to_string(),
+            exit_code,
+        })
+    }
+
+    pub async fn sftp_read(&self, path: &str) -> Result<Vec<u8>> {
+        let (handle, _) = match connect_and_auth(&self.config).await {
+            Ok(v) => v,
+            Err(_) => return self.sftp_read_legacy(path).await,
+        };
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+
+        let resolved = resolve_remote_path(&self.config, path).await?;
+        let mut file = sftp
+            .open(resolved.as_str())
+            .await
+            .map_err(|e| SshError::Sftp(format!("open {resolved}: {e}")))?;
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+
+        let _ = handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await;
+        Ok(buf)
+    }
+
+    pub async fn sftp_write(&self, path: &str, content: &[u8]) -> Result<()> {
+        let (handle, _) = match connect_and_auth(&self.config).await {
+            Ok(v) => v,
+            Err(_) => return self.sftp_write_legacy(path, content).await,
+        };
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+
+        let resolved = resolve_remote_path(&self.config, path).await?;
+        let parent = std::path::Path::new(&resolved)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+
+        // Ensure parent dir exists before SFTP create.
+        let mkdir_cmd = format!("mkdir -p {}", shell_escape(&parent));
+        let mkdir_result = self.exec(&mkdir_cmd).await?;
+        if mkdir_result.exit_code != 0 {
+            return Err(SshError::Sftp(format!(
+                "mkdir parent failed for {resolved}: {}",
+                mkdir_result.stderr
+            )));
+        }
+
+        use tokio::io::AsyncWriteExt;
+        let mut file = sftp
+            .create(resolved.as_str())
+            .await
+            .map_err(|e| SshError::Sftp(format!("create {resolved}: {e}")))?;
+        file.write_all(content)
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+        file.flush().await.map_err(|e| SshError::Sftp(e.to_string()))?;
+
+        let _ = handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await;
+        Ok(())
+    }
+
+    async fn exec_legacy(&self, cmd: &str) -> Result<ExecResult> {
+        let output = self.run_legacy_ssh(&[cmd]).await?;
         Ok(ExecResult {
             stdout: String::from_utf8_lossy(&output.stdout)
                 .trim_end()
@@ -62,10 +213,10 @@ impl SshSession {
         })
     }
 
-    pub async fn sftp_read(&self, path: &str) -> Result<Vec<u8>> {
+    async fn sftp_read_legacy(&self, path: &str) -> Result<Vec<u8>> {
         let escaped = shell_escape(path);
         let command = format!("cat {escaped}");
-        let output = self.run_ssh(&[command.as_str()]).await?;
+        let output = self.run_legacy_ssh(&[command.as_str()]).await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(SshError::CommandFailed(format!(
@@ -76,27 +227,30 @@ impl SshSession {
         Ok(output.stdout)
     }
 
-    pub async fn sftp_write(&self, path: &str, content: &[u8]) -> Result<()> {
+    async fn sftp_write_legacy(&self, path: &str, content: &[u8]) -> Result<()> {
         let escaped = shell_escape(path);
         let command = format!("mkdir -p \"$(dirname {escaped})\" && cat > {escaped}");
-        let destination = if self.config.username.trim().is_empty() {
-            self.config.host.clone()
-        } else {
-            format!("{}@{}", self.config.username, self.config.host)
-        };
+        let destination = self.legacy_destination();
 
         let mut child = Command::new("ssh")
-            .args(self.common_ssh_args())
+            .args(self.legacy_common_ssh_args())
             .arg(destination)
             .arg(command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|e| SshError::Connect(e.to_string()))?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(content).await?;
+            stdin
+                .write_all(content)
+                .await
+                .map_err(|e| SshError::Sftp(e.to_string()))?;
         }
-        let output = child.wait_with_output().await?;
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(SshError::CommandFailed(format!(
@@ -107,7 +261,15 @@ impl SshSession {
         Ok(())
     }
 
-    fn common_ssh_args(&self) -> Vec<String> {
+    fn legacy_destination(&self) -> String {
+        if self.config.username.trim().is_empty() {
+            self.config.host.clone()
+        } else {
+            format!("{}@{}", self.config.username, self.config.host)
+        }
+    }
+
+    fn legacy_common_ssh_args(&self) -> Vec<String> {
         let mut args = vec!["-p".to_string(), self.config.port.to_string()];
         if let Some(key_path) = &self.config.key_path {
             if !key_path.trim().is_empty() {
@@ -118,19 +280,123 @@ impl SshSession {
         args
     }
 
-    async fn run_ssh(&self, remote_args: &[&str]) -> Result<std::process::Output> {
-        let destination = if self.config.username.trim().is_empty() {
-            self.config.host.clone()
-        } else {
-            format!("{}@{}", self.config.username, self.config.host)
-        };
+    async fn run_legacy_ssh(&self, remote_args: &[&str]) -> Result<std::process::Output> {
         let mut cmd = Command::new("ssh");
-        cmd.args(self.common_ssh_args()).arg(destination);
+        cmd.args(self.legacy_common_ssh_args())
+            .arg(self.legacy_destination());
         for arg in remote_args {
             cmd.arg(arg);
         }
-        Ok(cmd.output().await?)
+        cmd.output()
+            .await
+            .map_err(|e| SshError::Connect(e.to_string()))
     }
+}
+
+async fn connect_and_auth(config: &SshHostConfig) -> Result<(client::Handle<SshHandler>, ResolvedTarget)> {
+    let resolved = resolve_target(config)?;
+    let addr = format!("{}:{}", resolved.host, resolved.port);
+    let ssh_config = Arc::new(client::Config::default());
+    let mut handle = client::connect(ssh_config, addr, SshHandler)
+        .await
+        .map_err(|e| SshError::Connect(e.to_string()))?;
+
+    for key_path in candidate_key_paths(&resolved) {
+        let expanded = shellexpand::tilde(&key_path).to_string();
+        let key_pair = match russh_keys::load_secret_key(&expanded, None) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        let ok = handle
+            .authenticate_publickey(&resolved.username, Arc::new(key_pair))
+            .await
+            .map_err(|e| SshError::Auth(e.to_string()))?;
+        if ok {
+            return Ok((handle, resolved));
+        }
+    }
+
+    Err(SshError::Auth(
+        "public key authentication failed (no usable key path)".to_string(),
+    ))
+}
+
+fn resolve_target(config: &SshHostConfig) -> Result<ResolvedTarget> {
+    let mut host = config.host.trim().to_string();
+    let mut port = if config.port == 0 { 22 } else { config.port };
+    let mut username = config.username.trim().to_string();
+    let mut key_path = config.key_path.clone();
+
+    if config.auth_method.trim().eq_ignore_ascii_case("ssh_config") {
+        if let Some(entry) = resolve_ssh_config_entry(&host) {
+            if let Some(host_name) = entry.host_name {
+                host = host_name;
+            }
+            if username.is_empty() {
+                if let Some(user) = entry.user {
+                    username = user;
+                }
+            }
+            if config.port == 22 {
+                if let Some(p) = entry.port {
+                    port = p;
+                }
+            }
+            if key_path.is_none() {
+                key_path = entry.identity_file;
+            }
+        }
+    }
+
+    if username.is_empty() {
+        username = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "root".to_string());
+    }
+
+    Ok(ResolvedTarget {
+        host,
+        port,
+        username,
+        key_path,
+    })
+}
+
+fn resolve_ssh_config_entry(host_alias: &str) -> Option<config::SshConfigHostSuggestion> {
+    let home = dirs::home_dir()?;
+    let path = home.join(".ssh").join("config");
+    let data = std::fs::read_to_string(path).ok()?;
+    config::parse_ssh_config_hosts(&data)
+        .into_iter()
+        .find(|h| h.host_alias == host_alias)
+}
+
+fn candidate_key_paths(target: &ResolvedTarget) -> Vec<String> {
+    if let Some(path) = &target.key_path {
+        return vec![path.clone()];
+    }
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let ssh = home.join(".ssh");
+    vec![
+        ssh.join("id_ed25519").to_string_lossy().to_string(),
+        ssh.join("id_rsa").to_string_lossy().to_string(),
+    ]
+}
+
+async fn resolve_remote_path(config: &SshHostConfig, path: &str) -> Result<String> {
+    if !path.starts_with('~') {
+        return Ok(path.to_string());
+    }
+    let session = SshSession::connect(config).await?;
+    let home = session.exec("echo $HOME").await?;
+    if home.exit_code != 0 || home.stdout.trim().is_empty() {
+        return Err(SshError::InvalidConfig(
+            "cannot resolve remote home directory".to_string(),
+        ));
+    }
+    Ok(path.replacen('~', home.stdout.trim(), 1))
 }
 
 fn shell_escape(value: &str) -> String {
@@ -155,5 +421,24 @@ mod tests {
         };
         let result = SshSession::connect(&cfg).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_target_uses_explicit_values() {
+        let cfg = SshHostConfig {
+            id: "ssh:test".to_string(),
+            label: "Test".to_string(),
+            host: "example.com".to_string(),
+            port: 2022,
+            username: "alice".to_string(),
+            auth_method: "key".to_string(),
+            key_path: Some("~/.ssh/id_test".to_string()),
+            password: None,
+        };
+        let resolved = resolve_target(&cfg).expect("resolve");
+        assert_eq!(resolved.host, "example.com");
+        assert_eq!(resolved.port, 2022);
+        assert_eq!(resolved.username, "alice");
+        assert_eq!(resolved.key_path.as_deref(), Some("~/.ssh/id_test"));
     }
 }
