@@ -177,72 +177,80 @@ pub async fn remote_get_status_extra(
 }
 
 #[tauri::command]
-pub fn get_status_light() -> Result<StatusLight, String> {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let local_health = clawpal_core::health::check_instance(&local_health_instance())
-        .map_err(|e| e.to_string())?;
-    let explicit_count = cfg
-        .get("agents")
-        .and_then(|a| a.get("list"))
-        .and_then(|a| a.as_array())
-        .map(|a| a.len() as u32)
-        .unwrap_or(0);
-    // At least 1 agent (implicit "main") when agents section exists
-    let active_agents = if explicit_count == 0 && cfg.get("agents").is_some() {
-        1
-    } else {
-        explicit_count
-    };
-    let global_default_model = cfg
-        .pointer("/agents/defaults/model")
-        .and_then(read_model_value)
-        .or_else(|| {
-            cfg.pointer("/agents/default/model")
-                .and_then(read_model_value)
-        });
-
-    let fallback_models = cfg
-        .pointer("/agents/defaults/model/fallbacks")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(StatusLight {
-        healthy: local_health.healthy,
-        active_agents: if local_health.active_agents == 0 {
-            active_agents
+pub async fn get_status_light() -> Result<StatusLight, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        let local_health = clawpal_core::health::check_instance(&local_health_instance())
+            .map_err(|e| e.to_string())?;
+        let explicit_count = cfg
+            .get("agents")
+            .and_then(|a| a.get("list"))
+            .and_then(|a| a.as_array())
+            .map(|a| a.len() as u32)
+            .unwrap_or(0);
+        // At least 1 agent (implicit "main") when agents section exists
+        let active_agents = if explicit_count == 0 && cfg.get("agents").is_some() {
+            1
         } else {
-            local_health.active_agents
-        },
-        global_default_model,
-        fallback_models,
+            explicit_count
+        };
+        let global_default_model = cfg
+            .pointer("/agents/defaults/model")
+            .and_then(read_model_value)
+            .or_else(|| {
+                cfg.pointer("/agents/default/model")
+                    .and_then(read_model_value)
+            });
+
+        let fallback_models = cfg
+            .pointer("/agents/defaults/model/fallbacks")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(StatusLight {
+            healthy: local_health.healthy,
+            active_agents: if local_health.active_agents == 0 {
+                active_agents
+            } else {
+                local_health.active_agents
+            },
+            global_default_model,
+            fallback_models,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
 
 #[tauri::command]
-pub fn get_status_extra() -> Result<StatusExtra, String> {
-    let openclaw_version = {
-        let mut cache = OPENCLAW_VERSION_CACHE.lock().unwrap();
-        if cache.is_none() {
-            let version = clawpal_core::health::check_instance(&local_health_instance())
-                .ok()
-                .and_then(|status| status.version);
-            *cache = Some(version);
-        }
-        cache.as_ref().unwrap().clone()
-    };
-    Ok(StatusExtra {
-        openclaw_version,
-        duplicate_installs: Vec::new(),
+pub async fn get_status_extra() -> Result<StatusExtra, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let openclaw_version = {
+            let mut cache = OPENCLAW_VERSION_CACHE.lock().unwrap();
+            if cache.is_none() {
+                let version = clawpal_core::health::check_instance(&local_health_instance())
+                    .ok()
+                    .and_then(|status| status.version);
+                *cache = Some(version);
+            }
+            cache.as_ref().unwrap().clone()
+        };
+        Ok(StatusExtra {
+            openclaw_version,
+            duplicate_installs: Vec::new(),
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 

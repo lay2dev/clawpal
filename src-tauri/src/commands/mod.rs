@@ -5786,51 +5786,55 @@ fn parse_cron_jobs(text: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn get_watchdog_status() -> Result<Value, String> {
-    let paths = resolve_paths();
-    let wd_dir = paths.clawpal_dir.join("watchdog");
-    let status_path = wd_dir.join("status.json");
-    let pid_path = wd_dir.join("watchdog.pid");
+pub async fn get_watchdog_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = resolve_paths();
+        let wd_dir = paths.clawpal_dir.join("watchdog");
+        let status_path = wd_dir.join("status.json");
+        let pid_path = wd_dir.join("watchdog.pid");
 
-    let mut status = if status_path.exists() {
-        let text = std::fs::read_to_string(&status_path).map_err(|e| e.to_string())?;
-        serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
+        let mut status = if status_path.exists() {
+            let text = std::fs::read_to_string(&status_path).map_err(|e| e.to_string())?;
+            serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
 
-    let alive = if pid_path.exists() {
-        let pid_str = std::fs::read_to_string(&pid_path).unwrap_or_default();
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            std::process::Command::new("kill")
-                .args(["-0", &pid.to_string()])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+        let alive = if pid_path.exists() {
+            let pid_str = std::fs::read_to_string(&pid_path).unwrap_or_default();
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                std::process::Command::new("kill")
+                    .args(["-0", &pid.to_string()])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            } else {
+                false
+            }
         } else {
             false
+        };
+
+        if let Value::Object(ref mut map) = status {
+            map.insert("alive".into(), Value::Bool(alive));
+            map.insert(
+                "deployed".into(),
+                Value::Bool(wd_dir.join("watchdog.js").exists()),
+            );
+        } else {
+            let mut map = serde_json::Map::new();
+            map.insert("alive".into(), Value::Bool(alive));
+            map.insert(
+                "deployed".into(),
+                Value::Bool(wd_dir.join("watchdog.js").exists()),
+            );
+            status = Value::Object(map);
         }
-    } else {
-        false
-    };
 
-    if let Value::Object(ref mut map) = status {
-        map.insert("alive".into(), Value::Bool(alive));
-        map.insert(
-            "deployed".into(),
-            Value::Bool(wd_dir.join("watchdog.js").exists()),
-        );
-    } else {
-        let mut map = serde_json::Map::new();
-        map.insert("alive".into(), Value::Bool(alive));
-        map.insert(
-            "deployed".into(),
-            Value::Bool(wd_dir.join("watchdog.js").exists()),
-        );
-        status = Value::Object(map);
-    }
-
-    Ok(status)
+        Ok(status)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
