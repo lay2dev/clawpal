@@ -22,6 +22,44 @@ use crate::install::types::InstallState;
 use crate::models::resolve_paths;
 use crate::ssh::{SftpEntry, SshConnectionPool, SshExecResult, SshHostConfig};
 
+pub mod agent;
+pub mod backup;
+pub mod config;
+pub mod cron;
+pub mod discovery;
+pub mod doctor;
+pub mod gateway;
+pub mod logs;
+pub mod profiles;
+pub mod rescue;
+pub mod sessions;
+pub mod watchdog;
+
+#[allow(unused_imports)]
+pub use agent::*;
+#[allow(unused_imports)]
+pub use backup::*;
+#[allow(unused_imports)]
+pub use config::*;
+#[allow(unused_imports)]
+pub use cron::*;
+#[allow(unused_imports)]
+pub use discovery::*;
+#[allow(unused_imports)]
+pub use doctor::*;
+#[allow(unused_imports)]
+pub use gateway::*;
+#[allow(unused_imports)]
+pub use logs::*;
+#[allow(unused_imports)]
+pub use profiles::*;
+#[allow(unused_imports)]
+pub use rescue::*;
+#[allow(unused_imports)]
+pub use sessions::*;
+#[allow(unused_imports)]
+pub use watchdog::*;
+
 /// Escape a string for safe inclusion in a single-quoted shell argument.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))

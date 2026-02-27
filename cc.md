@@ -16,7 +16,7 @@ Last run: 2026-02-27
 | Action 4: Batch E5 Backup/Upgrade | PASS | 新增 `clawpal-core/src/backup.rs`，迁移 `parse_backup_list` / `parse_backup_result` / `parse_upgrade_result`；`remote_backup_before_upgrade` 与 `remote_list_backups` 改为调用 core 解析，`remote_run_openclaw_upgrade` 接入升级输出解析。新增 3 个 core 单测并通过。 |
 | Action 5: Batch E6 Discord/Discovery | PASS | 新增 `clawpal-core/src/discovery.rs`，迁移 Discord guild/channel 与 bindings 解析（`parse_guild_channels`、`parse_bindings`）及绑定合并函数（`merge_channel_bindings`）。`remote_list_discord_guild_channels` 与 `remote_list_bindings` 已改为优先调用 core 解析，保留原 SSH/REST fallback。新增 3 个 core 单测并通过。 |
 | Action 6: 质量验证 | PASS (remote_api ignored) | `cargo build --workspace` 通过；`npx tsc --noEmit` 通过；`cargo test --workspace --all-targets` 仅 `remote_api` 因 `192.168.65.2:22 Operation not permitted` 失败，按说明忽略。`commands.rs` 行数：`9367 -> 9077`（减少 `290` 行）。 |
-| Action 7: commands.rs 拆文件 | PENDING | - |
+| Action 7: commands.rs 拆文件 | PASS | 已将 `src-tauri/src/commands.rs` 迁移为 `src-tauri/src/commands/mod.rs`，并新增领域子模块：`config/sessions/doctor/profiles/watchdog/cron/backup/discovery/logs/rescue/gateway/agent`；通过 `pub use` 保持原导出不变，`invoke_handler` 无需改动。`cargo build -p clawpal`、`cargo test --workspace --all-targets`（`remote_api` 环境失败可忽略）、`npx tsc --noEmit` 已验证。 |
 
 ---
 
