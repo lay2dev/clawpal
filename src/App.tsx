@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Toaster } from "sonner";
-import type { ChannelNode, DiscordGuildChannel, DockerInstance, InstallSession, RegisteredInstance, SshHost } from "./lib/types";
+import type { ChannelNode, DiscordGuildChannel, DockerInstance, GuidanceAction, InstallSession, RegisteredInstance, SshHost } from "./lib/types";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -72,6 +72,7 @@ interface AgentGuidanceItem {
   message: string;
   summary: string;
   actions: string[];
+  structuredActions?: GuidanceAction[];
   source: string;
   operation: string;
   instanceId: string;
@@ -242,19 +243,28 @@ export function App() {
     return out;
   }, [registeredInstances]);
 
-  const upsertDockerInstance = useCallback(async (instance: DockerInstance) => {
+  const upsertDockerInstance = useCallback(async (instance: DockerInstance): Promise<RegisteredInstance> => {
     const normalized = normalizeDockerInstance(instance);
-    await withGuidance(
+    const registered = await withGuidance(
       () => api.connectDockerInstance(
         normalized.openclawHome || deriveDockerPaths(normalized.id).openclawHome,
         normalized.label,
+        normalized.id,
       ),
       "connectDockerInstance",
       normalized.id,
       "docker_local",
     );
-    refreshRegisteredInstances();
-  }, [refreshRegisteredInstances]);
+    // Await the refresh so callers can rely on registeredInstances being up-to-date
+    const updated = await withGuidance(
+      () => api.listRegisteredInstances(),
+      "listRegisteredInstances",
+      "local",
+      "local",
+    ).catch(() => null);
+    if (updated) setRegisteredInstances(updated);
+    return registered;
+  }, []);
 
   const renameDockerInstance = useCallback((id: string, label: string) => {
     const nextLabel = label.trim();
@@ -265,6 +275,7 @@ export function App() {
       () => api.connectDockerInstance(
         instance.openclawHome || deriveDockerPaths(instance.id).openclawHome,
         nextLabel,
+        instance.id,
       ),
       "connectDockerInstance",
       instance.id,
@@ -286,8 +297,9 @@ export function App() {
       instance.id,
       "docker_local",
     );
-    refreshRegisteredInstances();
+    setOpenTabIds((prev) => prev.filter((t) => t !== instance.id));
     setActiveInstance((prev) => (prev === instance.id ? "local" : prev));
+    refreshRegisteredInstances();
   }, [refreshRegisteredInstances]);
 
   useEffect(() => {
@@ -818,7 +830,7 @@ export function App() {
   }, [openTabIds, registeredInstances, t]);
 
   // Handle install completion — register docker instance and open tab
-  const handleInstallReady = useCallback((session: InstallSession) => {
+  const handleInstallReady = useCallback(async (session: InstallSession) => {
     const artifacts = session.artifacts || {};
     if (session.method === "docker") {
       const artifactId = typeof artifacts.docker_instance_id === "string"
@@ -835,8 +847,8 @@ export function App() {
       const label = typeof artifacts.docker_instance_label === "string"
         ? artifacts.docker_instance_label
         : deriveDockerLabel(id);
-      void upsertDockerInstance({ id, label, openclawHome, clawpalDataDir });
-      openTab(id);
+      const registered = await upsertDockerInstance({ id, label, openclawHome, clawpalDataDir });
+      openTab(registered.id);
     } else if (session.method === "remote_ssh") {
       const hostId = typeof artifacts.ssh_host_id === "string"
         ? artifacts.ssh_host_id.trim()
@@ -1035,6 +1047,7 @@ export function App() {
                   hostId,
                   "remote_ssh",
                 ).then(() => {
+                  closeTab(hostId);
                   refreshHosts();
                   refreshRegisteredInstances();
                 }).catch((e) => console.warn("deleteSshHost:", e));
@@ -1195,21 +1208,60 @@ export function App() {
                 ))}
               </ol>
             )}
-            <div className="flex items-center gap-2 pt-1">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setAgentGuidanceOpen(false);
-                  setDoctorLaunchByInstance((prev) => ({
-                    ...prev,
-                    [agentGuidance.instanceId]: agentGuidance,
-                  }));
-                  setInStart(false);
-                  navigateRoute("doctor");
-                }}
-              >
-                打开 Doctor
-              </Button>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {(agentGuidance.structuredActions ?? []).map((sa, idx) => (
+                sa.actionType === "inline_fix" ? (
+                  <Button
+                    key={`sa-${idx}`}
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        showToast(`正在执行: ${sa.label}`, "success");
+                      } catch (e) {
+                        showToast(`${sa.label} 失败: ${e}`, "error");
+                      }
+                    }}
+                  >
+                    {sa.label}
+                  </Button>
+                ) : (
+                  <Button
+                    key={`sa-${idx}`}
+                    size="sm"
+                    onClick={() => {
+                      setAgentGuidanceOpen(false);
+                      setDoctorLaunchByInstance((prev) => ({
+                        ...prev,
+                        [agentGuidance.instanceId]: {
+                          ...agentGuidance,
+                          rawError: sa.context || agentGuidance.rawError,
+                        },
+                      }));
+                      setInStart(false);
+                      navigateRoute("doctor");
+                    }}
+                  >
+                    {sa.label}
+                  </Button>
+                )
+              ))}
+              {(!agentGuidance.structuredActions || agentGuidance.structuredActions.length === 0) && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setAgentGuidanceOpen(false);
+                    setDoctorLaunchByInstance((prev) => ({
+                      ...prev,
+                      [agentGuidance.instanceId]: agentGuidance,
+                    }));
+                    setInStart(false);
+                    navigateRoute("doctor");
+                  }}
+                >
+                  打开 Doctor
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
