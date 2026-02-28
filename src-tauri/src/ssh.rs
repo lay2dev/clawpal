@@ -172,7 +172,23 @@ impl SshConnectionPool {
                 bytes = session.sftp_read(&resolved).await;
             }
         }
-        let bytes = bytes.map_err(|e| e.to_string())?;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(primary_err) => {
+                let primary_msg = primary_err.to_string();
+                if !should_attempt_sftp_exec_fallback(&primary_msg) {
+                    return Err(primary_msg);
+                }
+                match self.exec_cat_read_with_retry(&conn, &resolved).await {
+                    Ok(bytes) => bytes,
+                    Err(fallback_err) => {
+                        return Err(format!(
+                            "{primary_msg}; fallback via ssh cat failed: {fallback_err}"
+                        ));
+                    }
+                }
+            }
+        };
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 
@@ -253,6 +269,34 @@ impl SshConnectionPool {
         old.close().await;
         Ok(())
     }
+
+    async fn exec_cat_read_with_retry(
+        &self,
+        conn: &ConnectedHost,
+        path: &str,
+    ) -> Result<Vec<u8>, String> {
+        let mut out = {
+            let session = conn.session.lock().await.clone();
+            let cmd = format!("cat {}", shell_quote(path));
+            session.exec(&cmd).await
+        };
+        if let Err(err) = &out {
+            if is_retryable_session_error(&err.to_string()) {
+                self.refresh_session(conn).await?;
+                let session = conn.session.lock().await.clone();
+                let cmd = format!("cat {}", shell_quote(path));
+                out = session.exec(&cmd).await;
+            }
+        }
+        let out = out.map_err(|e| e.to_string())?;
+        if out.exit_code != 0 {
+            return Err(format!(
+                "cat exited with code {}: {}",
+                out.exit_code, out.stderr
+            ));
+        }
+        Ok(out.stdout.into_bytes())
+    }
 }
 
 impl Default for SshConnectionPool {
@@ -277,9 +321,20 @@ fn is_retryable_session_error(message: &str) -> bool {
         || lowered.contains("connection closed")
 }
 
+fn should_attempt_sftp_exec_fallback(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("timed out")
+        || lowered.contains("timeout")
+        || lowered.contains("sftp")
+        || lowered.contains("open channel")
+        || lowered.contains("connection reset")
+        || lowered.contains("broken pipe")
+        || lowered.contains("connection closed")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_login_shell_wrapper, shell_quote};
+    use super::{build_login_shell_wrapper, shell_quote, should_attempt_sftp_exec_fallback};
 
     #[test]
     fn shell_quote_escapes_single_quote() {
@@ -291,5 +346,18 @@ mod tests {
         let wrapped = build_login_shell_wrapper("openclaw --version");
         assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -ilc"));
         assert!(wrapped.contains("[ -f ~/.profile ]"));
+    }
+
+    #[test]
+    fn sftp_fallback_is_enabled_for_timeout_like_errors() {
+        assert!(should_attempt_sftp_exec_fallback(
+            "sftp failed: russh sftp_read timed out after 30s"
+        ));
+        assert!(should_attempt_sftp_exec_fallback(
+            "ssh open channel failed: channel closed"
+        ));
+        assert!(!should_attempt_sftp_exec_fallback(
+            "open /tmp/missing.json: No such file or directory"
+        ));
     }
 }

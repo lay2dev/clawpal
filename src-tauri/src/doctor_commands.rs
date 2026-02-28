@@ -1,11 +1,12 @@
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::doctor_runtime_bridge::emit_runtime_event;
 use crate::models::resolve_paths;
-use crate::runtime::types::{RuntimeAdapter, RuntimeDomain, RuntimeEvent, RuntimeSessionKey};
+use crate::runtime::types::{RuntimeAdapter, RuntimeDomain, RuntimeError, RuntimeEvent, RuntimeSessionKey};
 use crate::runtime::zeroclaw::adapter::ZeroclawDoctorAdapter;
 use crate::runtime::zeroclaw::install_adapter::ZeroclawInstallAdapter;
 use crate::ssh::SshConnectionPool;
@@ -198,11 +199,16 @@ pub async fn doctor_approve_invoke(
     } else {
         ZeroclawDoctorAdapter.send(&key, &result_text)
     };
-    if let Ok(events) = send_result {
-        for ev in events {
-            register_runtime_invoke(&ev);
-            emit_runtime_event(&app, ev);
+    let events = match handle_runtime_send_result(rt_domain.as_str(), send_result) {
+        Ok(events) => events,
+        Err(err) => {
+            emit_runtime_event(&app, RuntimeEvent::Error { error: err.clone() });
+            return Err(format_runtime_send_error(rt_domain.as_str(), &err));
         }
+    };
+    for ev in events {
+        register_runtime_invoke(&ev);
+        emit_runtime_event(&app, ev);
     }
 
     Ok(result)
@@ -542,18 +548,42 @@ fn sh_single_quote(value: &str) -> String {
 
 const DOCTOR_LOG_READ_MAX_LINES: usize = 400;
 
-fn trim_to_last_lines(content: &str, max_lines: usize) -> String {
+fn read_file_tail_lines(path: &std::path::Path, max_lines: usize) -> Result<String, String> {
     if max_lines == 0 {
-        return String::new();
+        return Ok(String::new());
     }
-    let mut ring: VecDeque<&str> = VecDeque::with_capacity(max_lines + 1);
-    for line in content.lines() {
+    let file = std::fs::File::open(path).map_err(|e| format!("failed to read file: {e}"))?;
+    let reader = BufReader::new(file);
+    let mut ring: VecDeque<String> = VecDeque::with_capacity(max_lines + 1);
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("failed to read file: {e}"))?;
         ring.push_back(line);
         if ring.len() > max_lines {
             let _ = ring.pop_front();
         }
     }
-    ring.into_iter().collect::<Vec<_>>().join("\n")
+    Ok(ring.into_iter().collect::<Vec<_>>().join("\n"))
+}
+
+fn format_runtime_send_error(domain: &str, err: &RuntimeError) -> String {
+    format!(
+        "{domain} runtime send failed [{}]: {}",
+        err.code.as_str(),
+        err.message
+    )
+}
+
+fn handle_runtime_send_result(
+    domain: &str,
+    send_result: Result<Vec<RuntimeEvent>, RuntimeError>,
+) -> Result<Vec<RuntimeEvent>, RuntimeError> {
+    match send_result {
+        Ok(events) => Ok(events),
+        Err(err) => {
+            crate::logging::log_error(&format_runtime_send_error(domain, &err));
+            Err(err)
+        }
+    }
 }
 
 fn local_openclaw_root() -> Result<std::path::PathBuf, String> {
@@ -659,9 +689,7 @@ async fn doctor_file_read(
     let full_path = root.join(&rel);
     validate_not_sensitive(&full_path.to_string_lossy())?;
     let content = if domain == "logs" {
-        let raw =
-            std::fs::read_to_string(&full_path).map_err(|e| format!("failed to read file: {e}"))?;
-        trim_to_last_lines(&raw, DOCTOR_LOG_READ_MAX_LINES)
+        read_file_tail_lines(&full_path, DOCTOR_LOG_READ_MAX_LINES)?
     } else {
         std::fs::read_to_string(&full_path).map_err(|e| format!("failed to read file: {e}"))?
     };
@@ -1667,6 +1695,7 @@ fn validate_openclaw_tokens(tokens: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::io::Write;
 
     fn prompt_supported_clawpal_commands_from(prompt: &str) -> BTreeSet<String> {
         let mut in_section = false;
@@ -1864,9 +1893,32 @@ mod tests {
     }
 
     #[test]
-    fn trim_to_last_lines_limits_output() {
-        let text = "1\n2\n3\n4\n5";
-        let trimmed = trim_to_last_lines(text, 3);
-        assert_eq!(trimmed, "3\n4\n5");
+    fn handle_runtime_send_result_propagates_error() {
+        let err = crate::runtime::types::RuntimeError {
+            code: crate::runtime::types::RuntimeErrorCode::SessionInvalid,
+            message: "session expired".to_string(),
+            action_hint: Some("restart doctor".to_string()),
+        };
+        let result = handle_runtime_send_result("doctor", Err(err.clone()));
+        assert!(result.is_err());
+        let got = result.err().expect("error expected");
+        assert_eq!(got.code.as_str(), err.code.as_str());
+        assert_eq!(got.message, err.message);
+    }
+
+    #[test]
+    fn read_file_tail_lines_reads_last_lines() {
+        let path = std::env::temp_dir().join(format!(
+            "clawpal-doctor-tail-{}.log",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create temp file");
+        writeln!(file, "l1").expect("write line 1");
+        writeln!(file, "l2").expect("write line 2");
+        writeln!(file, "l3").expect("write line 3");
+        drop(file);
+        let content = read_file_tail_lines(&path, 2).expect("read tail");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(content, "l2\nl3");
     }
 }
