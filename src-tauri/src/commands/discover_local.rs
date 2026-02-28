@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Serialize;
@@ -24,6 +23,7 @@ pub struct DiscoveredInstance {
 /// Convert a container name to a URL-safe slug.
 ///
 /// Strips leading `/`, lowercases, and replaces non-alphanumeric chars with `-`.
+#[cfg(test)]
 fn slug_from_name(name: &str) -> String {
     let trimmed = name.strip_prefix('/').unwrap_or(name);
     let mut slug = String::with_capacity(trimmed.len());
@@ -160,13 +160,35 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
             continue;
         }
 
-        let slug = slug_from_name(names);
-        let id = format!("docker:{slug}");
+        // Try to extract home path from:
+        // 1. Docker label com.clawpal.home
+        // 2. Container env var OPENCLAW_CONFIG_DIR (via docker inspect)
+        // 3. Container bind mounts to .clawpal directories
+        let home_from_label = extract_label_value(labels, "com.clawpal.home");
+        let container_id = container
+            .get("ID")
+            .and_then(|v| v.as_str())
+            .unwrap_or(names);
 
-        // Try to extract home path from labels (com.clawpal.home=<path>),
-        // otherwise derive from the container name.
-        let home_path = extract_label_value(labels, "com.clawpal.home")
-            .unwrap_or_else(|| derive_home_path_from_name(&slug));
+        let home_path = home_from_label
+            .or_else(|| inspect_container_home(container_id));
+
+        // Skip containers where we can't determine a valid host-side path
+        let Some(home_path) = home_path else {
+            continue;
+        };
+
+        // Derive instance ID from the home path directory name (e.g. "docker-local")
+        let dir_name = std::path::Path::new(&home_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("local");
+        let slug = if dir_name.starts_with("docker-") {
+            dir_name.strip_prefix("docker-").unwrap_or(dir_name)
+        } else {
+            dir_name
+        };
+        let id = format!("docker:{slug}");
 
         let label = names
             .strip_prefix('/')
@@ -187,6 +209,75 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
     Ok(instances)
 }
 
+/// Inspect a Docker container to find the host-side openclaw home path.
+///
+/// Checks (in order):
+/// 1. `OPENCLAW_CONFIG_DIR` env var → parent of `.openclaw` dir
+/// 2. Bind mounts whose source contains `.clawpal`
+fn inspect_container_home(container_id: &str) -> Option<String> {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{json .}}",  container_id])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).ok()?;
+
+    // 1. Check env vars for OPENCLAW_CONFIG_DIR
+    if let Some(envs) = info.pointer("/Config/Env").and_then(|v| v.as_array()) {
+        for env in envs {
+            if let Some(s) = env.as_str() {
+                if let Some(val) = s.strip_prefix("OPENCLAW_CONFIG_DIR=") {
+                    // OPENCLAW_CONFIG_DIR points to the state dir (e.g. ~/.clawpal/docker-local/.openclaw)
+                    // The home is the parent directory
+                    let state_path = std::path::Path::new(val);
+                    if let Some(parent) = state_path.parent() {
+                        let home = parent.to_string_lossy().to_string();
+                        if std::path::Path::new(&home).exists() {
+                            return Some(home);
+                        }
+                    }
+                    // If the config dir itself looks like a home dir (no .openclaw suffix)
+                    if std::path::Path::new(val).exists() && !val.ends_with(".openclaw") {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check bind mounts for .clawpal paths
+    if let Some(mounts) = info.get("Mounts").and_then(|v| v.as_array()) {
+        for mount in mounts {
+            if let Some(source) = mount.get("Source").and_then(|v| v.as_str()) {
+                if source.contains(".clawpal") && std::path::Path::new(source).exists() {
+                    // Find the .clawpal/docker-* parent
+                    let p = std::path::Path::new(source);
+                    // Walk up to find the docker-* directory under .clawpal
+                    let mut candidate = Some(p);
+                    while let Some(c) = candidate {
+                        if let Some(parent) = c.parent() {
+                            if parent.file_name().and_then(|n| n.to_str()) == Some(".clawpal") {
+                                return Some(c.to_string_lossy().to_string());
+                            }
+                        }
+                        candidate = c.parent();
+                    }
+                    return Some(source.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Extract a specific key from a Docker labels string (comma-separated key=value pairs).
 fn extract_label_value(labels: &str, key: &str) -> Option<String> {
     for pair in labels.split(',') {
@@ -198,15 +289,6 @@ fn extract_label_value(labels: &str, key: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Derive a home path from a slug: `~/.clawpal/docker-{slug}`.
-fn derive_home_path_from_name(slug: &str) -> String {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".clawpal")
-        .join(format!("docker-{slug}"))
-        .to_string_lossy()
-        .to_string()
 }
 
 /// Scan `~/.clawpal/` for subdirectories starting with "docker-" that contain
