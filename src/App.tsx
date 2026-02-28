@@ -1133,12 +1133,15 @@ export function App() {
               onRenameDocker={renameDockerInstance}
               onDeleteDocker={deleteDockerInstance}
               onDeleteSsh={(hostId) => {
-                withGuidance(
-                  () => api.deleteSshHost(hostId),
-                  "deleteSshHost",
-                  hostId,
-                  "remote_ssh",
-                ).then(() => {
+                Promise.all([
+                  withGuidance(
+                    () => api.deleteSshHost(hostId),
+                    "deleteSshHost",
+                    hostId,
+                    "remote_ssh",
+                  ),
+                  api.deleteRegisteredInstance(hostId).catch(() => {}),
+                ]).then(() => {
                   closeTab(hostId);
                   refreshHosts();
                   refreshRegisteredInstances();
