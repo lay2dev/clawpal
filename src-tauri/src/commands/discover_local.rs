@@ -91,16 +91,39 @@ fn discover_blocking() -> Result<Vec<DiscoveredInstance>, String> {
 
 /// Run `docker ps --format '{{json .}}'` and parse matching containers.
 fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
-    let output = Command::new("docker")
+    let mut child = match Command::new("docker")
         .args(["ps", "--format", "{{json .}}"])
-        .output()
-        .map_err(|e| format!("failed to run docker ps: {e}"))?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(Vec::new()), // Docker not available
+    };
+
+    // 3-second timeout to avoid blocking if Docker daemon is hung
+    let timeout = std::time::Duration::from_secs(3);
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    return Ok(Vec::new()); // Timed out
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return Ok(Vec::new()),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to read docker ps output: {e}"))?;
 
     if !output.status.success() {
-        return Err(format!(
-            "docker ps failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Ok(Vec::new());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -112,8 +135,10 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
             continue;
         }
 
-        let container: serde_json::Value =
-            serde_json::from_str(line).map_err(|e| format!("failed to parse docker JSON: {e}"))?;
+        let container: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
 
         let names = container
             .get("Names")

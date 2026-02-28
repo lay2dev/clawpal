@@ -26,7 +26,7 @@ pub mod agent;
 pub mod backup;
 pub mod config;
 pub mod cron;
-pub mod discover;
+pub mod discover_local;
 pub mod discovery;
 pub mod doctor;
 pub mod gateway;
@@ -46,7 +46,7 @@ pub use config::*;
 #[allow(unused_imports)]
 pub use cron::*;
 #[allow(unused_imports)]
-pub use discover::*;
+pub use discover_local::*;
 #[allow(unused_imports)]
 pub use discovery::*;
 #[allow(unused_imports)]
