@@ -19,6 +19,32 @@ run_or_print() {
   fi
 }
 
+update_tauri_cargo_version() {
+  local current="$1"
+  local next="$2"
+  local file="src-tauri/Cargo.toml"
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/clawpal-cargo.XXXXXX")"
+  awk -v current="$current" -v next="$next" '
+    BEGIN { replaced = 0 }
+    {
+      if (!replaced && $0 == "version = \"" current "\"") {
+        print "version = \"" next "\""
+        replaced = 1
+      } else {
+        print $0
+      }
+    }
+    END {
+      if (!replaced) exit 2
+    }
+  ' "$file" > "$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
+  mv "$tmp" "$file"
+}
+
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 
 say "ClawPal release assistant"
@@ -41,7 +67,8 @@ if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     say "[dry-run] Update src-tauri/Cargo.toml version to ${NEW_VERSION}"
   else
-    sed -i '' "s/^version = \"${CURRENT_VERSION}\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+    update_tauri_cargo_version "${CURRENT_VERSION}" "${NEW_VERSION}" \
+      || { say "Failed to update src-tauri/Cargo.toml version"; exit 1; }
     say "[run] Updated src-tauri/Cargo.toml"
   fi
 

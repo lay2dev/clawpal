@@ -493,7 +493,18 @@ fn parse_cli_args(tokens: &[&str]) -> ParsedCliArgs {
 fn resolved_target<'a>(default_target: &'a str, parsed: &'a ParsedCliArgs) -> Result<&'a str, String> {
     match parsed.options.get("instance").and_then(|v| v.as_deref()) {
         Some(id) if id.trim().is_empty() => Err("clawpal doctor --instance cannot be empty".to_string()),
-        Some(id) => Ok(id),
+        Some(id) => {
+            if id == "local" || id.starts_with("docker:") {
+                return Ok(id);
+            }
+            let registry = clawpal_core::instance::InstanceRegistry::load()
+                .map_err(|e| format!("failed to load instance registry: {e}"))?;
+            if registry.get(id).is_some() {
+                Ok(id)
+            } else {
+                Err(format!("unknown instance id: {id}"))
+            }
+        }
         None => Ok(default_target),
     }
 }
@@ -1709,6 +1720,35 @@ mod tests {
                 "--api-key",
                 "sk test"
             ]
+        );
+    }
+
+    #[test]
+    fn resolved_target_rejects_unknown_instance_id() {
+        let parsed = ParsedCliArgs {
+            positionals: Vec::new(),
+            options: HashMap::from([("instance".to_string(), Some("ssh:not-exist".to_string()))]),
+        };
+        let result = resolved_target("local", &parsed);
+        assert!(result.is_err());
+        assert!(result.err().unwrap_or_default().contains("unknown instance id"));
+    }
+
+    #[test]
+    fn resolved_target_allows_local_and_docker_targets() {
+        let parsed_local = ParsedCliArgs {
+            positionals: Vec::new(),
+            options: HashMap::from([("instance".to_string(), Some("local".to_string()))]),
+        };
+        assert_eq!(resolved_target("ssh:vm1", &parsed_local).expect("local target"), "local");
+
+        let parsed_docker = ParsedCliArgs {
+            positionals: Vec::new(),
+            options: HashMap::from([("instance".to_string(), Some("docker:local".to_string()))]),
+        };
+        assert_eq!(
+            resolved_target("ssh:vm1", &parsed_docker).expect("docker target"),
+            "docker:local"
         );
     }
 
