@@ -90,7 +90,57 @@ fn rules_fallback(
                 "重新进入该实例并等待 1-2 秒后自动刷新。".to_string(),
                 "若仍失败，打开 Doctor 让 Agent继续执行更细粒度修复。".to_string(),
             ],
-            structured_actions: vec![],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "让小龙虾修复".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None, args: None, invoke_type: None,
+                    context: Some(format!("ownerDisplay 字段不兼容: {}", error_text)),
+                },
+            ],
+        };
+    }
+    // --- NEW: Auth expired (401/403/invalid key) ---
+    if lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid_api_key")
+        || (lower.contains("401") && !lower.contains("model:"))
+        || (lower.contains("403") && (lower.contains("forbidden") || lower.contains("quota")))
+    {
+        return GuidanceBody {
+            summary: "API 认证失败，密钥可能已过期或无效。".to_string(),
+            actions: vec![
+                "检查当前实例使用的能力档案（Profile）中的 API Key 是否仍然有效。".to_string(),
+                "如需更换密钥，前往能力档案页面更新对应的 Provider 配置。".to_string(),
+            ],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "让小龙虾修复".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None, args: None, invoke_type: None,
+                    context: Some(format!("API 认证失败: {}", error_text)),
+                },
+            ],
+        };
+    }
+    // --- NEW: Container not found (orphaned Docker instance) ---
+    if lower.contains("no such container")
+        || (lower.contains("container") && lower.contains("not found") && !lower.contains("openclaw"))
+    {
+        return GuidanceBody {
+            summary: "实例对应的 Docker 容器已不存在，可能已被手动删除。".to_string(),
+            actions: vec![
+                "重新安装该实例，或从实例列表中移除。".to_string(),
+                "打开 Doctor 页面让小龙虾诊断并修复。".to_string(),
+            ],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "让小龙虾修复".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None, args: None, invoke_type: None,
+                    context: Some(format!("Docker 容器不存在: {}", error_text)),
+                },
+            ],
         };
     }
     if looks_like_openclaw_binary_missing(error_text) {
@@ -119,7 +169,14 @@ fn rules_fallback(
         return GuidanceBody {
             summary,
             actions,
-            structured_actions: vec![],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "让小龙虾修复".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None, args: None, invoke_type: None,
+                    context: Some(format!("openclaw 命令缺失: {}", error_text)),
+                },
+            ],
         };
     }
     if lower.contains("not connected to remote")
@@ -133,7 +190,22 @@ fn rules_fallback(
                 "执行一次健康检查，确认网关和配置目录可访问。".to_string(),
                 "若仍失败，打开 Doctor 页面执行自动诊断并按建议修复。".to_string(),
             ],
-            structured_actions: vec![],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "重连 SSH".to_string(),
+                    action_type: "inline_fix".to_string(),
+                    tool: Some("clawpal".to_string()),
+                    args: Some("ssh connect".to_string()),
+                    invoke_type: Some("write".to_string()),
+                    context: None,
+                },
+                GuidanceAction {
+                    label: "让小龙虾修复".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None, args: None, invoke_type: None,
+                    context: Some(format!("SSH 连接失败: {}", error_text)),
+                },
+            ],
         };
     }
 
@@ -145,7 +217,14 @@ fn rules_fallback(
             "打开 Doctor 页面运行诊断，获取可执行修复步骤。".to_string(),
             "按诊断结果优先处理阻塞项后，再重试当前操作。".to_string(),
         ],
-        structured_actions: vec![],
+        structured_actions: vec![
+            GuidanceAction {
+                label: "让小龙虾修复".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None, args: None, invoke_type: None,
+                context: Some(format!("操作失败: {}", error_text)),
+            },
+        ],
     }
 }
 
@@ -319,5 +398,41 @@ mod tests {
         );
         assert!(result.summary.contains("openclaw"));
         assert!(!result.actions.is_empty());
+    }
+
+    #[test]
+    fn rules_fallback_handles_auth_expired() {
+        let result = rules_fallback(
+            "HTTP 401 unauthorized: invalid api key",
+            "remote_ssh",
+            "listAgents",
+            None,
+        );
+        assert!(result.summary.contains("API") || result.summary.contains("密钥") || result.summary.contains("认证"));
+        assert!(!result.structured_actions.is_empty());
+        assert!(result.structured_actions.iter().any(|a| a.action_type == "doctor_handoff"));
+    }
+
+    #[test]
+    fn rules_fallback_handles_container_not_found() {
+        let result = rules_fallback(
+            "Error: no such container: abc123",
+            "docker_local",
+            "getAgents",
+            None,
+        );
+        assert!(result.summary.contains("容器") || result.summary.contains("container"));
+        assert!(result.structured_actions.iter().any(|a| a.action_type == "doctor_handoff"));
+    }
+
+    #[test]
+    fn rules_fallback_ssh_stale_has_inline_fix() {
+        let result = rules_fallback(
+            "not connected to remote host",
+            "remote_ssh",
+            "getStatus",
+            None,
+        );
+        assert!(result.structured_actions.iter().any(|a| a.action_type == "inline_fix" && a.tool.as_deref() == Some("clawpal")));
     }
 }
