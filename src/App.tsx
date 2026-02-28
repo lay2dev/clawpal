@@ -19,6 +19,7 @@ import logoUrl from "./assets/logo.png";
 import { InstanceTabBar } from "./components/InstanceTabBar";
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
+import { withGuidance } from "./lib/guidance";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -211,14 +212,15 @@ export function App() {
   }, []);
 
   const refreshHosts = useCallback(() => {
-    api.listSshHosts().then(setSshHosts).catch((e) => console.error("Failed to load SSH hosts:", e));
+    withGuidance(() => api.listSshHosts(), "listSshHosts", "local", "local")
+      .then(setSshHosts)
+      .catch((e) => console.warn("refreshHosts:", e));
   }, []);
 
   const refreshRegisteredInstances = useCallback(() => {
-    api.listRegisteredInstances()
+    withGuidance(() => api.listRegisteredInstances(), "listRegisteredInstances", "local", "local")
       .then(setRegisteredInstances)
-      .catch((e) => {
-        console.error("Failed to load registered instances:", e);
+      .catch(() => {
         setRegisteredInstances([]);
       });
   }, []);
@@ -242,9 +244,14 @@ export function App() {
 
   const upsertDockerInstance = useCallback(async (instance: DockerInstance) => {
     const normalized = normalizeDockerInstance(instance);
-    await api.connectDockerInstance(
-      normalized.openclawHome || deriveDockerPaths(normalized.id).openclawHome,
-      normalized.label,
+    await withGuidance(
+      () => api.connectDockerInstance(
+        normalized.openclawHome || deriveDockerPaths(normalized.id).openclawHome,
+        normalized.label,
+      ),
+      "connectDockerInstance",
+      normalized.id,
+      "docker_local",
     );
     refreshRegisteredInstances();
   }, [refreshRegisteredInstances]);
@@ -254,9 +261,14 @@ export function App() {
     if (!nextLabel) return;
     const instance = dockerInstances.find((item) => item.id === id);
     if (!instance) return;
-    void api.connectDockerInstance(
-      instance.openclawHome || deriveDockerPaths(instance.id).openclawHome,
-      nextLabel,
+    void withGuidance(
+      () => api.connectDockerInstance(
+        instance.openclawHome || deriveDockerPaths(instance.id).openclawHome,
+        nextLabel,
+      ),
+      "connectDockerInstance",
+      instance.id,
+      "docker_local",
     ).then(() => {
       refreshRegisteredInstances();
     });
@@ -268,7 +280,12 @@ export function App() {
     if (deleteLocalData) {
       await api.deleteLocalInstanceHome(openclawHome);
     }
-    await api.deleteRegisteredInstance(instance.id);
+    await withGuidance(
+      () => api.deleteRegisteredInstance(instance.id),
+      "deleteRegisteredInstance",
+      instance.id,
+      "docker_local",
+    );
     refreshRegisteredInstances();
     setActiveInstance((prev) => (prev === instance.id ? "local" : prev));
   }, [refreshRegisteredInstances]);
@@ -319,6 +336,7 @@ export function App() {
   const [agentGuidanceByInstance, setAgentGuidanceByInstance] = useState<Record<string, AgentGuidanceItem>>({});
   const [doctorLaunchByInstance, setDoctorLaunchByInstance] = useState<Record<string, AgentGuidanceItem | null>>({});
   const [agentGuidanceOpen, setAgentGuidanceOpen] = useState(false);
+  const [unreadGuidance, setUnreadGuidance] = useState(false);
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
   const legacyMigrationDoneRef = useRef(false);
   const passphraseResolveRef = useRef<((value: string | null) => void) | null>(null);
@@ -350,6 +368,7 @@ export function App() {
         [custom.detail.instanceId]: custom.detail,
       }));
       setAgentGuidanceOpen(true);
+      setUnreadGuidance(true);
     };
     window.addEventListener("clawpal:agent-guidance", onGuidance as EventListener);
     return () => {
@@ -379,9 +398,12 @@ export function App() {
 
   const ensureAccessForInstance = useCallback((instanceId: string) => {
     const transport = resolveInstanceTransport(instanceId);
-    api.ensureAccessProfile(instanceId, transport).catch((e) => {
-      console.warn("ensure_access_profile failed:", e);
-    });
+    withGuidance(
+      () => api.ensureAccessProfile(instanceId, transport),
+      "ensureAccessProfile",
+      instanceId,
+      transport,
+    ).catch((e) => console.warn("ensureAccessProfile:", e));
   }, [resolveInstanceTransport]);
 
   const scheduleEnsureAccessForInstance = useCallback((instanceId: string, delayMs = 1200) => {
@@ -487,14 +509,24 @@ export function App() {
   const connectWithPassphraseFallback = useCallback(async (hostId: string) => {
     const host = sshHosts.find((h) => h.id === hostId);
     try {
-      await api.sshConnect(hostId);
+      await withGuidance(
+        () => api.sshConnect(hostId),
+        "sshConnect",
+        hostId,
+        "remote_ssh",
+      );
       return;
     } catch (err) {
       const raw = String(err);
       if (host && host.authMethod !== "password" && SSH_PASSPHRASE_RETRY_HINT.test(raw)) {
         const passphrase = await requestPassphrase(host.label || host.host);
         if (passphrase !== null) {
-          await api.sshConnectWithPassphrase(hostId, passphrase);
+          await withGuidance(
+            () => api.sshConnectWithPassphrase(hostId, passphrase),
+            "sshConnectWithPassphrase",
+            hostId,
+            "remote_ssh",
+          );
           return;
         }
       }
@@ -997,10 +1029,15 @@ export function App() {
               onRenameDocker={renameDockerInstance}
               onDeleteDocker={deleteDockerInstance}
               onDeleteSsh={(hostId) => {
-                api.deleteSshHost(hostId).then(() => {
+                withGuidance(
+                  () => api.deleteSshHost(hostId),
+                  "deleteSshHost",
+                  hostId,
+                  "remote_ssh",
+                ).then(() => {
                   refreshHosts();
                   refreshRegisteredInstances();
-                });
+                }).catch((e) => console.warn("deleteSshHost:", e));
               }}
               onEditSsh={() => {}}
               onInstallReady={handleInstallReady}
@@ -1176,7 +1213,7 @@ export function App() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setAgentGuidanceOpen(false)}
+                onClick={() => { setAgentGuidanceOpen(false); setUnreadGuidance(false); }}
               >
                 稍后处理
               </Button>
@@ -1184,12 +1221,18 @@ export function App() {
           </div>
         )}
         <Button
-          className="rounded-full shadow-md"
+          className="rounded-full shadow-md relative"
           size="sm"
           variant={agentGuidanceOpen ? "secondary" : "default"}
-          onClick={() => setAgentGuidanceOpen((v) => !v)}
+          onClick={() => {
+            setAgentGuidanceOpen((v) => !v);
+            setUnreadGuidance(false);
+          }}
         >
           小龙虾
+          {unreadGuidance && !agentGuidanceOpen && (
+            <span className="absolute -top-1 -right-1 size-2.5 rounded-full bg-destructive" />
+          )}
         </Button>
       </div>
     )}

@@ -3,6 +3,17 @@ import { invoke } from "@tauri-apps/api/core";
 import i18n from "../i18n";
 import { useInstance } from "./instance-context";
 import { api } from "./api";
+import {
+  isSshCooldownProtectionError,
+  isTransientSshChannelError,
+  isAlreadyExplainedGuidanceError,
+  shouldEmitAgentGuidance,
+} from "./guidance";
+
+/** Returns true if the error already triggered a guidance panel, so toast can be skipped. */
+export function hasGuidanceEmitted(error: unknown): boolean {
+  return !!(error && typeof error === "object" && (error as any)._guidanceEmitted);
+}
 
 type ApiReadCacheEntry = {
   expiresAt: number;
@@ -12,9 +23,6 @@ type ApiReadCacheEntry = {
 
 const API_READ_CACHE = new Map<string, ApiReadCacheEntry>();
 const API_READ_CACHE_MAX_ENTRIES = 512;
-const AGENT_GUIDANCE_THROTTLE = new Map<string, number>();
-const AGENT_GUIDANCE_THROTTLE_TTL_MS = 90_000;
-
 function makeCacheKey(instanceCacheKey: string, method: string, args: unknown[]): string {
   let serializedArgs = "";
   try {
@@ -108,77 +116,6 @@ function shouldLogRemoteInvokeMetric(ok: boolean, elapsedMs: number): boolean {
   return Math.random() < 0.05;
 }
 
-function normalizeErrorSignature(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/\d{2,}/g, "#")
-    .trim()
-    .slice(0, 220);
-}
-
-function isSshCooldownProtectionError(errorText: string): boolean {
-  const text = errorText.toLowerCase();
-  return (
-    text.includes("ssh_cooldown:")
-    || text.includes("cooling down after repeated timeouts")
-    || text.includes("are cooling down")
-    || text.includes("retry in")
-    || text.includes("冷却期")
-    || text.includes("多次超时")
-  );
-}
-
-function isTransientSshChannelError(errorText: string): boolean {
-  const text = errorText.toLowerCase();
-  return (
-    text.includes("ssh open channel failed")
-    || text.includes("connection reset")
-    || text.includes("broken pipe")
-    || text.includes("connection closed")
-    || text.includes("failed to open channel")
-  );
-}
-
-function isAlreadyExplainedGuidanceError(errorText: string): boolean {
-  const text = errorText.toLowerCase();
-  return (
-    text.includes("下一步建议")
-    || text.includes("建议执行诊断命令")
-    || text.includes("recommend")
-    || text.includes("next step")
-    || text.includes("ssh连接失败，无法打开通道")
-  );
-}
-
-function shouldEmitAgentGuidance(instanceId: string, operation: string, errorText: string): boolean {
-  // Timeout cooldown is a protective throttle, not an actionable root-cause signal.
-  // Surfacing it as agent guidance creates noisy false alarms.
-  if (
-    isSshCooldownProtectionError(errorText)
-    || isTransientSshChannelError(errorText)
-    || isAlreadyExplainedGuidanceError(errorText)
-  ) {
-    return false;
-  }
-  const signature = `${instanceId}::${operation}::${normalizeErrorSignature(errorText)}`;
-  const now = Date.now();
-  const lastAt = AGENT_GUIDANCE_THROTTLE.get(signature) || 0;
-  if (now - lastAt < AGENT_GUIDANCE_THROTTLE_TTL_MS) {
-    return false;
-  }
-  AGENT_GUIDANCE_THROTTLE.set(signature, now);
-  // Keep the map bounded.
-  if (AGENT_GUIDANCE_THROTTLE.size > 256) {
-    for (const [key, ts] of AGENT_GUIDANCE_THROTTLE.entries()) {
-      if (now - ts > AGENT_GUIDANCE_THROTTLE_TTL_MS * 3) {
-        AGENT_GUIDANCE_THROTTLE.delete(key);
-      }
-    }
-  }
-  return true;
-}
-
 /**
  * Returns a unified API object that auto-dispatches to local or remote
  * based on the current instance context. Remote calls automatically
@@ -223,7 +160,8 @@ export function useApi() {
           original,
           i18n.language || (typeof navigator !== "undefined" ? navigator.language : "en"),
         );
-        if (typeof window !== "undefined" && shouldEmitAgentGuidance(instanceId, method || "unknown", original)) {
+        const guidanceEmitted = typeof window !== "undefined" && shouldEmitAgentGuidance(instanceId, method || "unknown", original);
+        if (guidanceEmitted) {
           window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
             detail: {
               ...explained,
@@ -235,7 +173,11 @@ export function useApi() {
             },
           }));
         }
-        return new Error(explained.message || original);
+        const wrapped = new Error(explained.message || original);
+        if (guidanceEmitted) {
+          (wrapped as any)._guidanceEmitted = true;
+        }
+        return wrapped;
       } catch {
         return new Error(original);
       }

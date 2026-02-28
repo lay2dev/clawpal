@@ -2,204 +2,179 @@
 
 Last updated: 2026-02-28
 
-This file contains review findings and action items from architecture audits. Codex should check this file periodically and work through the items.
-
-## Codex Feedback
-
-Last run: 2026-02-28
-
-| Action | Status | Result |
-|--------|--------|--------|
-| Review Action 1: 修复两个测试失败 | PASS | install prompt 已补充 `doctor exec --tool <command> [--args <argstring>] [--instance <id>]`；`tool_intent::classify_invoke_type` 在 openclaw 非写操作分支返回 `read`。验证：`cargo test --workspace --all-targets` 除 `remote_api` 环境限制（`192.168.65.2:22 Operation not permitted`）外通过。提交：`c457bcc` |
-| Review Action 2: 去除 SSH 去重冗余 | PASS | 已移除 `commands/mod.rs::list_registered_instances` 的 `seen_remote` 去重和 `StartPage.tsx` 的 `seenSshEndpoints` 去重，统一信任 `clawpal-core/src/ssh/registry.rs`。验证：`cargo build --workspace`、`npx tsc --noEmit` 通过；`cargo test --workspace --all-targets` 仅 `remote_api` 环境限制失败。提交：`51408c8` |
-| Action 1: Batch E2 Sessions | PASS | 新增 `clawpal-core/src/sessions.rs`，迁移 `remote_analyze_sessions` / `remote_delete_sessions_by_ids` / `remote_list_session_files` / `remote_preview_session` 的纯解析与过滤逻辑到 core（`parse_session_analysis`、`filter_sessions_by_ids`、`parse_session_file_list`、`parse_session_preview`）；Tauri 端改为调用 core。新增 4 个 core 单测并通过。 |
-| Action 2: Batch E3 Cron | PASS | 新增 `clawpal-core/src/cron.rs`，迁移 `parse_cron_jobs` / `parse_cron_runs`；`commands.rs` 本地与远端 cron 读取路径改为调用 core 解析。新增 2 个 core 单测并通过。 |
-| Action 3: Batch E4 Watchdog | PASS | 新增 `clawpal-core/src/watchdog.rs`，迁移 watchdog 状态合并判断到 `parse_watchdog_status`；`remote_get_watchdog_status` 改为调用 core 解析后补充 `deployed`。新增 1 个 core 单测并通过。 |
-| Action 4: Batch E5 Backup/Upgrade | PASS | 新增 `clawpal-core/src/backup.rs`，迁移 `parse_backup_list` / `parse_backup_result` / `parse_upgrade_result`；`remote_backup_before_upgrade` 与 `remote_list_backups` 改为调用 core 解析，`remote_run_openclaw_upgrade` 接入升级输出解析。新增 3 个 core 单测并通过。 |
-| Action 5: Batch E6 Discord/Discovery | PASS | 新增 `clawpal-core/src/discovery.rs`，迁移 Discord guild/channel 与 bindings 解析（`parse_guild_channels`、`parse_bindings`）及绑定合并函数（`merge_channel_bindings`）。`remote_list_discord_guild_channels` 与 `remote_list_bindings` 已改为优先调用 core 解析，保留原 SSH/REST fallback。新增 3 个 core 单测并通过。 |
-| Action 6: 质量验证 | PASS (remote_api ignored) | `cargo build --workspace` 通过；`npx tsc --noEmit` 通过；`cargo test --workspace --all-targets` 仅 `remote_api` 因 `192.168.65.2:22 Operation not permitted` 失败，按说明忽略。`commands.rs` 行数：`9367 -> 9077`（减少 `290` 行）。 |
-| Action 7: commands.rs 拆文件 | PASS | remote_* 函数体移入 12 个子模块，mod.rs 9115→6005 行（剩余为本地操作 + 共享 helper）。build/test/tsc 通过。 |
-| Review Action 3: SSH 泄漏修复（disconnect/connect timeout + sftp_write 复用连接） | PASS | `clawpal-core/src/ssh/mod.rs`：3 处 `handle.disconnect` 增加 3s timeout；`connect_and_auth` 增加 10s timeout；`sftp_write` 去除 `self.exec(mkdir)` 额外连接，改为同 handle 新 channel 执行 `mkdir -p`。`cargo build --workspace` 通过；`cargo test --workspace --all-targets` 仅 `remote_api` 环境限制失败。提交：`d515772` |
-| Review Action 4: Doctor 任意命令执行链路 | PASS | prompt + 后端联动支持 `doctor exec --tool/--args`，并在 `tool_intent` 标记为 write，保持审批路径一致。`cargo build --workspace`、`npx tsc --noEmit` 通过。提交：`b360fb1` |
-| Review Action 5: 频道缓存上提 | PASS | `InstanceContext/useApi/Channels` 统一使用 app 级缓存与 loading 状态，减少重复拉取；`ParamForm` 兼容 `null` 缓存。`cargo build --workspace`、`npx tsc --noEmit` 通过。提交：`e90e4a3` |
-| Review Action 6: 启动与 UI 行为修复 | PASS | 启动 splash（`index.html/main.tsx`）、SSH registry endpoint 去重、Cron 红点改为“按时运行”判定（5 分钟宽限）、Doctor 启动携带小龙虾上下文、Home 重复安装提示改走小龙虾。`cargo build --workspace`、`npx tsc --noEmit` 通过。提交：`56800e4`、`b7a55dd`、`83ee6c2` |
+This file contains review findings and action items. Codex should check this file periodically and work through the items.
 
 ---
 
 ## Context
 
-三层架构重构（Phase 1-10）已完成，见 `cc-architecture-refactor-v1.md`。
+重构目标：**所有用户侧异常都应由小龙虾（zeroclaw）兜底**。
 
-本轮目标：将 `commands.rs` 中剩余 `remote_*` 函数按领域迁移到 `clawpal-core`。
+当前架构有两条小龙虾介入路径：
+- **路径 A（自动 guidance）**：`dispatch()` → `explainAndWrapError()` → 弹出建议面板
+- **路径 B（Doctor 诊断）**：用户手动打开 Doctor → 交互式诊断
 
-当前 `commands.rs`：9,367 行，41 个 `remote_*` 函数。其中约 20 个已部分调用 core，约 21 个纯 inline SFTP+JSON。
-
-迁移原则：只迁移有实际 JSON 解析/操作逻辑的函数。纯薄包装（Logs 4 个、Gateway 1 个、Agent Setup 1 个）保留在 Tauri 层，不值得抽。
+`dispatch()` 在 `use-api.ts:246-296` 对 local/docker/remote 三种传输都包裹了 `explainAndWrapError`，覆盖约 60+ 个业务操作。但以下缺口导致小龙虾无法兜底。
 
 ---
 
 ## Outstanding Issues
 
-### P0: SSH 连接泄漏 — 根因分析与修复
+### P0: App.tsx 直接调用 api.* 绕过 dispatch()
 
-**现象**：远程 SSH 操作频繁超时、连接堆积、进程残留。
+实例生命周期管理（连接、断开、删除、切换）在 App.tsx 级别直接调 `api.*`，不经过 `dispatch()` 包裹，失败时小龙虾完全不知道。这是用户最高频的操作路径。
 
-**根因**：`SshConnectionPool` 名不副实——它只存 config，**每次 `exec`/`sftp_read`/`sftp_write` 都创建全新的 TCP+SSH 连接**，用完即弃。加上以下 5 个具体缺陷，导致连接泄漏：
+| 操作 | 代码位置 | 当前处理 |
+|------|---------|---------|
+| `api.listSshHosts()` | App.tsx:214 | `console.error` |
+| `api.listRegisteredInstances()` | App.tsx:218 | 静默失败，空列表 |
+| `api.connectDockerInstance()` | App.tsx:245,257 | 可能无提示 |
+| `api.sshConnect()` / `sshConnectWithPassphrase()` | App.tsx:490,497 | 弹密码框或 toast |
+| `api.ensureAccessProfile()` | App.tsx:382 | `console.error` |
+| `api.deleteSshHost()` | App.tsx:1000 | 未知 |
+| `api.deleteRegisteredInstance()` | App.tsx:271 | 未知 |
+| `api.setActiveOpenclawHome()` | App.tsx:604,609 | `.catch(() => {})` |
+| `api.remoteListChannelsMinimal()` | App.tsx:692 | 缓存加载失败 |
+| `api.remoteGetWatchdogStatus()` | App.tsx:734 | 状态加载失败 |
 
-1. **`handle.disconnect()` 无 timeout**（`clawpal-core/src/ssh/mod.rs:127-129, 170-172, 224-226`）— 网络不通时 `.await` 永远阻塞。虽然 Tauri 层有外部 timeout，但 drop russh future 不保证后台 task 退出。
-2. **`sftp_write` 一次操作创建 3 个连接**（`ssh/mod.rs:181-232`）— `self.exec(&mkdir_cmd)` 在 sftp_write 内部又建一个新 SSH 连接做 `mkdir -p`，加上可能的 `resolve_remote_path` 再建一个。
-3. **`connect_and_auth()` 无 timeout**（`ssh/mod.rs:350-356`）— `client::connect()` 的 TCP connect 靠系统超时（75-120s），远超应用层预期。
-4. **russh 后台 task 泄漏** — `russh::client::connect()` spawn 的 tokio task 在 Handle drop 后，如果卡在死 TCP read，不会退出。
-5. **`resolve_remote_path` 额外连接**（`ssh/mod.rs:442-454`）— 含 `~` 的路径会多建一个 SSH 连接执行 `echo $HOME`（Tauri 层已有 `home_dir` 缓存，此处是 core 层冗余）。
+### P0: SSH 首次连接失败无 guidance
 
-#### Latest Field Observation (2026-02-28)
+SSH 连接流程（App.tsx:490-500）在失败时只弹密码框或 showToast，不触发小龙虾分析。首次使用+网络不稳定是用户最容易碰到异常的场景。
 
-- 症状：Channels 页面在远程实例上出现“冷却期”错误；小龙虾误报已抑制，但远端 `sshd` 进程仍从 `1` 缓慢增长到 `7`。
-- 现状判断：这不是瞬时爆炸，而是“会话创建持续发生 + 回收慢于创建”的慢性增长。
-- 关键原因：当前仍是 stateless 模式（每次远程操作新建 SSH 连接）；在网络抖动/超时场景下，`russh` 会话回收不够及时时，远端 `sshd` 会出现滞留。
-- 与 OpenSSH 对比：OpenSSH CLI（尤其 ControlMaster 复用）在退出和连接复用上更成熟；当前 `russh + 短连接高频调用` 组合更容易暴露此类问题。
+### P1: 静默吞错 `.catch(() => {})`
 
-#### Recommended Fix Strategy
+以下操作失败时用户完全不知道，小龙虾也不介入：
 
-1. **Primary (长期方案)**：实现真正的会话复用池（每 host 维持 1 条可复用会话），`exec/sftp` 不再每次新建连接。
-2. **Required Guardrails with session pool**：
-   - 每 host 并发限制（建议 1-2）
-   - 操作级 timeout（exec/sftp）
-   - 会话健康检查 + 自动重建
-   - 空闲回收（60-120s）
-   - 熔断/冷却保留，但改为“连续重连失败”触发，而非单次超时
-3. **Transitional Option (短期止血)**：如需快速稳定，可临时切 OpenSSH CLI + ControlMaster 复用，再回到 russh session pool。
+| 操作 | 位置 |
+|------|------|
+| Cron jobs/runs 加载 | Cron.tsx:141,143 |
+| Watchdog 状态 | Cron.tsx:142 |
+| Config 读取 | Cook.tsx:106 |
+| Queued commands count | Home.tsx:99 |
+| 日志内容加载 | Doctor.tsx:258 |
+| Recipes 列表 | Recipes.tsx:31 |
+| SSH 状态轮询 | App.tsx:304,314,315 |
 
----
+注意：这些操作经过 `dispatch()`，`explainAndWrapError` 会在 throw 前 emit guidance 事件，但 throttle (90s/签名) 意味着轮询场景下只有首次失败触发 guidance。如果用户没注意到首次弹出的面板，后续完全无感知。
 
-### P1: `run_doctor_exec_tool` 安全审查
+### P2: toast + guidance 双信号割裂
 
-`doctor_commands.rs` 新增的 `run_doctor_exec_tool` 允许在 host 上执行任意命令（`std::process::Command::new(command)`）。虽然 UI 有确认步骤（tool_intent 分类为 `"write"`），但 `validate_payload` 现在只检查 `tool.is_empty()`，不再限制 tool name。需确保：
-- prompt 不会被注入绕过确认流程
-- 考虑是否需要命令白名单或黑名单（至少禁止 `rm`、`dd` 等破坏性命令）
+页面组件用 `.catch((e) => showToast(String(e), "error"))` 截获了错误后自己显示 toast，同时 `explainAndWrapError` 又 emit 了 guidance 面板。用户同时看到两个信息源，体验割裂。
 
-当前状态：**有意设计，但需要确认安全策略是否足够**。
+涉及：Home.tsx (agent/model 操作)、Channels.tsx (binding 操作)、History.tsx、SessionAnalysisPanel.tsx、Doctor.tsx (backup 操作)。
 
----
+### P2: 小龙虾自身启动失败无二级兜底
 
-### P2: `commands/mod.rs` 仍 6,005 行
-
-已从 9,115 降到 6,005（remote_* 函数体已移出）。剩余为本地操作 + 共享 helper，进一步拆分属于下一轮优化。
-
----
-
-### P3: Doctor/Install prompt 结构重叠
-
-~60% 内容重复。可考虑抽取 `prompts/common/tool-schema.md`。不急。
-
----
-
-## Resolved Issues
-
-| Issue | Resolution | Commit |
-|-------|-----------|--------|
-| Sessions domain inline parsing | 4 pure functions in `clawpal_core::sessions` | `de8fce4` |
-| Cron domain inline parsing | 2 pure functions in `clawpal_core::cron` | `d47e550` |
-| Watchdog domain inline parsing | `parse_watchdog_status` + `WatchdogStatus` struct in core | `bd697d9` |
-| Backup/Upgrade domain parsing | 3 pure functions + 3 typed structs in `clawpal_core::backup` | `7554bd6` |
-| Discord/Discovery domain parsing | 3 pure functions + 2 typed structs in `clawpal_core::discovery` | `64717b5` |
-| commands.rs split into domain modules | remote_* moved to 12 submodules, mod.rs 9115→6005 | `8fbe13d`, `ed1a8f2` |
-| Missed WIP + housekeeping | session_scope, tool_intent mod, i18n.language, gitignore | `3292982` |
+当 zeroclaw 二进制缺失、API key 未配置、模型不可用时，`rules_fallback()` 只覆盖 3 种硬编码模式（ownerDisplay、openclaw missing、SSH connection）。其他场景下 guidance 请求本身失败，用户只看到原始错误字符串。
 
 ---
 
 ## Next Actions (for Codex)
 
-### Action 1: `handle.disconnect()` 加 timeout（3 处）
+### Action 1: App.tsx 生命周期操作接入 guidance
 
-在 `clawpal-core/src/ssh/mod.rs` 中，所有 `handle.disconnect()` 调用（exec、sftp_read、sftp_write 各一处）用 3 秒 timeout 包裹：
+在 App.tsx 中为所有直接调用 `api.*` 的操作加上 guidance 包裹。有两种方案，选其一：
 
-```rust
-// 替换：
-let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
-// 为：
-let _ = tokio::time::timeout(
-    Duration::from_secs(3),
-    handle.disconnect(russh::Disconnect::ByApplication, "", "en"),
-).await;
-```
+**方案 A（推荐）**：在 App.tsx 中创建一个轻量 `withGuidance` 包裹函数，复用 `api.explainOperationError` 的逻辑：
 
-验证：`cargo build --workspace` + `cargo test --workspace --all-targets` 通过。
-
-### Action 2: `connect_and_auth()` 加 timeout
-
-在 `clawpal-core/src/ssh/mod.rs` 的 `connect_and_auth()` 函数中，给 `client::connect()` 加 10 秒 timeout：
-
-```rust
-// 替换：
-let mut handle = client::connect(ssh_config, addr, SshHandler)
-    .await
-    .map_err(|e| SshError::Connect(e.to_string()))?;
-// 为：
-let mut handle = tokio::time::timeout(
-    Duration::from_secs(10),
-    client::connect(ssh_config, addr, SshHandler),
-)
-.await
-.map_err(|_| SshError::Connect(format!("russh TCP connect to {addr} timed out after 10s")))?
-.map_err(|e| SshError::Connect(e.to_string()))?;
-```
-
-验证：build + test 通过。
-
-### Action 3: `sftp_write` 消除额外 SSH 连接
-
-`ssh/mod.rs` 的 `sftp_write()` 内部调用 `self.exec(&mkdir_cmd)` 会**再建一个完整 SSH 连接**只为跑 `mkdir -p`。改为在同一个 SSH 连接上通过已有的 handle 开一个新 channel 执行 mkdir：
-
-```rust
-// 替换 sftp_write 中的：
-let mkdir_result = self.exec(&mkdir_cmd).await?;
-if mkdir_result.exit_code != 0 {
-    return Err(SshError::Sftp(format!("mkdir parent failed for {resolved}: {}", mkdir_result.stderr)));
-}
-
-// 为（在同一个 handle 上开 channel）：
-{
-    let mut mkdir_ch = handle.channel_open_session().await
-        .map_err(|e| SshError::Sftp(format!("open mkdir channel: {e}")))?;
-    mkdir_ch.exec(true, mkdir_cmd.as_bytes()).await
-        .map_err(|e| SshError::Sftp(format!("mkdir exec: {e}")))?;
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(_msg) = mkdir_ch.wait().await {}
-    }).await;
+```typescript
+// App.tsx 或提取到 lib/guidance.ts
+async function withGuidance<T>(
+  fn: () => Promise<T>,
+  method: string,
+  instanceId: string,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    // emit guidance event (same logic as explainAndWrapError in use-api.ts)
+    try {
+      const guidance = await api.explainOperationError(instanceId, method, transport, String(error), language);
+      window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", { detail: { ...guidance, operation: method, instanceId } }));
+    } catch { /* guidance itself failed, ignore */ }
+    throw error;
+  }
 }
 ```
 
-注意 `mkdir_cmd` 的类型：`exec` 的第二个参数接受 `impl Into<Vec<u8>>`，可以传 `&str` 或 `&[u8]`，看编译器要求调整。
+然后包裹关键调用：
+```typescript
+// 替换：
+api.sshConnect(hostId).catch(e => showToast(String(e), "error"))
+// 为：
+withGuidance(() => api.sshConnect(hostId), "sshConnect", instanceId).catch(e => showToast(String(e), "error"))
+```
 
-验证：build + test 通过。确认 `sftp_write` 不再调用 `self.exec()`。
+**方案 B**：将生命周期操作也移入 `useApi()` 返回的方法集，让 `dispatch()` 自动包裹。但这需要改 `useApi` 接口，改动范围更大。
 
-### Action 4: 提交当前未提交的 fix batch
+优先覆盖这些操作（按用户影响排序）：
+1. `api.sshConnect()` / `api.sshConnectWithPassphrase()` — SSH 首次连接
+2. `api.connectDockerInstance()` — Docker 连接
+3. `api.listRegisteredInstances()` — 实例列表
+4. `api.listSshHosts()` — SSH 主机列表
+5. `api.deleteRegisteredInstance()` / `api.deleteSshHost()` — 删除操作
 
-当前工作目录有大量未提交改动（SSH timeout/semaphore/cooldown、boot splash、lazy loading、doctor exec、channel cache 等）。将这些改动分主题提交：
+验证：`npx tsc --noEmit` 通过。手动测试：断开 SSH 后重连，应看到小龙虾 guidance 面板弹出。
 
-1. SSH 加固（ssh/mod.rs + ssh.rs + health.rs）：`fix: add ssh timeout guards and concurrency limiter`
-2. 前端优化（index.html + App.tsx + main.tsx + lazy loading）：`perf: boot splash and lazy-load page components`
-3. Doctor exec + tool_intent（doctor_commands.rs + tool_intent.rs + prompts）：`feat: doctor exec tool for arbitrary command execution`
-4. Channel cache 上提（instance-context + use-api + Channels.tsx + ParamForm）：`refactor: lift channel cache to app-level context`
-5. 其他 UI fix（Cron.tsx + Home.tsx + Doctor.tsx + SessionAnalysisPanel.tsx）：`fix: cron watchdog late detection and doctor launch guidance`
+### Action 2: 静默吞错改为"通知小龙虾但不弹 toast"
 
-每个 commit 之后确保 `cargo build --workspace` + `npx tsc --noEmit` 通过。
+将 `.catch(() => {})` 改为在失败时静默 emit guidance 事件（不弹 toast），让小龙虾面板至少有机会出现：
 
-**关键约束：先做 Action 1-3 再 commit，确保 SSH 修复包含在第一个 commit 中。**
+```typescript
+// 替换：
+ua.listCronJobs().then(setJobs).catch(() => {});
+// 为：
+ua.listCronJobs().then(setJobs).catch(() => {
+  // guidance event already emitted by dispatch() before this catch
+  // nothing extra needed — just don't swallow silently if we want user awareness
+});
+```
+
+实际上 `dispatch()` 内的 `explainAndWrapError` 已经在 throw 之前 emit 了 guidance 事件。所以问题不在于 `.catch(() => {})`（guidance 已经发出），而在于：
+- throttle 90s 内相同签名不重复 emit — 这是对的，不需要改
+- 用户可能没注意到 guidance 面板 — 这是 UX 问题
+
+**改进方向**：当 guidance 面板有未读消息时，在侧边栏小龙虾图标上加一个红点/badge，提醒用户查看。这样即使 toast 消失了，用户仍然知道有建议等待处理。
+
+实现：在 `App.tsx` 的 guidance 事件监听处，增加一个 `unreadGuidance` 状态，在小龙虾按钮上显示 badge。用户打开 guidance 面板后清除 badge。
+
+验证：`npx tsc --noEmit` 通过。
+
+### Action 3: 统一 toast + guidance 信号
+
+目标：避免用户同时看到 toast 错误消息和 guidance 面板两个信号源。
+
+原则：**如果 guidance 面板已弹出，页面组件不再显示 error toast**。
+
+实现思路：`explainAndWrapError` 在 emit guidance 事件时，在 error 对象上标记 `_guidanceEmitted = true`。页面组件的 `.catch()` 检查这个标记，有标记则不弹 toast：
+
+```typescript
+// use-api.ts explainAndWrapError 中：
+const wrapped = new Error(message);
+(wrapped as any)._guidanceEmitted = true;
+throw wrapped;
+
+// 页面组件中：
+.catch((e) => {
+  if (!(e as any)?._guidanceEmitted) {
+    showToast(String(e), "error");
+  }
+});
+```
+
+涉及文件：use-api.ts, Home.tsx, Channels.tsx, Doctor.tsx, SessionAnalysisPanel.tsx。
+
+验证：`npx tsc --noEmit` 通过。
 
 ---
 
 ## Execution History
 
-| Batch | Status | Commits | Review Notes |
-|-------|--------|---------|-------------|
-| Batch E2: Sessions | **Done** | `de8fce4` | 4 pure functions, 4 tests, -237 lines from commands.rs |
-| Batch E3: Cron | **Done** | `d47e550` | 2 pure functions, 2 tests, -51 lines from commands.rs |
-| Batch E4: Watchdog | **Done** | `bd697d9` | 1 pure function + typed struct, 1 test, -21 lines from commands.rs |
-| Batch E5: Backup/Upgrade | **Done** | `7554bd6` | 3 pure functions + 3 structs, 3 tests, -17 lines from commands.rs |
-| Batch E6: Discord/Discovery | **Done** | `64717b5` | 3 pure functions + 2 structs, 3 tests, -116 lines from commands.rs |
-| Quality verification | **Done** | `628f2c4` | All pass (remote_api env ignored), -290 lines total |
-| commands.rs split (attempt 1) | **Redo** | `8fbe13d` | Only `pub use` stubs, mod.rs still 9,115 lines |
-| commands.rs split (attempt 2) | **Done** | `ed1a8f2` | Functions moved to 12 submodules, mod.rs 9115→6005 |
-| Housekeeping | **Done** | `3292982` | WIP commit + gitignore + archive |
+| Item | Status | Notes |
+|------|--------|-------|
+| SSH session reuse pool (P0) | **Done** | `46b2509` — persistent handle per host |
+| Login shell unification | **Done** | `0f3c88f`, `0235e38` |
+| Frontend perf (lazy load + transitions) | **Done** | `9e418a2`, `a15533a` |
+| SSH error UX | **Done** | `ba08aed`, `a7864e3` |
+| Remote domain migration (E2-E6) | **Done** | See cc-ssh-refactor-v1.md |
+| commands.rs split | **Done** | mod.rs 9115 → 6005 lines |

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AgentOverview, Binding, ChannelNode, DiscordGuildChannel, ModelProfile } from "../lib/types";
-import { useApi } from "@/lib/use-api";
+import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,8 +89,8 @@ export function Channels({
     refreshAgents();
     refreshBindings();
     ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
-    void ua.refreshChannelNodesCache().catch((e) => console.error("Failed to load channel nodes:", e));
-    void ua.refreshDiscordChannelsCache().catch((e) => console.error("Failed to load discord channels:", e));
+    // Channel/discord caches are loaded by App.tsx when route === "channels",
+    // no need to duplicate here.
   }, [ua, refreshAgents, refreshBindings]);
 
   const channelNodes = ua.channelNodes || [];
@@ -102,7 +102,7 @@ export function Channels({
       .then(() => {
         showToast?.(t('channels.discordRefreshed'), "success");
       })
-      .catch((e) => showToast?.(String(e), "error"))
+      .catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); })
       .finally(() => setRefreshing(null));
   };
 
@@ -112,7 +112,7 @@ export function Channels({
       .then(() => {
         showToast?.(t('channels.platformRefreshed', { platform: PLATFORM_LABELS[platform] || platform }), "success");
       })
-      .catch((e) => showToast?.(String(e), "error"))
+      .catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); })
       .finally(() => setRefreshing(null));
   };
 
@@ -184,7 +184,7 @@ export function Channels({
       );
       refreshBindings();
     } catch (e) {
-      showToast?.(String(e), "error");
+      if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error");
     } finally {
       setSaving(null);
     }
@@ -364,7 +364,7 @@ export function Channels({
                 ua.queueCommand(
                   `Set persona for Discord channel ${ch.channelName || ch.channelId}`,
                   ["openclaw", "config", "set", path, result.persona],
-                ).catch((e) => showToast?.(String(e), "error"));
+                ).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
               }
             }
             setPendingChannel(null);

@@ -313,22 +313,43 @@ pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
 
 
 #[tauri::command]
-pub fn list_channels_minimal() -> Result<Vec<ChannelNode>, String> {
-    let output = crate::cli_runner::run_openclaw(&["config", "get", "channels", "--json"])
-        .map_err(|e| format!("Failed to run openclaw: {e}"))?;
-    if output.exit_code != 0 {
-        let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
-        if msg.contains("not found") {
-            return Ok(Vec::new());
-        }
-        // Fallback: direct read
-        let paths = resolve_paths();
-        let cfg = read_openclaw_config(&paths)?;
-        return Ok(collect_channel_nodes(&cfg));
+pub async fn list_channels_minimal(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<ChannelNode>, String> {
+    let cache_key = local_cli_cache_key("channels-minimal");
+    let ttl = Some(std::time::Duration::from_secs(30));
+    if let Some(cached) = cache.get(&cache_key, ttl) {
+        return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
-    let cfg = serde_json::json!({ "channels": channels_val });
-    Ok(collect_channel_nodes(&cfg))
+    let cache = cache.inner().clone();
+    let cache_key_cloned = cache_key.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::cli_runner::run_openclaw(&["config", "get", "channels", "--json"])
+            .map_err(|e| format!("Failed to run openclaw: {e}"))?;
+        if output.exit_code != 0 {
+            let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
+            if msg.contains("not found") {
+                return Ok(Vec::new());
+            }
+            // Fallback: direct read
+            let paths = resolve_paths();
+            let cfg = read_openclaw_config(&paths)?;
+            let result = collect_channel_nodes(&cfg);
+            if let Ok(serialized) = serde_json::to_string(&result) {
+                cache.set(cache_key_cloned, serialized);
+            }
+            return Ok(result);
+        }
+        let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
+        let cfg = serde_json::json!({ "channels": channels_val });
+        let result = collect_channel_nodes(&cfg);
+        if let Ok(serialized) = serde_json::to_string(&result) {
+            cache.set(cache_key_cloned, serialized);
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 

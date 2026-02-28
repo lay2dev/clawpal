@@ -18,6 +18,13 @@ pub struct SshHostConfig {
     pub password: Option<String>,
 }
 
+impl SshHostConfig {
+    /// Canonical endpoint key for deduplication: `user@host:port`.
+    pub fn endpoint_key(&self) -> String {
+        format!("{}@{}:{}", self.username, self.host.to_ascii_lowercase(), self.port)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceType {
@@ -96,9 +103,31 @@ impl InstanceRegistry {
         let parsed: RegistryFile = serde_json::from_str(&data)
             .map_err(|source| InstanceRegistryError::ParseFile { path, source })?;
 
+        // Deduplicate SSH instances by endpoint (user@host:port).
+        // When multiple entries share the same endpoint, keep the last one
+        // (later entries override earlier ones).
+        let mut ssh_endpoint_winner: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for inst in &parsed.instances {
+            if let (InstanceType::RemoteSsh, Some(cfg)) =
+                (&inst.instance_type, &inst.ssh_host_config)
+            {
+                ssh_endpoint_winner.insert(cfg.endpoint_key(), inst.id.clone());
+            }
+        }
+
         let instances = parsed
             .instances
             .into_iter()
+            .filter(|inst| {
+                if let (InstanceType::RemoteSsh, Some(cfg)) =
+                    (&inst.instance_type, &inst.ssh_host_config)
+                {
+                    ssh_endpoint_winner.get(&cfg.endpoint_key()).map(|id| id == &inst.id).unwrap_or(true)
+                } else {
+                    true
+                }
+            })
             .map(|instance| (instance.id.clone(), instance))
             .collect();
         Ok(Self { instances })
@@ -239,5 +268,53 @@ mod tests {
         registry.add(sample_instance("docker:get")).expect("add");
         let instance = registry.get("docker:get");
         assert!(instance.is_some());
+    }
+
+    fn ssh_instance(id: &str, host: &str, username: &str) -> Instance {
+        Instance {
+            id: id.to_string(),
+            instance_type: InstanceType::RemoteSsh,
+            label: host.to_string(),
+            openclaw_home: None,
+            clawpal_data_dir: None,
+            ssh_host_config: Some(SshHostConfig {
+                id: id.to_string(),
+                label: host.to_string(),
+                host: host.to_string(),
+                port: 22,
+                username: username.to_string(),
+                auth_method: "key".to_string(),
+                key_path: None,
+                password: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn load_deduplicates_ssh_instances_by_endpoint() {
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = temp_data_dir();
+        std::env::set_var("CLAWPAL_DATA_DIR", &dir);
+
+        // Write a registry file with two SSH entries for the same endpoint
+        let file = RegistryFile {
+            instances: vec![
+                ssh_instance("old-uuid", "vm1", "ubuntu"),
+                ssh_instance("ssh:vm1-new", "vm1", "ubuntu"),
+            ],
+        };
+        let path = dir.join("instances.json");
+        fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+
+        let registry = InstanceRegistry::load().expect("load");
+        let ssh_instances: Vec<_> = registry
+            .list()
+            .into_iter()
+            .filter(|i| matches!(i.instance_type, InstanceType::RemoteSsh))
+            .collect();
+        assert_eq!(ssh_instances.len(), 1, "should deduplicate to one entry");
+        assert_eq!(ssh_instances[0].id, "ssh:vm1-new", "should keep the last entry");
     }
 }

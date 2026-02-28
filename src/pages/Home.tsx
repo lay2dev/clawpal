@@ -25,7 +25,7 @@ import { CreateAgentDialog } from "@/components/CreateAgentDialog";
 import { UpgradeDialog } from "@/components/UpgradeDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { InstanceStatus, StatusExtra, AgentOverview, ModelProfile } from "../lib/types";
-import { useApi } from "@/lib/use-api";
+import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { profileToModelValue } from "@/lib/model-value";
 
 type OpenclawUpdateLatch = {
@@ -352,7 +352,7 @@ export function Home({
     ).then(() => {
       // Optimistic UI update
       setAgents((prev) => prev?.filter((a) => a.id !== agentId) ?? null);
-    }).catch((e) => showToast?.(String(e), "error"));
+    }).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
   };
 
   return (
@@ -429,7 +429,7 @@ export function Home({
                   p.then(() => {
                     // Optimistic UI update
                     setStatus((prev) => prev ? { ...prev, globalDefaultModel: modelValue ?? "" } : prev);
-                  }).catch((e) => showToast?.(String(e), "error"))
+                  }).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); })
                     .finally(() => setSavingModel(false));
                 }}
                 disabled={savingModel}
@@ -483,7 +483,7 @@ export function Home({
                             ua.queueCommand(
                               `Reorder fallback models`,
                               ["openclaw", "config", "set", "agents.defaults.model.fallbacks", JSON.stringify(arr), "--json"],
-                            ).catch((e) => showToast?.(String(e), "error"));
+                            ).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
                           }}
                         >
                           ↑
@@ -500,7 +500,7 @@ export function Home({
                             ua.queueCommand(
                               `Reorder fallback models`,
                               ["openclaw", "config", "set", "agents.defaults.model.fallbacks", JSON.stringify(arr), "--json"],
-                            ).catch((e) => showToast?.(String(e), "error"));
+                            ).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
                           }}
                         >
                           ↓
@@ -521,7 +521,7 @@ export function Home({
                                   `Remove last fallback model`,
                                   ["openclaw", "config", "unset", "agents.defaults.model.fallbacks"],
                                 );
-                            cmd.catch((e) => showToast?.(String(e), "error"));
+                            cmd.catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
                           }}
                         >
                           ✕
@@ -541,7 +541,7 @@ export function Home({
                     ua.queueCommand(
                       `Add fallback model: ${modelValue}`,
                       ["openclaw", "config", "set", "agents.defaults.model.fallbacks", JSON.stringify(arr), "--json"],
-                    ).catch((e) => showToast?.(String(e), "error"));
+                    ).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
                     setFallbackSelectKey((k) => k + 1);
                   }}
                 >
@@ -633,7 +633,7 @@ export function Home({
                                 a.id === agent.id ? { ...a, model: modelValue ?? null } : a
                               ) ?? null);
                             } catch (e) {
-                              showToast?.(String(e), "error");
+                              if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error");
                             }
                           }}
                         >

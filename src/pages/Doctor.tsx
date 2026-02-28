@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApi } from "@/lib/use-api";
+import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
 import type {
@@ -1069,7 +1069,7 @@ export function Doctor({
                   setBackupMessage(t("home.backupCreated", { name: info.name }));
                   refreshBackups();
                 })
-                .catch((e) => setBackupMessage(t("home.backupFailed", { error: String(e) })))
+                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.backupFailed", { error: String(e) })); })
                 .finally(() => setBackingUp(false));
             }}
           >
@@ -1129,7 +1129,7 @@ export function Doctor({
                             onClick={() => {
                               ua.restoreFromBackup(backup.name)
                                 .then((msg) => setBackupMessage(msg))
-                                .catch((e) => setBackupMessage(t("home.restoreFailed", { error: String(e) })));
+                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.restoreFailed", { error: String(e) })); });
                             }}
                           >
                             {t("home.restore")}
@@ -1160,7 +1160,7 @@ export function Doctor({
                                   setBackupMessage(t("home.deletedBackup", { name: backup.name }));
                                   refreshBackups();
                                 })
-                                .catch((e) => setBackupMessage(t("home.deleteBackupFailed", { error: String(e) })));
+                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.deleteBackupFailed", { error: String(e) })); });
                             }}
                           >
                             {t("home.delete")}
