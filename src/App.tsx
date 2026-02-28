@@ -942,6 +942,10 @@ export function App() {
         ? artifacts.ssh_host_id.trim()
         : "";
       if (hostId) {
+        // Register the SSH host as an instance in the registry
+        await api.connectSshInstance(hostId).catch(() => {});
+        refreshHosts();
+        refreshRegisteredInstances();
         openTab(hostId);
       } else {
         openTab("local");
@@ -950,7 +954,7 @@ export function App() {
       // For local/SSH installs, just switch to the instance
       openTab("local");
     }
-  }, [upsertDockerInstance, openTab]);
+  }, [upsertDockerInstance, openTab, refreshHosts, refreshRegisteredInstances]);
 
   const navItems: { key: string; active: boolean; icon: React.ReactNode; label: string; badge?: React.ReactNode; onClick: () => void }[] = inStart
     ? [

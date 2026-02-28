@@ -8,7 +8,7 @@ use crate::cli_runner::{
 use crate::agent_fallback::explain_operation_error;
 use crate::commands::{
     analyze_sessions, apply_config_patch, backup_before_upgrade, chat_via_openclaw,
-    check_openclaw_update, clear_all_sessions, connect_docker_instance, create_agent, delete_agent, delete_backup,
+    check_openclaw_update, clear_all_sessions, connect_docker_instance, connect_ssh_instance, create_agent, delete_agent, delete_backup,
     discover_local_instances,
     delete_cron_job, delete_local_instance_home, delete_model_profile, delete_sessions_by_ids,
     delete_registered_instance, delete_ssh_host, deploy_watchdog, diagnose_primary_via_rescue, ensure_access_profile,
@@ -107,6 +107,7 @@ pub fn run() {
             list_registered_instances,
             delete_registered_instance,
             connect_docker_instance,
+            connect_ssh_instance,
             discover_local_instances,
             migrate_legacy_instances,
             ensure_access_profile,

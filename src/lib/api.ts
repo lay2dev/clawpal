@@ -57,6 +57,8 @@ export const api = {
     instanceId?: string,
   ): Promise<RegisteredInstance> =>
     invoke("connect_docker_instance", { home, label: label ?? null, instanceId: instanceId ?? null }),
+  connectSshInstance: (hostId: string): Promise<RegisteredInstance> =>
+    invoke("connect_ssh_instance", { hostId }),
   migrateLegacyInstances: (
     legacyDockerInstances: DockerInstance[],
     legacyOpenTabIds: string[],

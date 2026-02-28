@@ -5068,6 +5068,33 @@ pub async fn connect_docker_instance(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn connect_ssh_instance(
+    host_id: String,
+) -> Result<clawpal_core::instance::Instance, String> {
+    let hosts = read_hosts_from_registry()?;
+    let host = hosts
+        .into_iter()
+        .find(|h| h.id == host_id)
+        .ok_or_else(|| format!("No SSH host config with id: {host_id}"))?;
+    // Register the SSH host as an instance in the instance registry
+    // (skip the actual SSH connectivity probe — the caller already connected)
+    let instance = clawpal_core::instance::Instance {
+        id: host.id.clone(),
+        instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
+        label: host.label.clone(),
+        openclaw_home: None,
+        clawpal_data_dir: None,
+        ssh_host_config: Some(host),
+    };
+    let mut registry = clawpal_core::instance::InstanceRegistry::load()
+        .map_err(|e| e.to_string())?;
+    let _ = registry.remove(&instance.id);
+    registry.add(instance.clone()).map_err(|e| e.to_string())?;
+    registry.save().map_err(|e| e.to_string())?;
+    Ok(instance)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyDockerInstance {
