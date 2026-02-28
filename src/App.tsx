@@ -1254,7 +1254,25 @@ export function App() {
                     variant="outline"
                     onClick={async () => {
                       try {
-                        showToast(`正在执行: ${sa.label}`, "success");
+                        if (sa.tool === "clawpal" && sa.args?.includes("ssh connect")) {
+                          const hostId = agentGuidance.instanceId;
+                          showToast(`正在重连 SSH...`, "success");
+                          await api.sshConnect(hostId);
+                          showToast("SSH 重连成功", "success");
+                          setAgentGuidanceOpen(false);
+                          setUnreadGuidance(false);
+                        } else {
+                          setAgentGuidanceOpen(false);
+                          setDoctorLaunchByInstance((prev) => ({
+                            ...prev,
+                            [agentGuidance.instanceId]: {
+                              ...agentGuidance,
+                              rawError: sa.context || agentGuidance.rawError,
+                            },
+                          }));
+                          setInStart(false);
+                          navigateRoute("doctor");
+                        }
                       } catch (e) {
                         showToast(`${sa.label} 失败: ${e}`, "error");
                       }
