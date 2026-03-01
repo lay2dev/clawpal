@@ -32,12 +32,11 @@ pub async fn remote_get_watchdog_status(
         .await
         .is_ok();
 
-    let mut status = clawpal_core::watchdog::parse_watchdog_status(&status_raw, &alive_output).extra;
+    let mut status =
+        clawpal_core::watchdog::parse_watchdog_status(&status_raw, &alive_output).extra;
     status.insert("deployed".into(), Value::Bool(deployed));
     Ok(Value::Object(status))
 }
-
-
 
 #[tauri::command]
 pub async fn remote_deploy_watchdog(
@@ -60,8 +59,6 @@ pub async fn remote_deploy_watchdog(
         .await?;
     Ok(true)
 }
-
-
 
 #[tauri::command]
 pub async fn remote_start_watchdog(
@@ -89,8 +86,6 @@ pub async fn remote_start_watchdog(
     Ok(true)
 }
 
-
-
 #[tauri::command]
 pub async fn remote_stop_watchdog(
     pool: State<'_, SshConnectionPool>,
@@ -109,8 +104,6 @@ pub async fn remote_stop_watchdog(
         .await;
     Ok(true)
 }
-
-
 
 #[tauri::command]
 pub async fn remote_uninstall_watchdog(

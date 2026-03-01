@@ -32,10 +32,8 @@ impl ZeroclawInstallAdapter {
         let reason = intent
             .reason
             .unwrap_or_else(|| "Executing command for installation.".to_string());
-        let invoke_type = crate::runtime::zeroclaw::tool_intent::classify_invoke_type(
-            &intent.tool,
-            &intent.args,
-        );
+        let invoke_type =
+            crate::runtime::zeroclaw::tool_intent::classify_invoke_type(&intent.tool, &intent.args);
         let payload = json!({
             "id": format!("zc-{}", uuid::Uuid::new_v4()),
             "command": intent.tool,

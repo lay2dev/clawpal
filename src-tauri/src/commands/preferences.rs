@@ -66,6 +66,16 @@ pub struct ZeroclawUsageStatsResponse {
     pub last_updated_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ZeroclawRuntimeTargetResponse {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub source: String,
+    pub preferred_model: Option<String>,
+    pub provider_order: Vec<String>,
+}
+
 #[tauri::command]
 pub fn get_zeroclaw_usage_stats() -> Result<ZeroclawUsageStatsResponse, String> {
     let stats = crate::runtime::zeroclaw::process::get_zeroclaw_usage_stats();
@@ -76,6 +86,18 @@ pub fn get_zeroclaw_usage_stats() -> Result<ZeroclawUsageStatsResponse, String> 
         completion_tokens: stats.completion_tokens,
         total_tokens: stats.total_tokens,
         last_updated_ms: stats.last_updated_ms,
+    })
+}
+
+#[tauri::command]
+pub fn get_zeroclaw_runtime_target() -> Result<ZeroclawRuntimeTargetResponse, String> {
+    let target = crate::runtime::zeroclaw::process::get_zeroclaw_runtime_target();
+    Ok(ZeroclawRuntimeTargetResponse {
+        provider: target.provider,
+        model: target.model,
+        source: target.source,
+        preferred_model: target.preferred_model,
+        provider_order: target.provider_order,
     })
 }
 

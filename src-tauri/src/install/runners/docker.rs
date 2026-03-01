@@ -37,7 +37,10 @@ fn sanitize_slug(raw: &str) -> String {
 }
 
 fn docker_slug_from_instance_id(instance_id: &str) -> String {
-    let suffix = instance_id.strip_prefix("docker:").unwrap_or(instance_id).trim();
+    let suffix = instance_id
+        .strip_prefix("docker:")
+        .unwrap_or(instance_id)
+        .trim();
     if suffix.is_empty() || suffix.eq_ignore_ascii_case("local") {
         return "docker-local".to_string();
     }
@@ -145,15 +148,22 @@ fn docker_instance_label(artifacts: &HashMap<String, Value>, info: &DockerInstan
         return label;
     }
     if info.is_default() {
-        return "Docker Local".to_string();
+        return "docker-local".to_string();
     }
-    let suffix = info.instance_id.strip_prefix("docker:").unwrap_or(&info.instance_id);
+    let suffix = info
+        .instance_id
+        .strip_prefix("docker:")
+        .unwrap_or(&info.instance_id);
     if let Some(number) = suffix.strip_prefix("local-") {
         if !number.is_empty() {
-            return format!("Docker Local {}", number);
+            return format!("docker-local-{number}");
         }
     }
-    format!("Docker {}", suffix)
+    if suffix.starts_with("docker-") {
+        suffix.to_string()
+    } else {
+        format!("docker-{suffix}")
+    }
 }
 
 fn build_docker_instance_artifacts(
@@ -249,7 +259,8 @@ pub fn run_step(
     let repo_str = repo.to_string_lossy().to_string();
     let openclaw_home = docker_openclaw_home(artifacts, &info.slug);
     let openclaw_state_dir = docker_openclaw_state_dir(artifacts, &info.slug);
-    let step_artifacts = build_docker_instance_artifacts(artifacts, &info, &repo_str, &openclaw_home);
+    let step_artifacts =
+        build_docker_instance_artifacts(artifacts, &info, &repo_str, &openclaw_home);
 
     match step {
         InstallStep::Precheck => {
@@ -302,7 +313,8 @@ pub fn run_step(
             })
         }
         InstallStep::Verify => {
-            let compose_check = docker_verify_compose_command(&repo_str, &openclaw_state_dir, &info);
+            let compose_check =
+                docker_verify_compose_command(&repo_str, &openclaw_state_dir, &info);
             let compose = run_command("bash", &["-ilc", &compose_check])?;
             let image_tag = info.image_tag();
             let inspect = run_command("docker", &["image", "inspect", &image_tag])?;
@@ -323,21 +335,19 @@ pub fn run_step(
                     let running = ps.stdout.lines().any(|line| {
                         serde_json::from_str::<Value>(line)
                             .ok()
-                            .and_then(|v| v.get("State").and_then(Value::as_str).map(str::to_string))
+                            .and_then(|v| {
+                                v.get("State").and_then(Value::as_str).map(str::to_string)
+                            })
                             .map(|s| s == "running")
                             .unwrap_or(false)
                     });
-                    final_artifacts.insert(
-                        "docker_container_running".to_string(),
-                        Value::Bool(running),
-                    );
+                    final_artifacts
+                        .insert("docker_container_running".to_string(), Value::Bool(running));
                 }
                 Err(_) => {
                     // Non-fatal: container status check failed, skip
-                    final_artifacts.insert(
-                        "docker_container_running".to_string(),
-                        Value::Bool(false),
-                    );
+                    final_artifacts
+                        .insert("docker_container_running".to_string(), Value::Bool(false));
                 }
             }
 
@@ -385,7 +395,11 @@ mod tests {
     fn repo_dir_defaults_to_openclaw_docker() {
         let info = DockerInstanceInfo::from_artifacts(&HashMap::new());
         let path = info.repo_dir().expect("should resolve");
-        assert!(path.ends_with("install/openclaw-docker"), "path={}", path.display());
+        assert!(
+            path.ends_with("install/openclaw-docker"),
+            "path={}",
+            path.display()
+        );
     }
 
     #[test]
@@ -393,7 +407,11 @@ mod tests {
         let a = artifacts_with_id("docker:local-2");
         let info = DockerInstanceInfo::from_artifacts(&a);
         let path = info.repo_dir().expect("should resolve");
-        assert!(path.ends_with("install/openclaw-docker-local-2"), "path={}", path.display());
+        assert!(
+            path.ends_with("install/openclaw-docker-local-2"),
+            "path={}",
+            path.display()
+        );
     }
 
     // --- image tag ---
@@ -444,10 +462,16 @@ mod tests {
     #[test]
     fn gateway_port_offsets_by_instance_number() {
         let a2 = artifacts_with_id("docker:local-2");
-        assert_eq!(DockerInstanceInfo::from_artifacts(&a2).gateway_port(), 18799);
+        assert_eq!(
+            DockerInstanceInfo::from_artifacts(&a2).gateway_port(),
+            18799
+        );
 
         let a3 = artifacts_with_id("docker:local-3");
-        assert_eq!(DockerInstanceInfo::from_artifacts(&a3).gateway_port(), 18809);
+        assert_eq!(
+            DockerInstanceInfo::from_artifacts(&a3).gateway_port(),
+            18809
+        );
     }
 
     #[test]

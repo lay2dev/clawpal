@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use crate::json_util::extract_json_objects;
+use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolIntent {
@@ -101,8 +101,14 @@ fn validate_payload(payload: ToolIntentPayload) -> Option<ToolIntent> {
     Some(ToolIntent {
         tool,
         args,
-        instance: payload.instance.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
-        reason: payload.reason.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
+        instance: payload
+            .instance
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        reason: payload
+            .reason
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
     })
 }
 
@@ -137,7 +143,8 @@ mod tests {
 
     #[test]
     fn parses_embedded_json_tool_intent() {
-        let raw = "先检查。\n{\"tool\":\"clawpal\",\"args\":\"health check --all\",\"reason\":\"验证\"}";
+        let raw =
+            "先检查。\n{\"tool\":\"clawpal\",\"args\":\"health check --all\",\"reason\":\"验证\"}";
         let intent = parse_tool_intent(raw).expect("intent");
         assert_eq!(intent.tool, "clawpal");
         assert_eq!(intent.args, "health check --all");
@@ -165,7 +172,10 @@ mod tests {
             "write"
         );
         assert_eq!(
-            classify_invoke_type("clawpal", "doctor exec --tool sudo --args \"rm -rf /tmp/x\""),
+            classify_invoke_type(
+                "clawpal",
+                "doctor exec --tool sudo --args \"rm -rf /tmp/x\""
+            ),
             "write"
         );
         assert_eq!(classify_invoke_type("openclaw", "doctor --fix"), "write");

@@ -42,6 +42,34 @@ function deriveDockerPaths(instanceId: string): { openclawHome: string; clawpalD
   };
 }
 
+function normalizePathForCompare(raw: string): string {
+  const trimmed = raw.trim().replace(/\\/g, "/");
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+function dockerPathKey(raw: string): string {
+  const normalized = normalizePathForCompare(raw);
+  if (!normalized) return "";
+  const segments = normalized.split("/").filter(Boolean);
+  const clawpalIdx = segments.lastIndexOf(".clawpal");
+  if (clawpalIdx >= 0 && clawpalIdx + 1 < segments.length) {
+    const dir = segments[clawpalIdx + 1];
+    if (dir.startsWith("docker-")) return `docker-dir:${dir.toLowerCase()}`;
+  }
+  const last = segments[segments.length - 1] || "";
+  if (last.startsWith("docker-")) return `docker-dir:${last.toLowerCase()}`;
+  return `path:${normalized.toLowerCase()}`;
+}
+
+function dockerIdKey(rawId: string): string {
+  if (!rawId.startsWith("docker:")) return "";
+  let slug = rawId.slice("docker:".length).trim().toLowerCase();
+  if (!slug) slug = "local";
+  if (slug.startsWith("docker-")) slug = slug.slice("docker-".length);
+  return `docker-id:${slug}`;
+}
+
 interface StartPageProps {
   dockerInstances: DockerInstance[];
   sshHosts: SshHost[];
@@ -82,7 +110,9 @@ export function StartPage({
     if (id === "local") return t("instance.local");
     if (id.startsWith("docker:")) {
       const suffix = id.slice("docker:".length);
-      return suffix ? `Docker ${suffix}` : "Docker";
+      if (!suffix) return "docker-local";
+      if (suffix.startsWith("docker-")) return suffix;
+      return `docker-${suffix}`;
     }
     if (id.startsWith("ssh:")) {
       const suffix = id.slice("ssh:".length);
@@ -100,6 +130,7 @@ export function StartPage({
   const [sshChecked, setSshChecked] = useState<Record<string, boolean>>({});
   const [sshChecking, setSshChecking] = useState<Record<string, boolean>>({});
   const healthPollInFlightRef = useRef(false);
+  const localHealthCursorRef = useRef(0);
   const dockerHealthCursorRef = useRef(0);
 
   // Install dialog
@@ -136,6 +167,30 @@ export function StartPage({
           updates.local = { healthy: status.healthy, agentCount: status.activeAgents };
         } catch {
           updates.local = { healthy: null, agentCount: 0 };
+        }
+
+        const localTargets = registeredInstances
+          .filter((item) => item.instanceType === "local" && item.id !== "local" && !!item.openclawHome)
+          .map((item) => ({
+            id: item.id,
+            openclawHome: item.openclawHome || "",
+            clawpalDataDir: item.clawpalDataDir || "",
+          }));
+        if (localTargets.length > 0) {
+          const idx = localHealthCursorRef.current % localTargets.length;
+          localHealthCursorRef.current = (idx + 1) % localTargets.length;
+          const target = localTargets[idx];
+          try {
+            await api.setActiveOpenclawHome(target.openclawHome);
+            await api.setActiveClawpalDataDir(target.clawpalDataDir || null);
+            const status = await api.getInstanceStatus();
+            updates[target.id] = { healthy: status.healthy, agentCount: status.activeAgents };
+          } catch {
+            updates[target.id] = { healthy: null, agentCount: 0 };
+          } finally {
+            await api.setActiveOpenclawHome(null);
+            await api.setActiveClawpalDataDir(null);
+          }
         }
 
         const dockerTargetsById = new Map<string, {
@@ -244,17 +299,42 @@ export function StartPage({
     }
   }, []);
 
+  const toCardType = useCallback((instanceType: string, instanceId: string): "local" | "docker" | "ssh" | "wsl2" => {
+    if (instanceType === "remote_ssh") return "ssh";
+    if (instanceType === "docker") return "docker";
+    if (instanceType === "wsl2" || instanceId.startsWith("wsl2:")) return "wsl2";
+    return "local";
+  }, []);
+
   // Build unified instances list
-  const instancesMap = new Map<string, { id: string; label: string; type: "local" | "docker" | "ssh" }>();
+  const instancesMap = new Map<string, { id: string; label: string; type: "local" | "docker" | "ssh" | "wsl2" }>();
   instancesMap.set("local", { id: "local", label: t("instance.local"), type: "local" });
   for (const r of registeredInstances) {
     instancesMap.set(r.id, {
       id: r.id,
-      label: r.id === "local" ? t("instance.local") : (r.label || r.id),
-      type: r.instanceType === "remote_ssh" ? "ssh" : r.instanceType,
+      label: r.id === "local" ? t("instance.local") : (r.label || fallbackLabelForId(r.id)),
+      type: toCardType(r.instanceType, r.id),
     });
   }
   const instances = Array.from(instancesMap.values());
+  const knownDockerKeys = new Set<string>();
+  for (const item of registeredInstances) {
+    if (item.instanceType !== "docker") continue;
+    const idKey = dockerIdKey(item.id);
+    if (idKey) knownDockerKeys.add(idKey);
+    if (item.openclawHome) {
+      const pathKey = dockerPathKey(item.openclawHome);
+      if (pathKey) knownDockerKeys.add(pathKey);
+    }
+  }
+  for (const item of dockerInstances) {
+    const idKey = dockerIdKey(item.id);
+    if (idKey) knownDockerKeys.add(idKey);
+    if (item.openclawHome) {
+      const pathKey = dockerPathKey(item.openclawHome);
+      if (pathKey) knownDockerKeys.add(pathKey);
+    }
+  }
 
   // Docker rename handlers
   const openDockerRename = useCallback((instance: DockerInstance) => {
@@ -355,13 +435,21 @@ export function StartPage({
         })}
 
         {discoveredInstances
-          .filter((d) => !d.alreadyRegistered)
+          .filter((d) => {
+            if (d.alreadyRegistered) return false;
+            if (d.instanceType !== "docker") return true;
+            const idKey = dockerIdKey(d.id);
+            if (idKey && knownDockerKeys.has(idKey)) return false;
+            const pathKey = dockerPathKey(d.homePath);
+            if (pathKey && knownDockerKeys.has(pathKey)) return false;
+            return true;
+          })
           .map((d) => (
             <InstanceCard
               key={`discovered-${d.id}`}
               id={d.id}
               label={d.label}
-              type={d.instanceType === "docker" ? "docker" : "local"}
+              type={toCardType(d.instanceType, d.id)}
               healthy={null}
               agentCount={0}
               opened={false}
@@ -391,7 +479,6 @@ export function StartPage({
         onOpenChange={setInstallDialogOpen}
         showToast={showToast}
         onNavigate={onNavigate}
-        existingInstances={registeredInstances}
         onReady={(session: InstallSession) => {
           setInstallDialogOpen(false);
           onInstallReady(session);

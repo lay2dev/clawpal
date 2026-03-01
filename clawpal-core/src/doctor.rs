@@ -36,7 +36,11 @@ pub fn delete_json_path(value: &mut Value, dotted_path: &str) -> bool {
     false
 }
 
-pub fn upsert_json_path(value: &mut Value, dotted_path: &str, next_value: Value) -> Result<(), String> {
+pub fn upsert_json_path(
+    value: &mut Value,
+    dotted_path: &str,
+    next_value: Value,
+) -> Result<(), String> {
     let parts: Vec<&str> = dotted_path
         .split('.')
         .map(str::trim)
@@ -395,7 +399,10 @@ pub fn rescue_cleanup_noop(
     if details.contains("profile") && details.contains("not found") {
         return true;
     }
-    if command.len() >= 2 && command[command.len() - 2] == "gateway" && command[command.len() - 1] == "stop" {
+    if command.len() >= 2
+        && command[command.len() - 2] == "gateway"
+        && command[command.len() - 1] == "stop"
+    {
         return details.contains("not running")
             || details.contains("already stopped")
             || details.contains("isn't running")
@@ -410,9 +417,10 @@ pub fn rescue_cleanup_noop(
             || details.contains("isn't installed")
             || details.contains("is not installed");
     }
-    if command.windows(3).any(|window| {
-        window[0] == "config" && window[1] == "unset" && window[2] == "gateway.port"
-    }) {
+    if command
+        .windows(3)
+        .any(|window| window[0] == "config" && window[1] == "unset" && window[2] == "gateway.port")
+    {
         return details.contains("not found")
             || details.contains("not set")
             || details.contains("does not exist")
@@ -1228,7 +1236,10 @@ mod tests {
 
     #[test]
     fn parse_rescue_port_value_supports_number_and_string() {
-        assert_eq!(parse_rescue_port_value(&serde_json::json!(19789)), Some(19789));
+        assert_eq!(
+            parse_rescue_port_value(&serde_json::json!(19789)),
+            Some(19789)
+        );
         assert_eq!(
             parse_rescue_port_value(&serde_json::json!("19789")),
             Some(19789)
@@ -1408,7 +1419,10 @@ mod tests {
             "unknown.issue".to_string(),
         ];
         let applied = apply_issue_fixes(&mut doc, &ids).expect("apply fixes");
-        assert_eq!(applied, vec!["field.agents".to_string(), "field.port".to_string()]);
+        assert_eq!(
+            applied,
+            vec!["field.agents".to_string(), "field.port".to_string()]
+        );
         assert_eq!(
             json_path_get(&doc, "agents.defaults.model")
                 .and_then(Value::as_str)

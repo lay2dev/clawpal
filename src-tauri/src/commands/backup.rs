@@ -43,8 +43,6 @@ pub async fn remote_backup_before_upgrade(
     })
 }
 
-
-
 #[tauri::command]
 pub async fn remote_list_backups(
     pool: State<'_, SshConnectionPool>,
@@ -115,8 +113,6 @@ pub async fn remote_list_backups(
     Ok(backups)
 }
 
-
-
 #[tauri::command]
 pub async fn remote_restore_from_backup(
     pool: State<'_, SshConnectionPool>,
@@ -144,8 +140,6 @@ pub async fn remote_restore_from_backup(
 
     Ok(format!("Restored from backup '{}'", backup_name))
 }
-
-
 
 #[tauri::command]
 pub async fn remote_run_openclaw_upgrade(
@@ -191,8 +185,6 @@ pub async fn remote_run_openclaw_upgrade(
 
     Ok(combined)
 }
-
-
 
 #[tauri::command]
 pub async fn remote_check_openclaw_update(
@@ -280,8 +272,6 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
     })
 }
 
-
-
 #[tauri::command]
 pub fn list_backups() -> Result<Vec<BackupInfo>, String> {
     let paths = resolve_paths();
@@ -317,8 +307,6 @@ pub fn list_backups() -> Result<Vec<BackupInfo>, String> {
     Ok(backups)
 }
 
-
-
 #[tauri::command]
 pub fn restore_from_backup(backup_name: String) -> Result<String, String> {
     let paths = resolve_paths();
@@ -344,8 +332,6 @@ pub fn restore_from_backup(backup_name: String) -> Result<String, String> {
     Ok(format!("Restored from backup '{}'", backup_name))
 }
 
-
-
 #[tauri::command]
 pub fn delete_backup(backup_name: String) -> Result<bool, String> {
     let paths = resolve_paths();
@@ -356,8 +342,6 @@ pub fn delete_backup(backup_name: String) -> Result<bool, String> {
     fs::remove_dir_all(&backup_dir).map_err(|e| format!("Failed to delete backup: {e}"))?;
     Ok(true)
 }
-
-
 
 #[tauri::command]
 pub async fn remote_delete_backup(
@@ -374,8 +358,6 @@ pub async fn remote_delete_backup(
     let result = pool.exec_login(&host_id, &cmd).await?;
     Ok(result.stdout.trim() == "deleted")
 }
-
-
 
 #[tauri::command]
 pub fn check_openclaw_update() -> Result<OpenclawUpdateCheck, String> {

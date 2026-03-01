@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::models::resolve_paths;
 use base64::Engine;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, SigningKey};
@@ -8,14 +9,9 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
-use crate::models::resolve_paths;
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::Message,
-    MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
@@ -63,7 +59,12 @@ impl NodeClient {
         }
     }
 
-    pub async fn connect(&self, url: &str, app: AppHandle, creds: Option<GatewayCredentials>) -> Result<(), String> {
+    pub async fn connect(
+        &self,
+        url: &str,
+        app: AppHandle,
+        creds: Option<GatewayCredentials>,
+    ) -> Result<(), String> {
         // Disconnect existing connection if any
         self.disconnect().await?;
 
@@ -97,23 +98,23 @@ impl NodeClient {
                 match msg {
                     Ok(Message::Text(text)) => {
                         if let Ok(frame) = serde_json::from_str::<Value>(&text) {
-                            Self::handle_frame(
-                                frame,
-                                &inner_ref,
-                                &app_clone,
-                            )
-                            .await;
+                            Self::handle_frame(frame, &inner_ref, &app_clone).await;
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        let _ = app_clone.emit("doctor:disconnected", json!({"reason": "server closed"}));
+                        let _ = app_clone
+                            .emit("doctor:disconnected", json!({"reason": "server closed"}));
                         let mut guard = inner_ref.lock().await;
                         *guard = None;
                         break;
                     }
                     Err(e) => {
-                        let _ = app_clone.emit("doctor:error", json!({"message": format!("WebSocket error: {e}")}));
-                        let _ = app_clone.emit("doctor:disconnected", json!({"reason": format!("{e}")}));
+                        let _ = app_clone.emit(
+                            "doctor:error",
+                            json!({"message": format!("WebSocket error: {e}")}),
+                        );
+                        let _ = app_clone
+                            .emit("doctor:disconnected", json!({"reason": format!("{e}")}));
                         let mut guard = inner_ref.lock().await;
                         *guard = None;
                         break;
@@ -236,7 +237,8 @@ impl NodeClient {
             let signing_key = SigningKey::from_pkcs8_pem(&c.private_key_pem)
                 .map_err(|e| format!("Failed to parse remote Ed25519 private key: {e}"))?;
             let raw_public = signing_key.verifying_key().to_bytes();
-            let public_key_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_public);
+            let public_key_b64 =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_public);
             (c.token, c.device_id, signing_key, public_key_b64)
         } else {
             // Use local credentials
@@ -245,7 +247,8 @@ impl NodeClient {
                 .ok()
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
                 .and_then(|config| {
-                    config.get("gateway")?
+                    config
+                        .get("gateway")?
                         .get("auth")?
                         .get("token")?
                         .as_str()
@@ -291,7 +294,7 @@ impl NodeClient {
             &device_id,
             &scopes,
             signed_at,
-            &token,  // gateway auth token, same as connect.params.auth.token
+            &token, // gateway auth token, same as connect.params.auth.token
             &nonce,
         );
 
@@ -307,21 +310,26 @@ impl NodeClient {
             device["nonce"] = json!(nonce);
         }
 
-        let result = self.send_request("connect", json!({
-            "minProtocol": 3,
-            "maxProtocol": 3,
-            "auth": { "token": token },
-            "role": "operator",
-            "scopes": scopes,
-            "device": device,
-            "client": {
-                "id": "cli",
-                "displayName": "ClawPal",
-                "platform": std::env::consts::OS,
-                "mode": "cli",
-                "version": version,
-            },
-        })).await?;
+        let result = self
+            .send_request(
+                "connect",
+                json!({
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": token },
+                    "role": "operator",
+                    "scopes": scopes,
+                    "device": device,
+                    "client": {
+                        "id": "cli",
+                        "displayName": "ClawPal",
+                        "platform": std::env::consts::OS,
+                        "mode": "cli",
+                        "version": version,
+                    },
+                }),
+            )
+            .await?;
 
         let _ = result;
         Ok(())
@@ -361,7 +369,8 @@ impl NodeClient {
                     "chat" => {
                         let state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
                         let is_final = state == "final";
-                        let text = payload.get("message")
+                        let text = payload
+                            .get("message")
                             .and_then(|m| m.get("content"))
                             .and_then(|c| c.as_array())
                             .and_then(|arr| arr.first())

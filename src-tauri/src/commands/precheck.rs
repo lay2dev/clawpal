@@ -23,8 +23,7 @@ pub async fn precheck_transport(
     pool: State<'_, SshConnectionPool>,
     instance_id: String,
 ) -> Result<Vec<PrecheckIssue>, String> {
-    let registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+    let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
     let instance = registry
         .get(&instance_id)
         .ok_or_else(|| format!("Instance not found: {instance_id}"))?;
@@ -72,8 +71,7 @@ pub async fn precheck_transport(
 #[tauri::command]
 pub async fn precheck_auth(instance_id: String) -> Result<Vec<PrecheckIssue>, String> {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    let profiles =
-        clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
+    let profiles = clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
     let _ = instance_id; // reserved for future per-instance profile filtering
     Ok(precheck::precheck_auth(&profiles))
 }

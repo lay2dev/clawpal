@@ -9,7 +9,13 @@ pub fn build_probe_plan_for_local() -> Vec<String> {
     ]
 }
 
-pub fn run_probe_with_redaction(probe_id: &str, command: &str, output: &str, ok: bool, elapsed_ms: u64) -> ProbeResult {
+pub fn run_probe_with_redaction(
+    probe_id: &str,
+    command: &str,
+    output: &str,
+    ok: bool,
+    elapsed_ms: u64,
+) -> ProbeResult {
     ProbeResult {
         probe_id: probe_id.to_string(),
         command: command.to_string(),

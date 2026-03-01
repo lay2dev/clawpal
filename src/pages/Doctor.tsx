@@ -131,8 +131,10 @@ export function Doctor({
   const ua = useApi();
   const { instanceId, isDocker, isRemote, isConnected } = useInstance();
   const doctor = useDoctorAgent();
+  const [remoteConnState, setRemoteConnState] = useState<"checking" | "connected" | "disconnected">("checking");
 
   const [diagnosing, setDiagnosing] = useState(false);
+  const [startupStage, setStartupStage] = useState<"idle" | "connecting" | "collecting" | "starting">("idle");
   const [startError, setStartError] = useState<string | null>(null);
 
   // Backups state
@@ -198,6 +200,7 @@ export function Doctor({
   const handleStartDiagnosis = async (extraContext?: string) => {
     setStartError(null);
     setDiagnosing(true);
+    setStartupStage("connecting");
     try {
       if (isRemote && !instanceId.trim()) {
         throw new Error(t("doctor.targetUnavailable"));
@@ -209,13 +212,16 @@ export function Doctor({
           : "local";
 
       if (isRemote) {
+        setRemoteConnState("checking");
         const status = await ua.sshStatus(instanceId);
         if (status !== "connected") {
           await ua.sshConnect(instanceId);
         }
+        setRemoteConnState("connected");
       }
 
       await doctor.connect();
+      setStartupStage("collecting");
       const baseContext = isRemote
         ? await ua.collectDoctorContextRemote(instanceId)
         : await ua.collectDoctorContext();
@@ -227,14 +233,27 @@ export function Doctor({
         : isDocker
           ? "docker_local"
           : "local";
+      setStartupStage("starting");
       await doctor.startDiagnosis(context, "main", diagnosisScope, diagnosisTransport);
     } catch (err) {
       const msg = String(err);
       setStartError(msg);
+      if (isRemote) {
+        setRemoteConnState("disconnected");
+      }
     } finally {
       setDiagnosing(false);
+      setStartupStage("idle");
     }
   };
+
+  const startupHint = diagnosing && doctor.messages.length === 0
+    ? (startupStage === "collecting"
+      ? t("doctor.startupCollecting")
+      : startupStage === "starting"
+        ? t("doctor.startupStarting")
+        : t("doctor.startupConnecting"))
+    : null;
 
   const handleStopDiagnosis = async () => {
     await doctor.disconnect();
@@ -247,7 +266,7 @@ export function Doctor({
     const fn = source === "clawpal"
       ? (which === "app" ? ua.readAppLog : ua.readErrorLog)
       : (which === "app" ? ua.readGatewayLog : ua.readGatewayErrorLog);
-    fn(500)
+    fn(200)
       .then((text) => {
         setLogsContent(text);
         setTimeout(() => {
@@ -578,12 +597,45 @@ export function Doctor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logsOpen, logsSource, logsTab]);
 
+  useEffect(() => {
+    if (!isRemote) {
+      setRemoteConnState("connected");
+      return;
+    }
+    let cancelled = false;
+    setRemoteConnState("checking");
+    ua.sshStatus(instanceId)
+      .then((status) => {
+        if (!cancelled) {
+          setRemoteConnState(status === "connected" ? "connected" : "disconnected");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRemoteConnState("disconnected");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ua, instanceId, isRemote]);
+
   // Backups
   const refreshBackups = useCallback(() => {
     ua.listBackups().then(setBackups).catch((e) => console.error("Failed to load backups:", e));
   }, [ua]);
   useEffect(refreshBackups, [refreshBackups]);
   const showLegacyRecoveryCards = false;
+  const isWsl2 = instanceId.startsWith("wsl2:");
+  const displayedDoctorTarget = isRemote || isDocker || isWsl2 ? instanceId : "local";
+  const instanceTypeLabel = isRemote
+    ? t("doctor.targetTypeSsh")
+    : isDocker
+      ? t("doctor.targetTypeDocker")
+      : isWsl2
+        ? t("doctor.targetTypeWsl2")
+        : t("doctor.targetTypeLocal");
+  const isPureLocal = !isRemote && !isDocker && !isWsl2;
 
   return (
     <section>
@@ -888,9 +940,29 @@ export function Doctor({
 
       <Card className="gap-2 py-4">
         <CardHeader className="pb-0">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-base">{t("doctor.agentSource")}</CardTitle>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <span className="text-xs text-muted-foreground">{t("doctor.targetExecutionLabel")}</span>
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{displayedDoctorTarget}</code>
+              <Badge variant="outline" className="text-[10px]">{instanceTypeLabel}</Badge>
+              {isRemote && (
+                <Badge
+                  variant={remoteConnState === "disconnected" ? "destructive" : "outline"}
+                  className="text-[10px]"
+                >
+                  {remoteConnState === "checking"
+                    ? t("doctor.connecting")
+                    : remoteConnState === "connected"
+                      ? t("doctor.connected")
+                      : t("doctor.disconnected")}
+                </Badge>
+              )}
+              {isPureLocal && (
+                <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                  {t("doctor.targetExecutionLocalWarning")}
+                </span>
+              )}
               <Button variant="ghost" size="sm" onClick={() => openLogs("clawpal")}>
                 {t("doctor.clawpalLogs")}
               </Button>
@@ -908,6 +980,11 @@ export function Doctor({
               )}
               {doctor.error && (
                 <div className="mb-3 text-sm text-destructive">{doctor.error}</div>
+              )}
+              {startupHint && (
+                <div className="mb-3 text-sm text-muted-foreground animate-pulse">
+                  {startupHint}
+                </div>
               )}
               <Button onClick={() => { void handleStartDiagnosis(); }} disabled={diagnosing}>
                 {diagnosing ? t("doctor.connecting") : t("doctor.startDiagnosis")}
@@ -941,6 +1018,11 @@ export function Doctor({
             </>
           ) : (
             <>
+              {startupHint && (
+                <div className="mb-3 text-sm text-muted-foreground animate-pulse">
+                  {startupHint}
+                </div>
+              )}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="text-xs">

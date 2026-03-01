@@ -21,7 +21,8 @@ pub struct ChannelWithBinding {
 }
 
 pub fn parse_guild_channels(raw: &str) -> Result<Vec<GuildChannel>, String> {
-    let cfg: Value = serde_json::from_str(raw).map_err(|e| format!("Failed to parse discord config: {e}"))?;
+    let cfg: Value =
+        serde_json::from_str(raw).map_err(|e| format!("Failed to parse discord config: {e}"))?;
     let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
 
     let mut out = Vec::new();
@@ -110,7 +111,10 @@ pub fn parse_guild_channels(raw: &str) -> Result<Vec<GuildChannel>, String> {
     Ok(out)
 }
 
-pub fn merge_channel_bindings(channels: &[GuildChannel], bindings: &str) -> Vec<ChannelWithBinding> {
+pub fn merge_channel_bindings(
+    channels: &[GuildChannel],
+    bindings: &str,
+) -> Vec<ChannelWithBinding> {
     let parsed = parse_bindings(bindings).unwrap_or_default();
     channels
         .iter()
@@ -123,7 +127,9 @@ pub fn merge_channel_bindings(channels: &[GuildChannel], bindings: &str) -> Vec<
                 let gid = m.get("guildId").and_then(Value::as_str)?;
                 let cid = m.pointer("/peer/id").and_then(Value::as_str)?;
                 if gid == c.guild_id && cid == c.channel_id {
-                    b.get("agentId").and_then(Value::as_str).map(ToString::to_string)
+                    b.get("agentId")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
                 } else {
                     None
                 }
@@ -140,7 +146,8 @@ pub fn merge_channel_bindings(channels: &[GuildChannel], bindings: &str) -> Vec<
 }
 
 pub fn parse_bindings(raw: &str) -> Result<Vec<Value>, String> {
-    let value: Value = serde_json::from_str(raw).map_err(|e| format!("Failed to parse bindings: {e}"))?;
+    let value: Value =
+        serde_json::from_str(raw).map_err(|e| format!("Failed to parse bindings: {e}"))?;
     Ok(value.as_array().cloned().unwrap_or_default())
 }
 
@@ -167,7 +174,8 @@ mod tests {
             channel_id: "c".into(),
             channel_name: "c".into(),
         }];
-        let bindings = r#"[{"match":{"channel":"discord","guildId":"g","peer":{"id":"c"}},"agentId":"main"}]"#;
+        let bindings =
+            r#"[{"match":{"channel":"discord","guildId":"g","peer":{"id":"c"}},"agentId":"main"}]"#;
         let out = merge_channel_bindings(&channels, bindings);
         assert_eq!(out[0].agent_id.as_deref(), Some("main"));
     }

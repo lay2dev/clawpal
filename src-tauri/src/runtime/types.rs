@@ -122,8 +122,16 @@ impl RuntimeEvent {
 
 pub trait RuntimeAdapter {
     fn engine_name(&self) -> &'static str;
-    fn start(&self, _key: &RuntimeSessionKey, _message: &str) -> Result<Vec<RuntimeEvent>, RuntimeError>;
-    fn send(&self, _key: &RuntimeSessionKey, _message: &str) -> Result<Vec<RuntimeEvent>, RuntimeError>;
+    fn start(
+        &self,
+        _key: &RuntimeSessionKey,
+        _message: &str,
+    ) -> Result<Vec<RuntimeEvent>, RuntimeError>;
+    fn send(
+        &self,
+        _key: &RuntimeSessionKey,
+        _message: &str,
+    ) -> Result<Vec<RuntimeEvent>, RuntimeError>;
 }
 use serde_json::Value;
 
@@ -134,9 +142,18 @@ mod tests {
     #[test]
     fn new_error_codes_have_correct_string_repr() {
         assert_eq!(RuntimeErrorCode::AuthExpired.as_str(), "AUTH_EXPIRED");
-        assert_eq!(RuntimeErrorCode::AuthMisconfigured.as_str(), "AUTH_MISCONFIGURED");
-        assert_eq!(RuntimeErrorCode::RegistryCorrupt.as_str(), "REGISTRY_CORRUPT");
-        assert_eq!(RuntimeErrorCode::InstanceOrphaned.as_str(), "INSTANCE_ORPHANED");
+        assert_eq!(
+            RuntimeErrorCode::AuthMisconfigured.as_str(),
+            "AUTH_MISCONFIGURED"
+        );
+        assert_eq!(
+            RuntimeErrorCode::RegistryCorrupt.as_str(),
+            "REGISTRY_CORRUPT"
+        );
+        assert_eq!(
+            RuntimeErrorCode::InstanceOrphaned.as_str(),
+            "INSTANCE_ORPHANED"
+        );
         assert_eq!(RuntimeErrorCode::TransportStale.as_str(), "TRANSPORT_STALE");
     }
 }

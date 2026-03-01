@@ -106,10 +106,7 @@ pub fn run_step(
             }
             Ok(RunnerOutput {
                 summary: "install.local.init.summary".to_string(),
-                details: format!(
-                    "install.local.init.details:{}",
-                    paths.base_dir.display()
-                ),
+                details: format!("install.local.init.details:{}", paths.base_dir.display()),
                 commands: vec![format!("mkdir -p {}", paths.base_dir.display())],
                 artifacts: HashMap::from([
                     (

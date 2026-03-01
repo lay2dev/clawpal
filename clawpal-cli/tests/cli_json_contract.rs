@@ -41,8 +41,14 @@ fn ssh_disconnect_outputs_json_object() {
     let dir = temp_data_dir();
     let (code, json) = run_cli(&["ssh", "disconnect", "demo-host"], &dir);
     assert_eq!(code, 0);
-    assert_eq!(json.get("hostId").and_then(|v| v.as_str()), Some("demo-host"));
-    assert_eq!(json.get("disconnected").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        json.get("hostId").and_then(|v| v.as_str()),
+        Some("demo-host")
+    );
+    assert_eq!(
+        json.get("disconnected").and_then(|v| v.as_bool()),
+        Some(true)
+    );
 }
 
 #[test]

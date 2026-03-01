@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus, ZeroclawUsageStats } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus, ZeroclawRuntimeTarget, ZeroclawUsageStats } from "./types";
 
 export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
@@ -10,6 +10,8 @@ export const api = {
     invoke("get_app_preferences", {}),
   getZeroclawUsageStats: (): Promise<ZeroclawUsageStats> =>
     invoke("get_zeroclaw_usage_stats", {}),
+  getZeroclawRuntimeTarget: (): Promise<ZeroclawRuntimeTarget> =>
+    invoke("get_zeroclaw_runtime_target", {}),
   setZeroclawModelPreference: (model: string | null): Promise<AppPreferences> =>
     invoke("set_zeroclaw_model_preference", { model }),
   explainOperationError: (
@@ -251,6 +253,8 @@ export const api = {
     invoke("remote_test_model_profile", { hostId, profileId }),
   remoteResolveApiKeys: (hostId: string): Promise<ResolvedApiKey[]> =>
     invoke("remote_resolve_api_keys", { hostId }),
+  remoteSyncProfilesToLocalAuth: (hostId: string): Promise<RemoteAuthSyncResult> =>
+    invoke("remote_sync_profiles_to_local_auth", { hostId }),
   remoteExtractModelProfilesFromConfig: (hostId: string): Promise<{ created: number; reused: number; skippedInvalid: number }> =>
     invoke("remote_extract_model_profiles_from_config", { hostId }),
   remoteRefreshModelCatalog: (hostId: string): Promise<ModelCatalogProvider[]> =>

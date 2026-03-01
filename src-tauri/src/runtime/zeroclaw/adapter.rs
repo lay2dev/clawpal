@@ -74,10 +74,8 @@ impl ZeroclawDoctorAdapter {
         let reason = intent
             .reason
             .unwrap_or_else(|| "需要执行命令以继续诊断。".to_string());
-        let invoke_type = crate::runtime::zeroclaw::tool_intent::classify_invoke_type(
-            &intent.tool,
-            &intent.args,
-        );
+        let invoke_type =
+            crate::runtime::zeroclaw::tool_intent::classify_invoke_type(&intent.tool, &intent.args);
         let payload = json!({
             "id": format!("zc-{}", uuid::Uuid::new_v4()),
             "command": intent.tool,
@@ -101,6 +99,13 @@ impl ZeroclawDoctorAdapter {
             "CONFIG_MISSING" => RuntimeErrorCode::ConfigMissing,
             "MODEL_UNAVAILABLE" => RuntimeErrorCode::ModelUnavailable,
             "RUNTIME_UNREACHABLE" => RuntimeErrorCode::RuntimeUnreachable,
+            "SESSION_INVALID" => RuntimeErrorCode::SessionInvalid,
+            "TARGET_UNREACHABLE" => RuntimeErrorCode::TargetUnreachable,
+            "AUTH_EXPIRED" => RuntimeErrorCode::AuthExpired,
+            "AUTH_MISCONFIGURED" => RuntimeErrorCode::AuthMisconfigured,
+            "REGISTRY_CORRUPT" => RuntimeErrorCode::RegistryCorrupt,
+            "INSTANCE_ORPHANED" => RuntimeErrorCode::InstanceOrphaned,
+            "TRANSPORT_STALE" => RuntimeErrorCode::TransportStale,
             _ => RuntimeErrorCode::Unknown,
         };
         RuntimeError {
@@ -160,6 +165,7 @@ impl RuntimeAdapter for ZeroclawDoctorAdapter {
 #[cfg(test)]
 mod tests {
     use super::ZeroclawDoctorAdapter;
+    use crate::runtime::types::RuntimeErrorCode;
 
     #[test]
     fn parse_tool_intent_handles_mixed_text_with_embedded_json() {
@@ -191,5 +197,19 @@ mod tests {
     fn infer_language_rule_defaults_to_english() {
         let rule = ZeroclawDoctorAdapter::infer_language_rule("Respond in English.");
         assert_eq!(rule, "English");
+    }
+
+    #[test]
+    fn map_error_recognizes_auth_expired() {
+        let err = ZeroclawDoctorAdapter::map_error("unauthorized: invalid api key".to_string());
+        assert_eq!(err.code, RuntimeErrorCode::AuthExpired);
+    }
+
+    #[test]
+    fn map_error_recognizes_registry_corrupt() {
+        let err = ZeroclawDoctorAdapter::map_error(
+            "instances.json parse failed: invalid json".to_string(),
+        );
+        assert_eq!(err.code, RuntimeErrorCode::RegistryCorrupt);
     }
 }

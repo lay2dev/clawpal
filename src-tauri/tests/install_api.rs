@@ -1,12 +1,12 @@
-use clawpal::install::types::InstallSession;
+use clawpal::cli_runner::set_active_clawpal_data_override;
+use clawpal::cli_runner::set_active_openclaw_home_override;
 use clawpal::install::commands::{
     create_session_for_test, failed_state_for_test, get_session_for_test, list_methods_for_test,
     orchestrator_next_for_test, orchestrator_next_with_sidecar_for_test,
     run_local_precheck_for_test, run_step_for_test,
 };
 use clawpal::install::runners::docker::docker_verify_compose_command_for_test;
-use clawpal::cli_runner::set_active_openclaw_home_override;
-use clawpal::cli_runner::set_active_clawpal_data_override;
+use clawpal::install::types::InstallSession;
 use clawpal::models::resolve_paths;
 use std::sync::Mutex;
 
@@ -25,7 +25,8 @@ fn install_session_serialization_roundtrip() {
         "updated_at": "2026-02-24T00:00:00Z"
     }"#;
 
-    let parsed: InstallSession = serde_json::from_str(json).expect("session json should deserialize");
+    let parsed: InstallSession =
+        serde_json::from_str(json).expect("session json should deserialize");
     assert_eq!(parsed.method.as_str(), "local");
     assert_eq!(parsed.state.as_str(), "idle");
 }
@@ -142,7 +143,9 @@ async fn orchestrator_sidecar_timeout_returns_error_decision() {
         "#!/bin/sh\nsleep 2\necho '{\"step\":\"precheck\",\"reason\":\"slow\"}'\n",
     )
     .expect("write script");
-    let mut perms = fs::metadata(&script_path).expect("stat script").permissions();
+    let mut perms = fs::metadata(&script_path)
+        .expect("stat script")
+        .permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&script_path, perms).expect("chmod script");
 
@@ -155,7 +158,11 @@ async fn orchestrator_sidecar_timeout_returns_error_decision() {
     std::env::remove_var("CLAWPAL_ZEROCLAW_TIMEOUT_SECS");
 
     assert_eq!(decision.source, "error");
-    assert!(decision.reason.to_lowercase().contains("timed out"), "reason={}", decision.reason);
+    assert!(
+        decision.reason.to_lowercase().contains("timed out"),
+        "reason={}",
+        decision.reason
+    );
     assert_eq!(decision.error_code.as_deref(), Some("network_error"));
 
     let _ = fs::remove_file(&script_path);

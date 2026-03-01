@@ -7,6 +7,7 @@ interface InstanceTabBarProps {
   activeId: string | null;
   startActive: boolean;
   connectionStatus: Record<string, "connected" | "disconnected" | "error">;
+  appVersion?: string;
   onSelectStart: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
@@ -17,6 +18,7 @@ export function InstanceTabBar({
   activeId,
   startActive,
   connectionStatus,
+  appVersion,
   onSelectStart,
   onSelect,
   onClose,
@@ -46,6 +48,7 @@ export function InstanceTabBar({
           )}
           onClick={onSelectStart}
         >
+          <span aria-hidden>🧭</span>
           {t("instance.start")}
         </button>
       </div>
@@ -81,6 +84,9 @@ export function InstanceTabBar({
             </button>
           </div>
         ))}
+      </div>
+      <div className="shrink-0 pl-2 text-xs text-muted-foreground/80">
+        {appVersion ? `v${appVersion}` : ""}
       </div>
     </div>
   );

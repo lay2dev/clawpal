@@ -161,20 +161,22 @@ export function Home({
   // emit guidance so Doctor Claw can walk the user through remaining configuration.
   useEffect(() => {
     if (!statusSettled || !status) return;
-    const needsSetup = !status.healthy || modelProfiles.length === 0 || !status.globalDefaultModel;
+    const remote = ua.isRemote;
+    // Model profiles/default model are global host-level concerns, not remote-instance-local setup.
+    const needsSetup = !status.healthy || (!remote && (modelProfiles.length === 0 || !status.globalDefaultModel));
     if (!needsSetup) return;
     const issues: string[] = [];
     if (!status.healthy) issues.push("unhealthy");
-    if (modelProfiles.length === 0) issues.push("no_profiles");
-    if (!status.globalDefaultModel) issues.push("no_default_model");
+    if (!remote && modelProfiles.length === 0) issues.push("no_profiles");
+    if (!remote && !status.globalDefaultModel) issues.push("no_default_model");
     const signature = `${ua.instanceId}:onboarding:${issues.join(",")}`;
     if (onboardingGuidanceSigRef.current === signature) return;
     onboardingGuidanceSigRef.current = signature;
     const transport = ua.isRemote ? "remote_ssh" : (ua.isDocker ? "docker_local" : "local");
     const actions: string[] = [];
     if (!status.healthy) actions.push(t("onboarding.actionCheckDoctor"));
-    if (modelProfiles.length === 0) actions.push(t("onboarding.actionAddProfile"));
-    if (!status.globalDefaultModel && modelProfiles.length > 0) actions.push(t("onboarding.actionSetDefault"));
+    if (!remote && modelProfiles.length === 0) actions.push(t("onboarding.actionAddProfile"));
+    if (!remote && !status.globalDefaultModel && modelProfiles.length > 0) actions.push(t("onboarding.actionSetDefault"));
     window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
       detail: {
         message: t("onboarding.summary"),

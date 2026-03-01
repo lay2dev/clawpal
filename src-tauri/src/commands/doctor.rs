@@ -24,15 +24,14 @@ pub async fn remote_run_doctor(
     }))
 }
 
-
-
 #[tauri::command]
 pub async fn remote_fix_issues(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     ids: Vec<String>,
 ) -> Result<FixResult, String> {
-    let (config_path, raw, _cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+    let (config_path, raw, _cfg) =
+        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
     let mut cfg = clawpal_core::doctor::parse_json5_document_or_default(&raw);
     let applied = clawpal_core::doctor::apply_issue_fixes(&mut cfg, &ids)?;
 
@@ -49,8 +48,6 @@ pub async fn remote_fix_issues(
     })
 }
 
-
-
 #[tauri::command]
 pub async fn remote_get_system_status(
     pool: State<'_, SshConnectionPool>,
@@ -58,11 +55,7 @@ pub async fn remote_get_system_status(
 ) -> Result<StatusLight, String> {
     // Tier 1: fast, essential — health check + agents config (2 SSH calls in parallel)
     let (config_res, pgrep_res) = tokio::join!(
-        run_openclaw_remote_with_autofix(
-            &pool,
-            &host_id,
-            &["config", "get", "agents", "--json"]
-        ),
+        run_openclaw_remote_with_autofix(&pool, &host_id, &["config", "get", "agents", "--json"]),
         pool.exec(&host_id, "pgrep -f '[o]penclaw-gateway' >/dev/null 2>&1"),
     );
 
@@ -115,8 +108,6 @@ pub async fn remote_get_system_status(
         fallback_models,
     })
 }
-
-
 
 #[tauri::command]
 pub async fn remote_get_status_extra(
@@ -229,8 +220,6 @@ pub async fn get_status_light() -> Result<StatusLight, String> {
     .map_err(|e| e.to_string())?
 }
 
-
-
 #[tauri::command]
 pub async fn get_status_extra() -> Result<StatusExtra, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -252,8 +241,6 @@ pub async fn get_status_extra() -> Result<StatusExtra, String> {
     .await
     .map_err(|e| e.to_string())?
 }
-
-
 
 #[tauri::command]
 pub fn get_system_status() -> Result<SystemStatus, String> {
@@ -301,15 +288,11 @@ pub fn get_system_status() -> Result<SystemStatus, String> {
     })
 }
 
-
-
 #[tauri::command]
 pub fn run_doctor_command() -> Result<DoctorReport, String> {
     let paths = resolve_paths();
     Ok(run_doctor(&paths))
 }
-
-
 
 #[tauri::command]
 pub fn fix_issues(ids: Vec<String>) -> Result<FixResult, String> {

@@ -381,6 +381,7 @@ export function App() {
   const [passphraseHostLabel, setPassphraseHostLabel] = useState<string>("");
   const [passphraseOpen, setPassphraseOpen] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState("");
+  const remoteAuthSyncAtRef = useRef<Record<string, number>>({});
   const accessProbeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAccessProbeAtRef = useRef<Record<string, number>>({});
   const profileBootstrapGuidanceSigRef = useRef("");
@@ -745,6 +746,28 @@ export function App() {
     }
   }, [requestPassphrase, sshHosts]);
 
+  const syncRemoteAuthAfterConnect = useCallback(async (hostId: string) => {
+    const now = Date.now();
+    const last = remoteAuthSyncAtRef.current[hostId] || 0;
+    if (now - last < 30_000) return;
+    remoteAuthSyncAtRef.current[hostId] = now;
+    try {
+      const result = await api.remoteSyncProfilesToLocalAuth(hostId);
+      if (result.resolvedKeys > 0 || result.syncedProfiles > 0) {
+        showToast(
+          `已同步远程认证：profiles ${result.syncedProfiles}，keys ${result.resolvedKeys}`,
+          "success",
+        );
+      } else if (result.totalRemoteProfiles > 0) {
+        showToast("远程已有 profiles，但未解析到可用 key（请检查 auth_ref/环境变量）", "error");
+      } else {
+        showToast("远程实例未发现可同步的模型配置", "error");
+      }
+    } catch (e) {
+      showToast(`同步远程认证信息失败：${e}`, "error");
+    }
+  }, [showToast]);
+
 
   const openTab = useCallback((id: string) => {
     startTransition(() => {
@@ -835,11 +858,13 @@ export function App() {
         if (status === "connected") {
           setConnectionStatus((prev) => ({ ...prev, [id]: "connected" }));
           scheduleEnsureAccessForInstance(id, 1500);
+          void syncRemoteAuthAfterConnect(id);
         } else {
           return connectWithPassphraseFallback(id)
             .then(() => {
               setConnectionStatus((prev) => ({ ...prev, [id]: "connected" }));
               scheduleEnsureAccessForInstance(id, 1500);
+              void syncRemoteAuthAfterConnect(id);
             });
         }
       })
@@ -849,6 +874,7 @@ export function App() {
           .then(() => {
             setConnectionStatus((prev) => ({ ...prev, [id]: "connected" }));
             scheduleEnsureAccessForInstance(id, 1500);
+            void syncRemoteAuthAfterConnect(id);
           })
           .catch((e2) => {
             setConnectionStatus((prev) => ({ ...prev, [id]: "error" }));
@@ -857,7 +883,7 @@ export function App() {
             showToast(friendly, "error");
           });
       });
-  }, [activeInstance, resolveInstanceTransport, scheduleEnsureAccessForInstance, connectWithPassphraseFallback, showToast, t, navigateRoute]);
+  }, [activeInstance, inStart, resolveInstanceTransport, scheduleEnsureAccessForInstance, connectWithPassphraseFallback, syncRemoteAuthAfterConnect, showToast, t, navigateRoute]);
 
   const [configVersion, setConfigVersion] = useState(0);
   const [instanceToken, setInstanceToken] = useState(0);
@@ -1147,6 +1173,7 @@ export function App() {
           refreshRegisteredInstances();
           activateRemoteInstance(instance.id, "connected");
           scheduleEnsureAccessForInstance(instance.id, 600);
+          void syncRemoteAuthAfterConnect(instance.id);
         } catch (err) {
           console.warn("connectSshInstance failed during install-ready:", err);
           refreshHosts();
@@ -1176,6 +1203,7 @@ export function App() {
     navigateRoute,
     registeredInstances,
     scheduleEnsureAccessForInstance,
+    syncRemoteAuthAfterConnect,
     showToast,
     t,
   ]);

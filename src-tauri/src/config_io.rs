@@ -22,7 +22,8 @@ pub fn read_text(path: &Path) -> Result<String, String> {
 
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut content = String::new();
-    file.read_to_string(&mut content).map_err(|e| e.to_string())?;
+    file.read_to_string(&mut content)
+        .map_err(|e| e.to_string())?;
     Ok(content)
 }
 
@@ -34,7 +35,8 @@ pub fn write_text(path: &Path, content: &str) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
     {
         let mut file = File::create(&tmp).map_err(|e| e.to_string())?;
-        file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
     }
     fs::rename(&tmp, path).map_err(|e| e.to_string())?;

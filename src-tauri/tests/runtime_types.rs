@@ -2,7 +2,13 @@ use clawpal::runtime::types::{RuntimeDomain, RuntimeEvent, RuntimeSessionKey};
 
 #[test]
 fn runtime_session_key_contains_instance_scope() {
-    let key = RuntimeSessionKey::new("zeroclaw", RuntimeDomain::Doctor, "docker:local", "main", "s1");
+    let key = RuntimeSessionKey::new(
+        "zeroclaw",
+        RuntimeDomain::Doctor,
+        "docker:local",
+        "main",
+        "s1",
+    );
     assert_eq!(key.instance_id, "docker:local");
 }
 

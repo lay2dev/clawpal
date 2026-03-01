@@ -20,6 +20,7 @@ interface GuidanceCardProps {
   instanceLabel: string;
   onClose: () => void;
   onDismiss: () => void;
+  onResolve: () => void;
   onDoctorHandoff: (context?: string) => void;
   onInlineFix: (action: GuidanceAction) => Promise<void>;
 }
@@ -29,6 +30,7 @@ export function GuidanceCard({
   instanceLabel,
   onClose,
   onDismiss,
+  onResolve,
   onDoctorHandoff,
   onInlineFix,
 }: GuidanceCardProps) {
@@ -92,6 +94,13 @@ export function GuidanceCard({
           onClick={onDismiss}
         >
           稍后处理
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onResolve}
+        >
+          标记已解决
         </Button>
       </div>
     </div>

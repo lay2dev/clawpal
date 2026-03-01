@@ -101,19 +101,12 @@ pub async fn run_openclaw_remote_with_env(
     })
 }
 
-fn build_remote_openclaw_command(
-    args: &[&str],
-    env: Option<&HashMap<String, String>>,
-) -> String {
+fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, String>>) -> String {
     let mut cmd_str = String::new();
 
     if let Some(env_vars) = env {
         for (k, v) in env_vars {
-            cmd_str.push_str(&format!(
-                "export {}='{}'; ",
-                k,
-                v.replace('\'', "'\\''")
-            ));
+            cmd_str.push_str(&format!("export {}='{}'; ", k, v.replace('\'', "'\\''")));
         }
     }
 

@@ -21,7 +21,12 @@ pub struct SshHostConfig {
 impl SshHostConfig {
     /// Canonical endpoint key for deduplication: `user@host:port`.
     pub fn endpoint_key(&self) -> String {
-        format!("{}@{}:{}", self.username, self.host.to_ascii_lowercase(), self.port)
+        format!(
+            "{}@{}:{}",
+            self.username,
+            self.host.to_ascii_lowercase(),
+            self.port
+        )
     }
 }
 
@@ -193,7 +198,10 @@ impl InstanceRegistry {
                 if let (InstanceType::RemoteSsh, Some(cfg)) =
                     (&inst.instance_type, &inst.ssh_host_config)
                 {
-                    ssh_endpoint_winner.get(&cfg.endpoint_key()).map(|id| id == &inst.id).unwrap_or(true)
+                    ssh_endpoint_winner
+                        .get(&cfg.endpoint_key())
+                        .map(|id| id == &inst.id)
+                        .unwrap_or(true)
                 } else {
                     true
                 }
@@ -270,7 +278,7 @@ mod tests {
         Instance {
             id: id.to_string(),
             instance_type: InstanceType::Docker,
-            label: "Docker Local".to_string(),
+            label: "docker-local".to_string(),
             openclaw_home: Some("/tmp/openclaw".to_string()),
             clawpal_data_dir: Some("/tmp/clawpal".to_string()),
             ssh_host_config: None,
@@ -437,6 +445,9 @@ mod tests {
             .filter(|i| matches!(i.instance_type, InstanceType::RemoteSsh))
             .collect();
         assert_eq!(ssh_instances.len(), 1, "should deduplicate to one entry");
-        assert_eq!(ssh_instances[0].id, "ssh:vm1-new", "should keep the last entry");
+        assert_eq!(
+            ssh_instances[0].id, "ssh:vm1-new",
+            "should keep the last entry"
+        );
     }
 }

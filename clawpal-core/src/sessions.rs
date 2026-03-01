@@ -97,21 +97,24 @@ pub fn parse_session_analysis(raw: &str) -> Result<Vec<AgentSessionAnalysis>, St
             "valuable"
         };
 
-        agent_map.entry(agent.clone()).or_default().push(SessionAnalysis {
-            agent,
-            session_id,
-            file_path: String::new(),
-            size_bytes,
-            message_count,
-            user_message_count,
-            assistant_message_count,
-            last_activity: None,
-            age_days,
-            total_tokens: 0,
-            model: None,
-            category: category.to_string(),
-            kind,
-        });
+        agent_map
+            .entry(agent.clone())
+            .or_default()
+            .push(SessionAnalysis {
+                agent,
+                session_id,
+                file_path: String::new(),
+                size_bytes,
+                message_count,
+                user_message_count,
+                assistant_message_count,
+                last_activity: None,
+                age_days,
+                total_tokens: 0,
+                model: None,
+                category: category.to_string(),
+                kind,
+            });
     }
 
     let mut results = Vec::new();
@@ -132,7 +135,10 @@ pub fn parse_session_analysis(raw: &str) -> Result<Vec<AgentSessionAnalysis>, St
         let total_files = sessions.len();
         let total_size_bytes = sessions.iter().map(|s| s.size_bytes).sum();
         let empty_count = sessions.iter().filter(|s| s.category == "empty").count();
-        let low_value_count = sessions.iter().filter(|s| s.category == "low_value").count();
+        let low_value_count = sessions
+            .iter()
+            .filter(|s| s.category == "low_value")
+            .count();
         let valuable_count = sessions.iter().filter(|s| s.category == "valuable").count();
 
         results.push(AgentSessionAnalysis {

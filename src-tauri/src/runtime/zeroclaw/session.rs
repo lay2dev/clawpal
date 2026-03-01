@@ -28,7 +28,11 @@ pub fn build_prompt_with_history(session_key: &str, latest_user_message: &str) -
     build_prompt_with_history_preamble(session_key, latest_user_message, &preamble)
 }
 
-pub fn build_prompt_with_history_preamble(session_key: &str, latest_user_message: &str, preamble: &str) -> String {
+pub fn build_prompt_with_history_preamble(
+    session_key: &str,
+    latest_user_message: &str,
+    preamble: &str,
+) -> String {
     let mut prompt = String::from(preamble);
     if let Ok(guard) = history_store().lock() {
         if let Some(history) = guard.get(session_key) {

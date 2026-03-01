@@ -1,5 +1,5 @@
-use clawpal::access_discovery::store::AccessDiscoveryStore;
 use clawpal::access_discovery::probe_engine::build_probe_plan_for_local;
+use clawpal::access_discovery::store::AccessDiscoveryStore;
 use clawpal::access_discovery::types::{CapabilityProfile, ExecutionExperience};
 use clawpal::commands::ensure_access_profile_for_test;
 
@@ -15,10 +15,8 @@ fn capability_profile_roundtrip() {
 
 #[test]
 fn capability_profile_store_roundtrip() {
-    let test_dir = std::env::temp_dir().join(format!(
-        "clawpal-access-discovery-{}",
-        std::process::id()
-    ));
+    let test_dir =
+        std::env::temp_dir().join(format!("clawpal-access-discovery-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&test_dir);
     std::fs::create_dir_all(&test_dir).expect("create test dir");
     let store = AccessDiscoveryStore::from_path(&test_dir);
@@ -103,8 +101,14 @@ fn execution_experience_keeps_recent_five() {
         .load_experiences("docker:local")
         .expect("load experiences");
     assert_eq!(all.len(), 5);
-    assert_eq!(all.first().map(|e| e.goal.as_str()), Some("install:docker:2"));
-    assert_eq!(all.last().map(|e| e.goal.as_str()), Some("install:docker:6"));
+    assert_eq!(
+        all.first().map(|e| e.goal.as_str()),
+        Some("install:docker:2")
+    );
+    assert_eq!(
+        all.last().map(|e| e.goal.as_str()),
+        Some("install:docker:6")
+    );
     let _ = std::fs::remove_dir_all(&test_dir);
 }
 

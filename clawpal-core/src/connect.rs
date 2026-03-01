@@ -10,6 +10,8 @@ pub enum ConnectError {
     DockerHomeMissing(String),
     #[error("failed to update instance registry: {0}")]
     Registry(String),
+    #[error("local home does not exist: {0}")]
+    LocalHomeMissing(String),
     #[error("ssh connect failed: {0}")]
     Ssh(String),
 }
@@ -33,7 +35,35 @@ pub async fn connect_docker(
     let instance = Instance {
         id,
         instance_type: InstanceType::Docker,
-        label: label.unwrap_or("Docker").to_string(),
+        label: label.unwrap_or("docker-local").to_string(),
+        openclaw_home: Some(expanded),
+        clawpal_data_dir: None,
+        ssh_host_config: None,
+    };
+    upsert_instance(instance)
+}
+
+pub async fn connect_local(
+    home: &str,
+    label: Option<&str>,
+    instance_id: Option<&str>,
+) -> Result<Instance> {
+    let expanded = shellexpand::tilde(home).to_string();
+    if !std::path::Path::new(&expanded).exists() {
+        return Err(ConnectError::LocalHomeMissing(expanded));
+    }
+    let id = match instance_id {
+        Some(explicit) if !explicit.is_empty() => explicit.to_string(),
+        _ => format!("local:{}", slug_from_home(&expanded)),
+    };
+    let default_label = id
+        .strip_prefix("wsl2:")
+        .unwrap_or("local-instance")
+        .to_string();
+    let instance = Instance {
+        id,
+        instance_type: InstanceType::Local,
+        label: label.unwrap_or(default_label.as_str()).to_string(),
         openclaw_home: Some(expanded),
         clawpal_data_dir: None,
         ssh_host_config: None,

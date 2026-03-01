@@ -52,9 +52,23 @@ pub async fn discover_local_instances() -> Result<Vec<DiscoveredInstance>, Strin
 
 fn discover_blocking() -> Result<Vec<DiscoveredInstance>, String> {
     // 1. Load registry for already_registered check
-    let registered_ids: HashSet<String> = InstanceRegistry::load()
-        .map(|r| r.ids().into_iter().collect())
-        .unwrap_or_default();
+    let (registered_ids, registered_home_paths): (HashSet<String>, HashSet<String>) =
+        InstanceRegistry::load()
+            .map(|r| {
+                let mut ids = HashSet::new();
+                let mut homes = HashSet::new();
+                for inst in r.list() {
+                    ids.insert(inst.id);
+                    if let Some(home) = inst.openclaw_home {
+                        let key = normalize_home_path_for_match(&home);
+                        if !key.is_empty() {
+                            homes.insert(key);
+                        }
+                    }
+                }
+                (ids, homes)
+            })
+            .unwrap_or_default();
 
     let mut results: Vec<DiscoveredInstance> = Vec::new();
     let mut seen_home_paths: HashSet<String> = HashSet::new();
@@ -83,10 +97,39 @@ fn discover_blocking() -> Result<Vec<DiscoveredInstance>, String> {
 
     // 4. Mark already_registered
     for inst in &mut results {
-        inst.already_registered = registered_ids.contains(&inst.id);
+        let home_key = normalize_home_path_for_match(&inst.home_path);
+        inst.already_registered =
+            registered_ids.contains(&inst.id) || registered_home_paths.contains(&home_key);
     }
 
     Ok(results)
+}
+
+/// Normalize an OpenClaw home path for fuzzy matching between discovery and registry.
+///
+/// Handles:
+/// - `~` / `~/...` expansion
+/// - slash normalization
+/// - trailing slash trimming
+fn normalize_home_path_for_match(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return String::new();
+    }
+    if s == "~" {
+        if let Some(home) = dirs::home_dir() {
+            s = home.to_string_lossy().to_string();
+        }
+    } else if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            s = home.join(rest).to_string_lossy().to_string();
+        }
+    }
+    let mut normalized = s.replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }
 
 /// Run `docker ps --format '{{json .}}'` and parse matching containers.
@@ -170,8 +213,7 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
             .and_then(|v| v.as_str())
             .unwrap_or(names);
 
-        let home_path = home_from_label
-            .or_else(|| inspect_container_home(container_id));
+        let home_path = home_from_label.or_else(|| inspect_container_home(container_id));
 
         // Skip containers where we can't determine a valid host-side path
         let Some(home_path) = home_path else {
@@ -190,10 +232,7 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
         };
         let id = format!("docker:{slug}");
 
-        let label = names
-            .strip_prefix('/')
-            .unwrap_or(names)
-            .to_string();
+        let label = names.strip_prefix('/').unwrap_or(names).to_string();
 
         instances.push(DiscoveredInstance {
             id,
@@ -216,7 +255,7 @@ fn scan_docker_containers() -> Result<Vec<DiscoveredInstance>, String> {
 /// 2. Bind mounts whose source contains `.clawpal`
 fn inspect_container_home(container_id: &str) -> Option<String> {
     let output = Command::new("docker")
-        .args(["inspect", "--format", "{{json .}}",  container_id])
+        .args(["inspect", "--format", "{{json .}}", container_id])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
@@ -226,8 +265,7 @@ fn inspect_container_home(container_id: &str) -> Option<String> {
         return None;
     }
 
-    let info: serde_json::Value =
-        serde_json::from_slice(&output.stdout).ok()?;
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
 
     // 1. Check env vars for OPENCLAW_CONFIG_DIR
     if let Some(envs) = info.pointer("/Config/Env").and_then(|v| v.as_array()) {
@@ -301,7 +339,6 @@ fn scan_data_dirs() -> Result<Vec<DiscoveredInstance>, String> {
 }
 
 fn scan_data_dirs_under(clawpal_dir: &std::path::Path) -> Result<Vec<DiscoveredInstance>, String> {
-
     if !clawpal_dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -331,10 +368,7 @@ fn scan_data_dirs_under(clawpal_dir: &std::path::Path) -> Result<Vec<DiscoveredI
             continue;
         }
 
-        let slug = name
-            .strip_prefix("docker-")
-            .unwrap_or(&name)
-            .to_string();
+        let slug = name.strip_prefix("docker-").unwrap_or(&name).to_string();
         let id = format!("docker:{slug}");
         let home_path = path.to_string_lossy().to_string();
 
@@ -375,11 +409,21 @@ mod tests {
     }
 
     #[test]
+    fn normalize_home_path_for_match_trims_and_normalizes() {
+        assert_eq!(
+            normalize_home_path_for_match("/tmp/.clawpal/docker-local/"),
+            "/tmp/.clawpal/docker-local".to_string()
+        );
+        assert_eq!(
+            normalize_home_path_for_match("C:\\tmp\\.clawpal\\docker-local\\"),
+            "C:/tmp/.clawpal/docker-local".to_string()
+        );
+    }
+
+    #[test]
     fn scan_data_dirs_detects_openclaw_config_under_dot_openclaw() {
-        let root = std::env::temp_dir().join(format!(
-            "clawpal-discover-local-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("clawpal-discover-local-{}", uuid::Uuid::new_v4()));
         let docker_dir = root.join("docker-local");
         std::fs::create_dir_all(docker_dir.join(".openclaw")).expect("create docker dir");
         std::fs::write(docker_dir.join(".openclaw").join("openclaw.json"), "{}")

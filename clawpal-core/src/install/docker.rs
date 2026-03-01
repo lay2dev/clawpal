@@ -273,7 +273,8 @@ mod tests {
         let _guard = crate::test_support::env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let empty = std::env::temp_dir().join(format!("clawpal-empty-path-{}", uuid::Uuid::new_v4()));
+        let empty =
+            std::env::temp_dir().join(format!("clawpal-empty-path-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&empty).expect("create empty dir");
         let original = std::env::var_os("PATH");
         std::env::set_var("PATH", &empty);

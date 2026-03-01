@@ -1,12 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { MonitorIcon, ContainerIcon, ServerIcon, EllipsisIcon, PencilIcon, Trash2Icon, RefreshCwIcon, LinkIcon } from "lucide-react";
+import { MonitorIcon, ContainerIcon, ServerIcon, LaptopIcon, EllipsisIcon, PencilIcon, Trash2Icon, RefreshCwIcon, LinkIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type InstanceType = "local" | "docker" | "ssh";
+type InstanceType = "local" | "docker" | "ssh" | "wsl2";
 
 interface InstanceCardProps {
   id: string;
@@ -31,6 +31,7 @@ const typeIcons: Record<InstanceType, typeof MonitorIcon> = {
   local: MonitorIcon,
   docker: ContainerIcon,
   ssh: ServerIcon,
+  wsl2: LaptopIcon,
 };
 
 function HealthDot({ healthy, offline }: { healthy: boolean | null; offline: boolean }) {
@@ -66,6 +67,12 @@ export function InstanceCard({
 }: InstanceCardProps) {
   const { t } = useTranslation();
   const TypeIcon = typeIcons[type];
+  const typeLabel = (() => {
+    if (type === "local") return t("instance.typeLocal");
+    if (type === "docker") return t("instance.typeDocker");
+    if (type === "ssh") return t("instance.typeSsh");
+    return t("instance.typeWsl2");
+  })();
 
   const hasMenu = !!(onRename || onEdit || onDelete);
 
@@ -83,9 +90,14 @@ export function InstanceCard({
       onClick={discovered ? undefined : onClick}
     >
       <CardContent className="flex flex-col gap-3">
-        {/* Top row: type icon + menu */}
+        {/* Top row: type icon + type label + menu */}
         <div className="flex items-center justify-between">
-          <TypeIcon className="size-5 text-muted-foreground" />
+          <div className="flex items-center gap-2">
+            <TypeIcon className="size-5 text-muted-foreground" />
+            <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+              {typeLabel}
+            </Badge>
+          </div>
           {hasMenu && (
             <Popover>
               <PopoverTrigger asChild>
