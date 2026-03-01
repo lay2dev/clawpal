@@ -11,8 +11,6 @@ pub async fn remote_read_raw_config(
     pool.sftp_read(&host_id, &config_path).await
 }
 
-
-
 #[tauri::command]
 pub async fn remote_write_raw_config(
     pool: State<'_, SshConnectionPool>,
@@ -33,8 +31,6 @@ pub async fn remote_write_raw_config(
     Ok(true)
 }
 
-
-
 #[tauri::command]
 pub async fn remote_apply_config_patch(
     pool: State<'_, SshConnectionPool>,
@@ -42,13 +38,13 @@ pub async fn remote_apply_config_patch(
     patch_template: String,
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
-    let (config_path, current_text, current) = 
+    let (config_path, current_text, current) =
         remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    
+
     // Use core function to build candidate config
     let (candidate, _changes) =
         clawpal_core::config::build_candidate_config(&current, &patch_template, &params)?;
-    
+
     remote_write_config_with_snapshot(
         &pool,
         &host_id,
@@ -67,8 +63,6 @@ pub async fn remote_apply_config_patch(
         errors: Vec::new(),
     })
 }
-
-
 
 #[tauri::command]
 pub async fn remote_list_history(
@@ -112,8 +106,6 @@ pub async fn remote_list_history(
     Ok(serde_json::json!({ "items": items }))
 }
 
-
-
 #[tauri::command]
 pub async fn remote_preview_rollback(
     pool: State<'_, SshConnectionPool>,
@@ -131,7 +123,7 @@ pub async fn remote_preview_rollback(
     let before = clawpal_core::config::format_config_diff(&current, &current);
     let after = clawpal_core::config::format_config_diff(&target, &target);
     let diff = clawpal_core::config::format_config_diff(&current, &target);
-    
+
     Ok(PreviewResult {
         recipe_id: "rollback".into(),
         diff,
@@ -144,8 +136,6 @@ pub async fn remote_preview_rollback(
         warnings: vec!["Rollback will replace current configuration".into()],
     })
 }
-
-
 
 #[tauri::command]
 pub async fn remote_rollback(
@@ -187,8 +177,6 @@ pub fn read_raw_config() -> Result<String, String> {
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
 
-
-
 #[tauri::command]
 pub fn apply_config_patch(
     patch_template: String,
@@ -224,8 +212,6 @@ pub fn apply_config_patch(
     })
 }
 
-
-
 #[tauri::command]
 pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> {
     let paths = resolve_paths();
@@ -246,8 +232,6 @@ pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> 
         .collect();
     Ok(HistoryPage { items })
 }
-
-
 
 #[tauri::command]
 pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
@@ -279,8 +263,6 @@ pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
         warnings: vec!["Rollback will replace current configuration".into()],
     })
 }
-
-
 
 #[tauri::command]
 pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {

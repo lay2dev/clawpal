@@ -10,7 +10,14 @@ import { useTheme } from "@/lib/use-theme";
 import { useFont } from "@/lib/use-font";
 import type { UiFont } from "@/lib/use-font";
 import { profileToModelValue } from "@/lib/model-value";
-import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion, ResolvedApiKey, ZeroclawUsageStats } from "@/lib/types";
+import type {
+  ModelCatalogProvider,
+  ModelProfile,
+  ProviderAuthSuggestion,
+  ResolvedApiKey,
+  ZeroclawRuntimeTarget,
+  ZeroclawUsageStats,
+} from "@/lib/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +62,12 @@ type ProfileForm = {
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const ENABLE_PROFILE_TEST_BUTTON = false;
+const ZEROCLAW_SUPPORTED_PROVIDERS = new Set([
+  "openrouter",
+  "openai",
+  "openai-codex",
+  "anthropic",
+]);
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
 
@@ -164,6 +177,8 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
   const [zeroclawSaving, setZeroclawSaving] = useState(false);
   const [zeroclawUsage, setZeroclawUsage] = useState<ZeroclawUsageStats | null>(null);
   const [zeroclawUsageLoading, setZeroclawUsageLoading] = useState(true);
+  const [zeroclawTarget, setZeroclawTarget] = useState<ZeroclawRuntimeTarget | null>(null);
+  const [zeroclawTargetLoading, setZeroclawTargetLoading] = useState(true);
   const zeroclawPrefsLoadedRef = useRef(false);
   const zeroclawLastSavedRef = useRef("");
 
@@ -278,8 +293,9 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
 
   useEffect(() => {
     let cancelled = false;
-    const loadUsage = () => {
+    const loadStats = () => {
       setZeroclawUsageLoading(true);
+      setZeroclawTargetLoading(true);
       ua.getZeroclawUsageStats()
         .then((stats) => {
           if (!cancelled) setZeroclawUsage(stats);
@@ -290,14 +306,36 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
         .finally(() => {
           if (!cancelled) setZeroclawUsageLoading(false);
         });
+      ua.getZeroclawRuntimeTarget()
+        .then((target) => {
+          if (!cancelled) setZeroclawTarget(target);
+        })
+        .catch(() => {
+          if (!cancelled) setZeroclawTarget(null);
+        })
+        .finally(() => {
+          if (!cancelled) setZeroclawTargetLoading(false);
+        });
     };
-    loadUsage();
-    const timer = window.setInterval(loadUsage, 4_000);
+    loadStats();
+    const timer = window.setInterval(loadStats, 4_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [ua]);
+
+  const zeroclawTargetText = useMemo(() => {
+    if (zeroclawTargetLoading) return t("settings.zeroclawEffectiveModelLoading");
+    const provider = zeroclawTarget?.provider?.trim();
+    if (!provider) return t("settings.zeroclawEffectiveModelUnavailable");
+    const model = zeroclawTarget?.model?.trim();
+    const modelLabel = model ? `${provider}/${model}` : provider;
+    if (zeroclawTarget?.source === "preferred") {
+      return t("settings.zeroclawEffectiveModelPreferred", { model: modelLabel });
+    }
+    return t("settings.zeroclawEffectiveModelAuto", { model: modelLabel });
+  }, [zeroclawTargetLoading, zeroclawTarget, t]);
 
   // Load catalog on mount
   useEffect(() => {
@@ -375,6 +413,9 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
   const zeroclawModelCandidates = useMemo(() => {
     const fromProfiles = (profiles || [])
       .filter((profile) => profile.enabled)
+      .filter((profile) =>
+        ZEROCLAW_SUPPORTED_PROVIDERS.has(profile.provider.trim().toLowerCase()),
+      )
       .map((profile) => profileToModelValue(profile));
     return Array.from(new Set(fromProfiles)).sort((a, b) => a.localeCompare(b));
   }, [profiles]);
@@ -669,6 +710,11 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
                         </div>
                       </>
                     )}
+                    <div>
+                      {t("settings.zeroclawEffectiveModelLabel", {
+                        model: zeroclawTargetText,
+                      })}
+                    </div>
                   </div>
                 </div>
               </CardContent>

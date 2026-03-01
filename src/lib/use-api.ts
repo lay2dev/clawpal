@@ -572,9 +572,14 @@ export function useApi() {
         2_000,
         api.getZeroclawUsageStats,
       ),
+      getZeroclawRuntimeTarget: localGlobalCached(
+        "getZeroclawRuntimeTarget",
+        2_000,
+        api.getZeroclawRuntimeTarget,
+      ),
       setZeroclawModelPreference: withGlobalInvalidation(
         api.setZeroclawModelPreference,
-        ["getAppPreferences"],
+        ["getAppPreferences", "getZeroclawRuntimeTarget"],
       ),
       ensureAccessProfile: api.ensureAccessProfile,
       recordInstallExperience: api.recordInstallExperience,

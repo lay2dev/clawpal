@@ -72,9 +72,15 @@ pub async fn doctor_start_diagnosis(
             Ok(())
         }
         Err(e) => {
-            let code = e.code.as_str();
+            let code = e.code.as_str().to_string();
+            let message = e.message.clone();
+            crate::logging::log_error(&format!(
+                "doctor_start_diagnosis failed: code={code} instance={} agent={} message={message}",
+                key.instance_id, key.agent_id
+            ));
             emit_runtime_event(&app, RuntimeEvent::Error { error: e });
-            Err(format!("zeroclaw start failed [{code}]"))
+            // Do not reject the command: frontend consumes doctor:error events.
+            Ok(())
         }
     }
 }
@@ -105,9 +111,15 @@ pub async fn doctor_send_message(
             Ok(())
         }
         Err(e) => {
-            let code = e.code.as_str();
+            let code = e.code.as_str().to_string();
+            let message = e.message.clone();
+            crate::logging::log_error(&format!(
+                "doctor_send_message failed: code={code} instance={} agent={} message={message}",
+                key.instance_id, key.agent_id
+            ));
             emit_runtime_event(&app, RuntimeEvent::Error { error: e });
-            Err(format!("zeroclaw send failed [{code}]"))
+            // Keep session alive and surface the runtime error event in UI.
+            Ok(())
         }
     }
 }

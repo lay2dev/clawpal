@@ -58,7 +58,7 @@ pub fn install_docker(options: DockerInstallOptions) -> Result<InstallResult> {
         .clone()
         .unwrap_or_else(|| "~/.clawpal/docker-local".to_string());
     let instance_id = "docker:local".to_string();
-    let label = options.label.unwrap_or_else(|| "Docker Local".to_string());
+    let label = options.label.unwrap_or_else(|| "docker-local".to_string());
 
     let mut registry =
         InstanceRegistry::load().map_err(|e| InstallError::Registry(e.to_string()))?;

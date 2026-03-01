@@ -458,7 +458,10 @@ fn run_ssh_command(command: SshCommands) -> Result<serde_json::Value, String> {
 #[derive(Debug)]
 enum DoctorTarget {
     Local,
-    Remote { id: String, host: clawpal_core::instance::SshHostConfig },
+    Remote {
+        id: String,
+        host: clawpal_core::instance::SshHostConfig,
+    },
 }
 
 fn resolve_doctor_target(instance: Option<String>) -> Result<DoctorTarget, String> {
@@ -569,7 +572,7 @@ fn run_doctor_command(command: DoctorCommands) -> Result<serde_json::Value, Stri
                     })
                     .map(|v| json!(v))
             }
-        }
+        },
     }
 }
 
@@ -580,7 +583,9 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
                 .arg("--version")
                 .output()
                 .map_err(|e| format!("failed to run openclaw --version: {e}"))?;
-            let version = String::from_utf8_lossy(&version_out.stdout).trim().to_string();
+            let version = String::from_utf8_lossy(&version_out.stdout)
+                .trim()
+                .to_string();
             let probe_cmd =
                 wrap_login_shell_eval(clawpal_core::doctor::openclaw_which_probe_script());
             let path_out = Command::new("sh")
@@ -597,7 +602,9 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let path = session
                 .exec(&wrap_login_shell_eval(
                     clawpal_core::doctor::openclaw_which_probe_script(),
@@ -636,9 +643,13 @@ async fn doctor_probe_openclaw(target: DoctorTarget) -> Result<serde_json::Value
 
 async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Value, String> {
     match target {
-        DoctorTarget::Local => Err("doctor fix-openclaw-path currently supports remote target only".to_string()),
+        DoctorTarget::Local => {
+            Err("doctor fix-openclaw-path currently supports remote target only".to_string())
+        }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let find_cmd =
                 wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_fix_find_dir_script());
             let find = session.exec(&find_cmd).await.map_err(|e| e.to_string())?;
@@ -665,12 +676,16 @@ async fn doctor_fix_openclaw_path(target: DoctorTarget) -> Result<serde_json::Va
 }
 
 async fn resolve_remote_config_path(session: &SshSession) -> Result<String, String> {
-    let cmd = wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_config_path_probe_script());
+    let cmd =
+        wrap_login_shell_eval(clawpal_core::doctor::remote_openclaw_config_path_probe_script());
     let out = session.exec(&cmd).await.map_err(|e| e.to_string())?;
     Ok(out.stdout.trim().to_string())
 }
 
-async fn doctor_config_delete(target: DoctorTarget, dotted_path: &str) -> Result<serde_json::Value, String> {
+async fn doctor_config_delete(
+    target: DoctorTarget,
+    dotted_path: &str,
+) -> Result<serde_json::Value, String> {
     if dotted_path.trim().is_empty() {
         return Err("doctor config-delete requires <json.path>".to_string());
     }
@@ -698,7 +713,9 @@ async fn doctor_config_delete(target: DoctorTarget, dotted_path: &str) -> Result
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
@@ -737,8 +754,11 @@ async fn doctor_config_read(
             let config_path = clawpal_core::doctor::local_openclaw_config_path_from_env();
             let raw = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("failed to read local config: {e}"))?;
-            let value =
-                clawpal_core::doctor::select_json_value_from_str(&raw, dotted_path, "local config")?;
+            let value = clawpal_core::doctor::select_json_value_from_str(
+                &raw,
+                dotted_path,
+                "local config",
+            )?;
             Ok(json!({
                 "target": "local",
                 "remote": false,
@@ -748,15 +768,20 @@ async fn doctor_config_read(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
                 .await
                 .map_err(|e| e.to_string())?;
             let raw = String::from_utf8_lossy(&raw).to_string();
-            let value =
-                clawpal_core::doctor::select_json_value_from_str(&raw, dotted_path, "remote config")?;
+            let value = clawpal_core::doctor::select_json_value_from_str(
+                &raw,
+                dotted_path,
+                "remote config",
+            )?;
             Ok(json!({
                 "target": id,
                 "remote": true,
@@ -776,8 +801,7 @@ async fn doctor_config_upsert(
     if dotted_path.trim().is_empty() {
         return Err("doctor config-upsert requires <json.path>".to_string());
     }
-    let parsed =
-        clawpal_core::doctor::parse_json_value_arg(value_json, "doctor config-upsert")?;
+    let parsed = clawpal_core::doctor::parse_json_value_arg(value_json, "doctor config-upsert")?;
     match target {
         DoctorTarget::Local => {
             let config_path = clawpal_core::doctor::local_openclaw_config_path_from_env();
@@ -801,7 +825,9 @@ async fn doctor_config_upsert(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let config_path = resolve_remote_config_path(&session).await?;
             let raw = session
                 .sftp_read(&config_path)
@@ -861,7 +887,9 @@ async fn doctor_sessions_read(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let sessions_path = resolve_remote_sessions_path(&session).await?;
             let raw = session
                 .sftp_read(&sessions_path)
@@ -892,8 +920,7 @@ async fn doctor_sessions_upsert(
     if dotted_path.trim().is_empty() {
         return Err("doctor sessions-upsert requires <json.path>".to_string());
     }
-    let parsed =
-        clawpal_core::doctor::parse_json_value_arg(value_json, "doctor sessions-upsert")?;
+    let parsed = clawpal_core::doctor::parse_json_value_arg(value_json, "doctor sessions-upsert")?;
     match target {
         DoctorTarget::Local => {
             let sessions_path = clawpal_core::doctor::resolve_local_sessions_path(
@@ -919,7 +946,9 @@ async fn doctor_sessions_upsert(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let sessions_path = resolve_remote_sessions_path(&session).await?;
             let raw = session
                 .sftp_read(&sessions_path)
@@ -981,7 +1010,9 @@ async fn doctor_sessions_delete(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let sessions_path = resolve_remote_sessions_path(&session).await?;
             let raw = session
                 .sftp_read(&sessions_path)
@@ -1032,22 +1063,26 @@ async fn doctor_file_read(
                 None => match domain {
                     "sessions" => {
                         let abs = clawpal_core::doctor::resolve_local_sessions_path(&openclaw_root);
-                        clawpal_core::doctor::relpath_from_local_abs(&root, &abs).ok_or_else(|| {
-                            format!(
-                                "failed to resolve sessions path under domain root: {}",
-                                root.display()
-                            )
-                        })?
+                        clawpal_core::doctor::relpath_from_local_abs(&root, &abs).ok_or_else(
+                            || {
+                                format!(
+                                    "failed to resolve sessions path under domain root: {}",
+                                    root.display()
+                                )
+                            },
+                        )?
                     }
                     _ => clawpal_core::doctor::doctor_domain_default_relpath(domain)
-                        .ok_or_else(|| "doctor file read requires --path for this domain".to_string())?
+                        .ok_or_else(|| {
+                            "doctor file read requires --path for this domain".to_string()
+                        })?
                         .to_string(),
                 },
             };
             clawpal_core::doctor::validate_doctor_relative_path(&rel)?;
             let full = root.join(&rel);
-            let content = std::fs::read_to_string(&full)
-                .map_err(|e| format!("failed to read file: {e}"))?;
+            let content =
+                std::fs::read_to_string(&full).map_err(|e| format!("failed to read file: {e}"))?;
             Ok(json!({
                 "target": "local",
                 "remote": false,
@@ -1059,19 +1094,23 @@ async fn doctor_file_read(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let root = doctor_domain_remote_root(&session, domain).await?;
             let rel = match path {
                 Some(p) => p.to_string(),
                 None => match domain {
                     "sessions" => {
                         let abs = resolve_remote_sessions_path(&session).await?;
-                        clawpal_core::doctor::relpath_from_remote_abs(&root, &abs).ok_or_else(|| {
-                            format!("failed to resolve sessions path under domain root: {root}")
-                        })?
+                        clawpal_core::doctor::relpath_from_remote_abs(&root, &abs).ok_or_else(
+                            || format!("failed to resolve sessions path under domain root: {root}"),
+                        )?
                     }
                     _ => clawpal_core::doctor::doctor_domain_default_relpath(domain)
-                        .ok_or_else(|| "doctor file read requires --path for this domain".to_string())?
+                        .ok_or_else(|| {
+                            "doctor file read requires --path for this domain".to_string()
+                        })?
                         .to_string(),
                 },
             };
@@ -1107,15 +1146,19 @@ async fn doctor_file_write(
                 None => match domain {
                     "sessions" => {
                         let abs = clawpal_core::doctor::resolve_local_sessions_path(&openclaw_root);
-                        clawpal_core::doctor::relpath_from_local_abs(&root, &abs).ok_or_else(|| {
-                            format!(
-                                "failed to resolve sessions path under domain root: {}",
-                                root.display()
-                            )
-                        })?
+                        clawpal_core::doctor::relpath_from_local_abs(&root, &abs).ok_or_else(
+                            || {
+                                format!(
+                                    "failed to resolve sessions path under domain root: {}",
+                                    root.display()
+                                )
+                            },
+                        )?
                     }
                     _ => clawpal_core::doctor::doctor_domain_default_relpath(domain)
-                        .ok_or_else(|| "doctor file write requires --path for this domain".to_string())?
+                        .ok_or_else(|| {
+                            "doctor file write requires --path for this domain".to_string()
+                        })?
                         .to_string(),
                 },
             };
@@ -1159,19 +1202,23 @@ async fn doctor_file_write(
             }))
         }
         DoctorTarget::Remote { id, host } => {
-            let session = SshSession::connect(&host).await.map_err(|e| e.to_string())?;
+            let session = SshSession::connect(&host)
+                .await
+                .map_err(|e| e.to_string())?;
             let root = doctor_domain_remote_root(&session, domain).await?;
             let rel = match path {
                 Some(p) => p.to_string(),
                 None => match domain {
                     "sessions" => {
                         let abs = resolve_remote_sessions_path(&session).await?;
-                        clawpal_core::doctor::relpath_from_remote_abs(&root, &abs).ok_or_else(|| {
-                            format!("failed to resolve sessions path under domain root: {root}")
-                        })?
+                        clawpal_core::doctor::relpath_from_remote_abs(&root, &abs).ok_or_else(
+                            || format!("failed to resolve sessions path under domain root: {root}"),
+                        )?
                     }
                     _ => clawpal_core::doctor::doctor_domain_default_relpath(domain)
-                        .ok_or_else(|| "doctor file write requires --path for this domain".to_string())?
+                        .ok_or_else(|| {
+                            "doctor file write requires --path for this domain".to_string()
+                        })?
                         .to_string(),
                 },
             };

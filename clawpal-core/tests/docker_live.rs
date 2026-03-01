@@ -42,8 +42,10 @@ fn install_docker_real_run_smoke() {
     }
 
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let data_dir = std::env::temp_dir().join(format!("clawpal-docker-live-data-{}", Uuid::new_v4()));
-    let home_dir = std::env::temp_dir().join(format!("clawpal-docker-live-home-{}", Uuid::new_v4()));
+    let data_dir =
+        std::env::temp_dir().join(format!("clawpal-docker-live-data-{}", Uuid::new_v4()));
+    let home_dir =
+        std::env::temp_dir().join(format!("clawpal-docker-live-home-{}", Uuid::new_v4()));
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::create_dir_all(&home_dir).expect("create home dir");
     std::env::set_var("CLAWPAL_DATA_DIR", &data_dir);

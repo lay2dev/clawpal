@@ -23,10 +23,7 @@ pub fn precheck_auth(profiles: &[ModelProfile]) -> Vec<PrecheckIssue> {
             issues.push(PrecheckIssue {
                 code: "AUTH_MISCONFIGURED".into(),
                 severity: "error".into(),
-                message: format!(
-                    "Profile '{}' has empty provider or model",
-                    profile.id
-                ),
+                message: format!("Profile '{}' has empty provider or model", profile.id),
                 auto_fixable: false,
             });
         }
@@ -53,7 +50,10 @@ pub fn precheck_registry(registry_path: &Path) -> Vec<PrecheckIssue> {
         return vec![PrecheckIssue {
             code: "REGISTRY_CORRUPT".into(),
             severity: "error".into(),
-            message: format!("Registry file contains invalid JSON: {}", registry_path.display()),
+            message: format!(
+                "Registry file contains invalid JSON: {}",
+                registry_path.display()
+            ),
             auto_fixable: false,
         }];
     }

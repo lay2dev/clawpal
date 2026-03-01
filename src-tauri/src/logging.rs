@@ -1,6 +1,6 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use dirs::home_dir;
 
@@ -57,7 +57,42 @@ pub fn read_log_tail(filename: &str, lines: usize) -> Result<String, String> {
     if !path.exists() {
         return Ok(String::new());
     }
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    read_path_tail(&path, lines)
+}
+
+pub fn read_path_tail(path: &Path, lines: usize) -> Result<String, String> {
+    if lines == 0 {
+        return Ok(String::new());
+    }
+
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let file_len = file.metadata().map_err(|e| e.to_string())?.len();
+    if file_len == 0 {
+        return Ok(String::new());
+    }
+
+    const CHUNK_SIZE: u64 = 8 * 1024;
+    let mut pos = file_len;
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut newline_count: usize = 0;
+
+    while pos > 0 && newline_count <= lines {
+        let read_len = CHUNK_SIZE.min(pos) as usize;
+        pos -= read_len as u64;
+        file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+        let mut chunk = vec![0u8; read_len];
+        file.read_exact(&mut chunk).map_err(|e| e.to_string())?;
+        newline_count += chunk.iter().filter(|&&b| b == b'\n').count();
+        chunks.push(chunk);
+    }
+
+    let total_len: usize = chunks.iter().map(Vec::len).sum();
+    let mut bytes = Vec::with_capacity(total_len);
+    for chunk in chunks.iter().rev() {
+        bytes.extend_from_slice(chunk);
+    }
+
+    let content = String::from_utf8_lossy(&bytes);
     let all_lines: Vec<&str> = content.lines().collect();
     let start = all_lines.len().saturating_sub(lines);
     Ok(all_lines[start..].join("\n"))

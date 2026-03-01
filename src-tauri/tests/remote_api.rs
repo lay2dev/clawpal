@@ -83,7 +83,11 @@ async fn test_04b_exec_login_simple() {
         .await
         .expect("exec_login failed");
     assert_eq!(result.exit_code, 0);
-    assert!(result.stdout.contains("hello-from-login"), "stdout: {}", result.stdout);
+    assert!(
+        result.stdout.contains("hello-from-login"),
+        "stdout: {}",
+        result.stdout
+    );
 }
 
 #[tokio::test]
@@ -117,7 +121,12 @@ async fn test_04d_exec_login_nested_quotes() {
         .await
         .expect("exec_login with single-quoted args failed");
     assert_eq!(result.exit_code, 0);
-    assert_eq!(result.stdout.trim(), "hello world", "stdout: {:?}", result.stdout);
+    assert_eq!(
+        result.stdout.trim(),
+        "hello world",
+        "stdout: {:?}",
+        result.stdout
+    );
 }
 
 /// Test exec_login with content containing both single and double quotes.
@@ -130,14 +139,20 @@ async fn test_04e_exec_login_complex_quotes() {
 
     // Value with single quote, double quote, backslash, dollar sign
     let result = pool
-        .exec_login(&cfg.id, r#"echo 'it'\''s a "test" with $VAR and \backslash'"#)
+        .exec_login(
+            &cfg.id,
+            r#"echo 'it'\''s a "test" with $VAR and \backslash'"#,
+        )
         .await
         .expect("exec_login with complex quotes failed");
     assert_eq!(result.exit_code, 0);
     let out = result.stdout.trim();
     eprintln!("complex quotes output: {:?}", out);
     assert!(out.contains("it's"), "should contain it's: {out}");
-    assert!(out.contains("\"test\""), "should contain quoted test: {out}");
+    assert!(
+        out.contains("\"test\""),
+        "should contain quoted test: {out}"
+    );
 }
 
 #[tokio::test]
@@ -155,7 +170,10 @@ async fn test_05_sftp_write_read_roundtrip() {
         .expect("sftp_write failed");
 
     // Read back
-    let read = pool.sftp_read(&cfg.id, path).await.expect("sftp_read failed");
+    let read = pool
+        .sftp_read(&cfg.id, path)
+        .await
+        .expect("sftp_read failed");
     assert_eq!(read, content);
 
     // Cleanup
@@ -178,7 +196,10 @@ async fn test_06_sftp_write_binary_roundtrip() {
         .await
         .expect("sftp_write failed");
 
-    let read = pool.sftp_read(&cfg.id, path).await.expect("sftp_read failed");
+    let read = pool
+        .sftp_read(&cfg.id, path)
+        .await
+        .expect("sftp_read failed");
     assert_eq!(read, content);
 
     pool.sftp_remove(&cfg.id, path)
@@ -202,8 +223,16 @@ async fn test_07_sftp_list() {
         .expect("sftp_list failed");
 
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert!(names.contains(&"a.txt"), "should contain a.txt, got: {:?}", names);
-    assert!(names.contains(&"b.txt"), "should contain b.txt, got: {:?}", names);
+    assert!(
+        names.contains(&"a.txt"),
+        "should contain a.txt, got: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"b.txt"),
+        "should contain b.txt, got: {:?}",
+        names
+    );
 
     // Cleanup
     pool.exec(&cfg.id, "rm -rf /tmp/clawpal-test-list")
@@ -217,7 +246,9 @@ async fn test_08_sftp_read_nonexistent() {
     let cfg = vm1_config();
     pool.connect(&cfg).await.expect("connect failed");
 
-    let result = pool.sftp_read(&cfg.id, "/tmp/this-file-does-not-exist-12345").await;
+    let result = pool
+        .sftp_read(&cfg.id, "/tmp/this-file-does-not-exist-12345")
+        .await;
     assert!(result.is_err(), "reading nonexistent file should fail");
 }
 
@@ -232,7 +263,10 @@ async fn test_09_sftp_tilde_expansion() {
         .await
         .expect("sftp_write with tilde failed");
 
-    let read = pool.sftp_read(&cfg.id, path).await.expect("sftp_read with tilde failed");
+    let read = pool
+        .sftp_read(&cfg.id, path)
+        .await
+        .expect("sftp_read with tilde failed");
     assert_eq!(read, "tilde test");
 
     pool.sftp_remove(&cfg.id, path)
@@ -255,23 +289,29 @@ async fn test_10_disconnect_reconnect() {
     assert!(pool.is_connected(&cfg.id).await);
 
     // Verify it works
-    let result = pool.exec(&cfg.id, "echo ok").await.expect("exec after reconnect failed");
+    let result = pool
+        .exec(&cfg.id, "echo ok")
+        .await
+        .expect("exec after reconnect failed");
     assert_eq!(result.stdout.trim(), "ok");
 }
 
 #[tokio::test]
-async fn test_11_password_auth_rejected() {
+async fn test_11_password_auth_supported_path() {
     let pool = SshConnectionPool::new();
     let mut cfg = vm1_config();
     cfg.auth_method = "password".into();
     cfg.password = Some("test".into());
 
     let result = pool.connect(&cfg).await;
-    assert!(result.is_err(), "password auth should be rejected");
-    assert!(
-        result.unwrap_err().contains("not supported"),
-        "error should mention unsupported auth mode"
-    );
+    // Wrong password is expected in CI/live test env, but auth mode itself
+    // should no longer be rejected as unsupported.
+    if let Err(err) = result {
+        assert!(
+            !err.contains("not supported"),
+            "password auth should not be blocked by unsupported-mode guard: {err}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +405,9 @@ async fn test_23_remote_agents_list() {
         assert!(agents.is_array(), "agents list should be an array");
         println!("Agents on vm1: {}", agents);
     } else {
-        let err = format!("{} {}", result.stdout, result.stderr).trim().to_string();
+        let err = format!("{} {}", result.stdout, result.stderr)
+            .trim()
+            .to_string();
         assert!(
             !err.is_empty(),
             "non-zero exit should include diagnostic output"
@@ -389,7 +431,11 @@ async fn test_24_remote_doctor() {
         !result.stdout.is_empty() || !result.stderr.is_empty(),
         "doctor should produce some output"
     );
-    println!("Doctor exit_code: {}, output length: {} bytes", result.exit_code, result.stdout.len());
+    println!(
+        "Doctor exit_code: {}, output length: {} bytes",
+        result.exit_code,
+        result.stdout.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -407,11 +453,7 @@ async fn test_30_concurrent_exec() {
     for i in 0..5 {
         let id = cfg.id.clone();
         let pool_ref = &pool;
-        handles.push(async move {
-            pool_ref
-                .exec(&id, &format!("echo concurrent-{}", i))
-                .await
-        });
+        handles.push(async move { pool_ref.exec(&id, &format!("echo concurrent-{}", i)).await });
     }
 
     let results = futures::future::join_all(handles).await;
@@ -439,8 +481,7 @@ async fn test_31_concurrent_sftp_read_write() {
     }
     let results = futures::future::join_all(write_handles).await;
     for (i, r) in results.iter().enumerate() {
-        r.as_ref()
-            .expect(&format!("concurrent write {} failed", i));
+        r.as_ref().expect(&format!("concurrent write {} failed", i));
     }
 
     // Read them back concurrently
@@ -453,9 +494,7 @@ async fn test_31_concurrent_sftp_read_write() {
     }
     let results = futures::future::join_all(read_handles).await;
     for (i, r) in results.iter().enumerate() {
-        let content = r
-            .as_ref()
-            .expect(&format!("concurrent read {} failed", i));
+        let content = r.as_ref().expect(&format!("concurrent read {} failed", i));
         assert_eq!(content, &format!("content-{}", i));
     }
 

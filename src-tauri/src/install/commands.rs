@@ -1,5 +1,5 @@
-use super::session_store::InstallSessionStore;
 use super::runners;
+use super::session_store::InstallSessionStore;
 use super::types::{
     InstallMethod, InstallMethodCapability, InstallSession, InstallState, InstallStep,
     InstallStepResult,
@@ -67,10 +67,21 @@ fn create_session(
 
 fn is_step_allowed(state: &InstallState, step: &InstallStep) -> bool {
     match step {
-        InstallStep::Precheck => matches!(state, InstallState::SelectedMethod | InstallState::PrecheckFailed),
-        InstallStep::Install => matches!(state, InstallState::PrecheckPassed | InstallState::InstallFailed),
-        InstallStep::Init => matches!(state, InstallState::InstallPassed | InstallState::InitFailed),
-        InstallStep::Verify => matches!(state, InstallState::InitPassed | InstallState::VerifyFailed),
+        InstallStep::Precheck => matches!(
+            state,
+            InstallState::SelectedMethod | InstallState::PrecheckFailed
+        ),
+        InstallStep::Install => matches!(
+            state,
+            InstallState::PrecheckPassed | InstallState::InstallFailed
+        ),
+        InstallStep::Init => matches!(
+            state,
+            InstallState::InstallPassed | InstallState::InitFailed
+        ),
+        InstallStep::Verify => {
+            matches!(state, InstallState::InitPassed | InstallState::VerifyFailed)
+        }
     }
 }
 
@@ -193,8 +204,12 @@ fn parse_json_from_output<T: DeserializeOwned>(raw: &str) -> Result<T, String> {
     if let Ok(parsed) = serde_json::from_str::<T>(raw) {
         return Ok(parsed);
     }
-    let start = raw.find('{').ok_or_else(|| "missing '{' in decider output".to_string())?;
-    let end = raw.rfind('}').ok_or_else(|| "missing '}' in decider output".to_string())?;
+    let start = raw
+        .find('{')
+        .ok_or_else(|| "missing '{' in decider output".to_string())?;
+    let end = raw
+        .rfind('}')
+        .ok_or_else(|| "missing '}' in decider output".to_string())?;
     let slice = &raw[start..=end];
     serde_json::from_str::<T>(slice).map_err(|e| format!("invalid decider json: {e}"))
 }
@@ -221,7 +236,10 @@ fn classify_orchestrator_error(raw: &str) -> (String, String) {
         || lower.contains("remote ssh host not found")
         || lower.contains("remote ssh target missing")
     {
-        return ("remote_target_missing".to_string(), "open_instances".to_string());
+        return (
+            "remote_target_missing".to_string(),
+            "open_instances".to_string(),
+        );
     }
     if lower.contains("cannot connect to the docker daemon")
         || lower.contains("docker: command not found")
@@ -299,8 +317,11 @@ fn make_target_error_decision(reason: String, source: &str) -> InstallTargetDeci
 }
 
 fn zeroclaw_config_dir() -> Result<PathBuf, String> {
-    let dir = crate::models::resolve_paths().clawpal_dir.join("zeroclaw-sidecar");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create zeroclaw config dir: {e}"))?;
+    let dir = crate::models::resolve_paths()
+        .clawpal_dir
+        .join("zeroclaw-sidecar");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create zeroclaw config dir: {e}"))?;
     Ok(dir)
 }
 
@@ -347,7 +368,10 @@ fn run_command_output_with_timeout(
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
-        match child.try_wait().map_err(|e| format!("failed while waiting for {context}: {e}"))? {
+        match child
+            .try_wait()
+            .map_err(|e| format!("failed while waiting for {context}: {e}"))?
+        {
             Some(status) => {
                 let mut stdout_buf = Vec::new();
                 let mut stderr_buf = Vec::new();
@@ -375,7 +399,11 @@ fn run_command_output_with_timeout(
     }
 }
 
-fn run_stdin_decider(session: &InstallSession, goal: &str, cmd: &PathBuf) -> Result<InstallOrchestratorDecision, String> {
+fn run_stdin_decider(
+    session: &InstallSession,
+    goal: &str,
+    cmd: &PathBuf,
+) -> Result<InstallOrchestratorDecision, String> {
     let payload = serde_json::json!({
         "goal": goal,
         "sessionId": session.id,
@@ -384,13 +412,7 @@ fn run_stdin_decider(session: &InstallSession, goal: &str, cmd: &PathBuf) -> Res
         "artifacts": session.artifacts,
     });
     let body = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    let output = run_command_output_with_timeout(
-        cmd,
-        &[],
-        &[],
-        Some(&body),
-        "zeroclaw decider",
-    )?;
+    let output = run_command_output_with_timeout(cmd, &[], &[], Some(&body), "zeroclaw decider")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!(
@@ -403,7 +425,9 @@ fn run_stdin_decider(session: &InstallSession, goal: &str, cmd: &PathBuf) -> Res
     let parsed = parse_decider_json(&stdout)?;
     Ok(InstallOrchestratorDecision {
         step: parsed.step,
-        reason: parsed.reason.unwrap_or_else(|| "sidecar decider".to_string()),
+        reason: parsed
+            .reason
+            .unwrap_or_else(|| "sidecar decider".to_string()),
         source: "zeroclaw-sidecar".to_string(),
         error_code: None,
         action_hint: None,
@@ -460,7 +484,10 @@ fn resolve_decider_command_path() -> Option<PathBuf> {
     let platform_dir = platform_sidecar_dir_name();
     let mut candidates: Vec<PathBuf> = vec![
         // Dev layouts: cwd may be repo root or src-tauri.
-        cwd.join("src-tauri").join("resources").join("zeroclaw").join(bin_name),
+        cwd.join("src-tauri")
+            .join("resources")
+            .join("zeroclaw")
+            .join(bin_name),
         cwd.join("src-tauri")
             .join("resources")
             .join("zeroclaw")
@@ -504,10 +531,7 @@ fn resolve_decider_command_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-fn run_zeroclaw_agent_prompt_json(
-    cmd: &PathBuf,
-    prompt: String,
-) -> Result<String, String> {
+fn run_zeroclaw_agent_prompt_json(cmd: &PathBuf, prompt: String) -> Result<String, String> {
     let cfg = zeroclaw_config_dir()?;
     let cfg_arg = cfg.to_string_lossy().to_string();
     let env_pairs = zeroclaw_env_pairs_from_clawpal();
@@ -524,20 +548,18 @@ fn run_zeroclaw_agent_prompt_json(
         "auth".to_string(),
         "status".to_string(),
     ];
-    let auth = run_command_output_with_timeout(
-        cmd,
-        &auth_args,
-        &env_pairs,
-        None,
-        "zeroclaw auth status",
-    )?;
+    let auth =
+        run_command_output_with_timeout(cmd, &auth_args, &env_pairs, None, "zeroclaw auth status")?;
     let auth_text = format!(
         "{}\n{}",
         String::from_utf8_lossy(&auth.stdout),
         String::from_utf8_lossy(&auth.stderr)
     );
     if auth_text.contains("No auth profiles configured") && env_pairs.is_empty() {
-        return Err("zeroclaw sidecar is not configured: no auth profile. Run zeroclaw onboard/auth first.".to_string());
+        return Err(
+            "zeroclaw sidecar is not configured: no auth profile. Run zeroclaw onboard/auth first."
+                .to_string(),
+        );
     }
 
     let mut base_args = vec![
@@ -559,13 +581,8 @@ fn run_zeroclaw_agent_prompt_json(
         let mut args = base_args.clone();
         args.push("--model".to_string());
         args.push(model.clone());
-        let output = run_command_output_with_timeout(
-            cmd,
-            &args,
-            &env_pairs,
-            None,
-            "zeroclaw agent",
-        )?;
+        let output =
+            run_command_output_with_timeout(cmd, &args, &env_pairs, None, "zeroclaw agent")?;
         let merged = format!(
             "{}\n{}",
             String::from_utf8_lossy(&output.stdout),
@@ -582,13 +599,8 @@ fn run_zeroclaw_agent_prompt_json(
         return Err(format!("zeroclaw agent failed: {}", last_error.trim()));
     }
 
-    let output = run_command_output_with_timeout(
-        cmd,
-        &base_args,
-        &env_pairs,
-        None,
-        "zeroclaw agent",
-    )?;
+    let output =
+        run_command_output_with_timeout(cmd, &base_args, &env_pairs, None, "zeroclaw agent")?;
     let merged = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
@@ -682,7 +694,10 @@ fn default_model_for_provider(provider: &str) -> Option<&'static str> {
 fn candidate_models_for_provider(provider: &str) -> Vec<String> {
     let mut out = Vec::<String>::new();
     if let Ok(profiles) = crate::commands::list_model_profiles() {
-        for p in profiles.into_iter().filter(|p| p.enabled && p.provider.trim().eq_ignore_ascii_case(provider)) {
+        for p in profiles
+            .into_iter()
+            .filter(|p| p.enabled && p.provider.trim().eq_ignore_ascii_case(provider))
+        {
             let mut model = p.model.trim().to_string();
             if model.is_empty() {
                 continue;
@@ -743,13 +758,8 @@ fn run_stdin_target_decider(
         "availableMethods": available_methods,
     });
     let body = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    let output = run_command_output_with_timeout(
-        cmd,
-        &[],
-        &[],
-        Some(&body),
-        "zeroclaw target decider",
-    )?;
+    let output =
+        run_command_output_with_timeout(cmd, &[], &[], Some(&body), "zeroclaw target decider")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!(
@@ -992,21 +1002,24 @@ async fn run_remote_ssh_step(
             details: e,
             commands: vec![],
         })?;
-        let host = hosts
-            .into_iter()
-            .find(|h| h.id == host_id)
-            .ok_or_else(|| runners::RunnerFailure {
-                error_code: "validation_failed".to_string(),
-                summary: "remote ssh host not found".to_string(),
-                details: format!("No SSH host config with id: {host_id}"),
-                commands: vec![],
+        let host =
+            hosts
+                .into_iter()
+                .find(|h| h.id == host_id)
+                .ok_or_else(|| runners::RunnerFailure {
+                    error_code: "validation_failed".to_string(),
+                    summary: "remote ssh host not found".to_string(),
+                    details: format!("No SSH host config with id: {host_id}"),
+                    commands: vec![],
+                })?;
+        pool.connect(&host)
+            .await
+            .map_err(|e| runners::RunnerFailure {
+                error_code: runners::classify_error_code(&e),
+                summary: "remote ssh connect failed".to_string(),
+                details: e,
+                commands: vec![format!("connect host {host_id}")],
             })?;
-        pool.connect(&host).await.map_err(|e| runners::RunnerFailure {
-            error_code: runners::classify_error_code(&e),
-            summary: "remote ssh connect failed".to_string(),
-            details: e,
-            commands: vec![format!("connect host {host_id}")],
-        })?;
     }
     runners::remote_ssh::run_step(pool, host_id, step, artifacts).await
 }
@@ -1103,13 +1116,8 @@ async fn run_step(
             session.updated_at = Utc::now().to_rfc3339();
             store.upsert(session)?;
 
-            let mut result = make_result(
-                true,
-                output.summary,
-                output.details,
-                next_step(&step),
-                None,
-            );
+            let mut result =
+                make_result(true, output.summary, output.details, next_step(&step), None);
             result.commands = output.commands;
             result.artifacts = output.artifacts;
             Ok(result)
@@ -1119,7 +1127,8 @@ async fn run_step(
             session.updated_at = Utc::now().to_rfc3339();
             store.upsert(session)?;
 
-            let mut result = make_result(false, err.summary, err.details, None, Some(err.error_code));
+            let mut result =
+                make_result(false, err.summary, err.details, None, Some(err.error_code));
             result.commands = err.commands;
             Ok(result)
         }
@@ -1219,8 +1228,12 @@ pub async fn orchestrator_next_with_sidecar_for_test(
 }
 
 pub async fn run_local_precheck_for_test() -> Result<InstallStepResult, String> {
-    let output = runners::run_step(&InstallMethod::Local, &InstallStep::Precheck, &HashMap::new())
-        .map_err(|e| format!("{}: {}", e.summary, e.details))?;
+    let output = runners::run_step(
+        &InstallMethod::Local,
+        &InstallStep::Precheck,
+        &HashMap::new(),
+    )
+    .map_err(|e| format!("{}: {}", e.summary, e.details))?;
     let mut result = make_result(
         true,
         output.summary,

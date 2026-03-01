@@ -35,10 +35,10 @@ pub fn prepare_config_write(
         &crate::doctor::parse_json5_document_or_default(current_raw),
         "config",
     )?;
-    
+
     // Serialize new config
     let new_text = crate::doctor::render_json_document(next, "remote config")?;
-    
+
     Ok((new_text, snapshot_text))
 }
 
@@ -52,13 +52,13 @@ pub fn build_candidate_config(
 ) -> Result<(Value, Vec<String>), String> {
     // Start from current config
     let mut candidate = current.clone();
-    
+
     // Apply template patches
     apply_template_patches(&mut candidate, patch_template, params)?;
-    
+
     // Collect change paths
     let changes = collect_change_paths(current, &candidate);
-    
+
     Ok((candidate, changes))
 }
 
@@ -132,7 +132,7 @@ fn apply_template_patches(
                 .get("independent")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            
+
             let mut agent_obj = serde_json::json!({
                 "id": agent_id
             });
@@ -143,12 +143,12 @@ fn apply_template_patches(
                 // Note: workspace path is platform-specific, caller handles it
                 agent_obj["workspace"] = json!(format!("~/.openclaw/workspaces/{agent_id}"));
             }
-            
+
             // Ensure agents.list exists
             if crate::doctor::json_path_get(config, "agents.list").is_none() {
                 crate::doctor::upsert_json_path(config, "agents", json!({"list": []}))?;
             }
-            
+
             // Add agent to list
             if let Some(list) = config
                 .pointer_mut("/agents/list")
@@ -164,16 +164,19 @@ fn apply_template_patches(
                 .get("agentId")
                 .and_then(Value::as_str)
                 .ok_or("agentId parameter required")?;
-            
+
             if let Some(list) = config
                 .pointer_mut("/agents/list")
                 .and_then(Value::as_array_mut)
             {
                 list.retain(|a| a.get("id").and_then(Value::as_str) != Some(agent_id));
             }
-            
+
             // Reset bindings that reference this agent to "main"
-            if let Some(bindings) = config.pointer_mut("/bindings").and_then(Value::as_array_mut) {
+            if let Some(bindings) = config
+                .pointer_mut("/bindings")
+                .and_then(Value::as_array_mut)
+            {
                 for b in bindings.iter_mut() {
                     if b.get("agentId").and_then(Value::as_str) == Some(agent_id) {
                         if let Some(obj) = b.as_object_mut() {
@@ -204,7 +207,7 @@ fn apply_template_patches(
                 .get("channelPath")
                 .and_then(Value::as_str)
                 .ok_or("channelPath parameter required")?;
-            
+
             if let Some(channel_type) = params.get("type").and_then(Value::as_str) {
                 let path = format!("{channel_path}.type");
                 crate::doctor::upsert_json_path(config, &path, json!(channel_type))?;
@@ -231,8 +234,11 @@ fn apply_template_patches(
                 .get("agentId")
                 .and_then(Value::as_str)
                 .ok_or("agentId parameter required")?;
-            
-            if let Some(bindings) = config.pointer_mut("/bindings").and_then(Value::as_array_mut) {
+
+            if let Some(bindings) = config
+                .pointer_mut("/bindings")
+                .and_then(Value::as_array_mut)
+            {
                 if binding_index < bindings.len() {
                     if let Some(obj) = bindings[binding_index].as_object_mut() {
                         obj.insert("agentId".into(), json!(agent_id));
@@ -250,7 +256,7 @@ fn apply_template_patches(
                 .and_then(Value::as_str)
                 .ok_or("agentId parameter required")?;
             let pattern = params.get("pattern").and_then(Value::as_str);
-            
+
             let mut binding = serde_json::json!({
                 "channel": channel,
                 "agentId": agent_id
@@ -258,8 +264,11 @@ fn apply_template_patches(
             if let Some(p) = pattern {
                 binding["pattern"] = json!(p);
             }
-            
-            if let Some(bindings) = config.pointer_mut("/bindings").and_then(Value::as_array_mut) {
+
+            if let Some(bindings) = config
+                .pointer_mut("/bindings")
+                .and_then(Value::as_array_mut)
+            {
                 bindings.push(binding);
             } else {
                 crate::doctor::upsert_json_path(config, "bindings", json!([binding]))?;
@@ -314,11 +323,7 @@ pub fn get_config_value<'a>(config: &'a Value, path: &str) -> Option<&'a Value> 
 }
 
 /// Set a value in config by JSON path
-pub fn set_config_value(
-    config: &mut Value,
-    path: &str,
-    value: Value,
-) -> Result<(), String> {
+pub fn set_config_value(config: &mut Value, path: &str, value: Value) -> Result<(), String> {
     crate::doctor::upsert_json_path(config, path, value)
 }
 
@@ -344,7 +349,7 @@ pub fn format_config_diff(before: &Value, after: &Value) -> String {
 /// Extract model bindings from config
 pub fn extract_model_bindings(config: &Value) -> Vec<ModelBinding> {
     let mut bindings = Vec::new();
-    
+
     // Global default
     let global = config
         .pointer("/agents/defaults/model")
@@ -356,12 +361,9 @@ pub fn extract_model_bindings(config: &Value) -> Vec<ModelBinding> {
         model_value: global,
         path: Some("agents.defaults.model".into()),
     });
-    
+
     // Agent-specific
-    if let Some(agents) = config
-        .pointer("/agents/list")
-        .and_then(Value::as_array)
-    {
+    if let Some(agents) = config.pointer("/agents/list").and_then(Value::as_array) {
         for agent in agents {
             let id = agent.get("id").and_then(Value::as_str).unwrap_or("agent");
             let model = agent.get("model").and_then(read_model_value);
@@ -373,13 +375,9 @@ pub fn extract_model_bindings(config: &Value) -> Vec<ModelBinding> {
             });
         }
     }
-    
+
     // Channel-specific
-    fn walk_channel_bindings(
-        prefix: &str,
-        node: &Value,
-        out: &mut Vec<ModelBinding>,
-    ) {
+    fn walk_channel_bindings(prefix: &str, node: &Value, out: &mut Vec<ModelBinding>) {
         if let Some(obj) = node.as_object() {
             if let Some(model) = obj.get("model").and_then(read_model_value) {
                 out.push(ModelBinding {
@@ -396,11 +394,11 @@ pub fn extract_model_bindings(config: &Value) -> Vec<ModelBinding> {
             }
         }
     }
-    
+
     if let Some(channels) = config.get("channels") {
         walk_channel_bindings("channels", channels, &mut bindings);
     }
-    
+
     bindings
 }
 
@@ -672,7 +670,8 @@ mod tests {
     fn prepare_config_write_returns_both_texts() {
         let current = r#"{"gateway":{"port":18789}}"#;
         let next = json!({"gateway":{"port":19789}});
-        let (new_text, snapshot_text) = prepare_config_write(current, &next, "test").expect("prepare");
+        let (new_text, snapshot_text) =
+            prepare_config_write(current, &next, "test").expect("prepare");
         assert!(new_text.contains("19789"));
         assert!(snapshot_text.contains("18789"));
     }
@@ -682,7 +681,8 @@ mod tests {
         let current = json!({"gateway":{"port":18789}});
         let mut params = serde_json::Map::new();
         params.insert("port".into(), json!(19789_u64));
-        let (candidate, changes) = build_candidate_config(&current, "set-gateway-port", &params).expect("build");
+        let (candidate, changes) =
+            build_candidate_config(&current, "set-gateway-port", &params).expect("build");
         assert_eq!(candidate["gateway"]["port"], 19789);
         assert!(changes.iter().any(|c| c.contains("port")));
     }
@@ -690,12 +690,15 @@ mod tests {
     #[test]
     fn get_set_delete_config_value() {
         let mut config = json!({"a":{"b":1}});
-        
-        assert_eq!(get_config_value(&config, "a.b").and_then(Value::as_i64), Some(1));
-        
+
+        assert_eq!(
+            get_config_value(&config, "a.b").and_then(Value::as_i64),
+            Some(1)
+        );
+
         set_config_value(&mut config, "a.c", json!(2)).expect("set");
         assert_eq!(config["a"]["c"], 2);
-        
+
         assert!(delete_config_value(&mut config, "a.b"));
         assert!(get_config_value(&config, "a.b").is_none());
     }
@@ -732,7 +735,7 @@ mod tests {
         let config = json!({"agents": {"list": [{"id": "agent1"}]}});
         let ids = collect_agent_ids(&config);
         assert!(ids.contains(&"agent1".to_string()));
-        
+
         let empty_config = json!({});
         let empty_ids = collect_agent_ids(&empty_config);
         assert_eq!(empty_ids, vec!["main"]);
@@ -751,7 +754,10 @@ mod tests {
         });
         let nodes = collect_channel_nodes(&config);
         assert!(!nodes.is_empty());
-        let discord = nodes.iter().find(|n| n.path == "channels.discord").expect("discord node");
+        let discord = nodes
+            .iter()
+            .find(|n| n.path == "channels.discord")
+            .expect("discord node");
         assert_eq!(discord.channel_type, Some("discord".into()));
         assert!(discord.has_model_field);
     }
@@ -760,14 +766,17 @@ mod tests {
     fn resolve_gateway_port_default() {
         let config = json!({});
         assert_eq!(resolve_gateway_port(&config), 18789);
-        
+
         let config_with_port = json!({"gateway":{"port":19789}});
         assert_eq!(resolve_gateway_port(&config_with_port), 19789);
     }
 
     #[test]
     fn snapshot_filename_format() {
-        assert_eq!(snapshot_filename(1234567890, "test"), "1234567890-test.json");
+        assert_eq!(
+            snapshot_filename(1234567890, "test"),
+            "1234567890-test.json"
+        );
     }
 
     #[test]
@@ -806,9 +815,10 @@ mod tests {
         params.insert("agentId".into(), json!("new-agent"));
         params.insert("model".into(), json!("test/model"));
         params.insert("independent".into(), json!(true));
-        
-        let (candidate, _) = build_candidate_config(&current, "create-agent", &params).expect("build");
-        
+
+        let (candidate, _) =
+            build_candidate_config(&current, "create-agent", &params).expect("build");
+
         let agents = candidate["agents"]["list"].as_array().expect("list");
         assert!(agents.iter().any(|a| a["id"] == "new-agent"));
     }
@@ -823,13 +833,14 @@ mod tests {
         });
         let mut params = serde_json::Map::new();
         params.insert("agentId".into(), json!("to-delete"));
-        
-        let (candidate, _) = build_candidate_config(&current, "delete-agent", &params).expect("build");
-        
+
+        let (candidate, _) =
+            build_candidate_config(&current, "delete-agent", &params).expect("build");
+
         let agents = candidate["agents"]["list"].as_array().expect("list");
         assert!(!agents.iter().any(|a| a["id"] == "to-delete"));
         assert!(agents.iter().any(|a| a["id"] == "keep"));
-        
+
         // Binding should be reset to main
         let bindings = candidate["bindings"].as_array().expect("bindings");
         assert!(bindings.iter().any(|b| b["agentId"] == "main"));

@@ -42,7 +42,10 @@ pub fn parse_cron_runs(jsonl: &str) -> Result<Vec<CronRun>, String> {
     let mut runs: Vec<Value> = jsonl
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str::<Value>(l).map_err(|e| format!("Failed to parse cron run line: {e}")))
+        .map(|l| {
+            serde_json::from_str::<Value>(l)
+                .map_err(|e| format!("Failed to parse cron run line: {e}"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     runs.reverse();
     Ok(runs)

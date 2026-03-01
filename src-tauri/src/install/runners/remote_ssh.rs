@@ -32,7 +32,10 @@ pub async fn run_step(
                 summary: "install.ssh.precheck.summary".to_string(),
                 details,
                 commands: vec!["ssh remote command -v openclaw".to_string()],
-                artifacts: HashMap::from([("openclaw_present".to_string(), Value::Bool(openclaw_present))]),
+                artifacts: HashMap::from([(
+                    "openclaw_present".to_string(),
+                    Value::Bool(openclaw_present),
+                )]),
             })
         }
         InstallStep::Install => {
@@ -49,12 +52,15 @@ pub async fn run_step(
                 });
             }
             let script = "mkdir -p ~/.clawpal/install/cache && INSTALLER=~/.clawpal/install/cache/openclaw-install.sh && ( [ -s \"$INSTALLER\" ] || curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$INSTALLER\" ) && bash \"$INSTALLER\" --no-prompt --no-onboard";
-            let result = pool.exec_login(host_id, script).await.map_err(|e| RunnerFailure {
-                error_code: classify_error_code(&e),
-                summary: "remote ssh install failed".to_string(),
-                details: e,
-                commands: vec![script.to_string()],
-            })?;
+            let result = pool
+                .exec_login(host_id, script)
+                .await
+                .map_err(|e| RunnerFailure {
+                    error_code: classify_error_code(&e),
+                    summary: "remote ssh install failed".to_string(),
+                    details: e,
+                    commands: vec![script.to_string()],
+                })?;
             if result.exit_code != 0 {
                 return Err(RunnerFailure {
                     error_code: classify_error_code(&result.stderr),
@@ -76,12 +82,15 @@ pub async fn run_step(
         }
         InstallStep::Init => {
             let init_cmd = "mkdir -p ~/.openclaw && [ -f ~/.openclaw/openclaw.json ] || printf '{}' > ~/.openclaw/openclaw.json";
-            let result = pool.exec_login(host_id, init_cmd).await.map_err(|e| RunnerFailure {
-                error_code: classify_error_code(&e),
-                summary: "install.ssh.init.failed".to_string(),
-                details: e,
-                commands: vec![init_cmd.to_string()],
-            })?;
+            let result = pool
+                .exec_login(host_id, init_cmd)
+                .await
+                .map_err(|e| RunnerFailure {
+                    error_code: classify_error_code(&e),
+                    summary: "install.ssh.init.failed".to_string(),
+                    details: e,
+                    commands: vec![init_cmd.to_string()],
+                })?;
             if result.exit_code != 0 {
                 return Err(RunnerFailure {
                     error_code: classify_error_code(&result.stderr),
@@ -102,12 +111,14 @@ pub async fn run_step(
             })
         }
         InstallStep::Verify => {
-            let version = run_openclaw_remote(pool, host_id, &["--version"]).await.map_err(|e| RunnerFailure {
-                error_code: classify_error_code(&e),
-                summary: "remote ssh verify failed".to_string(),
-                details: e,
-                commands: vec!["openclaw --version".to_string()],
-            })?;
+            let version = run_openclaw_remote(pool, host_id, &["--version"])
+                .await
+                .map_err(|e| RunnerFailure {
+                    error_code: classify_error_code(&e),
+                    summary: "remote ssh verify failed".to_string(),
+                    details: e,
+                    commands: vec!["openclaw --version".to_string()],
+                })?;
             if version.exit_code != 0 {
                 return Err(RunnerFailure {
                     error_code: classify_error_code(&version.stderr),

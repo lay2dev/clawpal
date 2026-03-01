@@ -1,7 +1,10 @@
-use std::{env, fs, path::{Path, PathBuf}};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 const BUILTIN_RECIPES_JSON: &str = include_str!("../recipes.json");
 
@@ -241,7 +244,12 @@ pub fn build_candidate_config_from_template(
     Ok((merged, changes))
 }
 
-fn apply_merge_patch(target: &mut Value, patch: &Value, prefix: &str, changes: &mut Vec<ChangeItem>) {
+fn apply_merge_patch(
+    target: &mut Value,
+    patch: &Value,
+    prefix: &str,
+    changes: &mut Vec<ChangeItem>,
+) {
     if patch.is_object() && target.is_object() {
         let t = target.as_object_mut().unwrap();
         for (k, pv) in patch.as_object().unwrap() {

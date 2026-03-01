@@ -26,11 +26,14 @@ pub fn emit_runtime_event(app: &AppHandle, event: RuntimeEvent) {
             let _ = app.emit(name, payload);
         }
         RuntimeEvent::Error { error } => {
-            let _ = app.emit(name, json!({
-                "code": error.code.as_str(),
-                "message": error.message,
-                "actionHint": error.action_hint,
-            }));
+            let _ = app.emit(
+                name,
+                json!({
+                    "code": error.code.as_str(),
+                    "message": error.message,
+                    "actionHint": error.action_hint,
+                }),
+            );
         }
         RuntimeEvent::Status { text } => {
             let _ = app.emit(name, json!({ "text": text }));

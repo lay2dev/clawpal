@@ -12,8 +12,6 @@ pub async fn remote_list_cron_jobs(
     }
 }
 
-
-
 #[tauri::command]
 pub async fn remote_get_cron_runs(
     pool: State<'_, SshConnectionPool>,
@@ -34,8 +32,6 @@ pub async fn remote_get_cron_runs(
     }
 }
 
-
-
 #[tauri::command]
 pub async fn remote_trigger_cron_job(
     pool: State<'_, SshConnectionPool>,
@@ -54,8 +50,6 @@ pub async fn remote_trigger_cron_job(
         Err(format!("{}\n{}", result.stdout, result.stderr))
     }
 }
-
-
 
 #[tauri::command]
 pub async fn remote_delete_cron_job(
@@ -87,8 +81,6 @@ pub fn list_cron_jobs() -> Result<Value, String> {
     Ok(parse_cron_jobs(&text))
 }
 
-
-
 #[tauri::command]
 pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>, String> {
     let paths = resolve_paths();
@@ -107,8 +99,6 @@ pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>,
     Ok(runs)
 }
 
-
-
 #[tauri::command]
 pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -126,15 +116,14 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
             Ok(stdout)
         } else {
             // Extract meaningful error lines, skip Doctor warning banners
-            let error_msg = clawpal_core::doctor::strip_doctor_banner(&format!("{stdout}\n{stderr}"));
+            let error_msg =
+                clawpal_core::doctor::strip_doctor_banner(&format!("{stdout}\n{stderr}"));
             Err(error_msg)
         }
     })
     .await
     .map_err(|e| format!("Task failed: {e}"))?
 }
-
-
 
 #[tauri::command]
 pub fn delete_cron_job(job_id: String) -> Result<String, String> {

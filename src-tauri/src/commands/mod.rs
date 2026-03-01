@@ -32,6 +32,7 @@ pub mod doctor;
 pub mod gateway;
 pub mod logs;
 pub mod precheck;
+pub mod preferences;
 pub mod profiles;
 pub mod rescue;
 pub mod sessions;
@@ -57,6 +58,8 @@ pub use gateway::*;
 pub use logs::*;
 #[allow(unused_imports)]
 pub use precheck::*;
+#[allow(unused_imports)]
+pub use preferences::*;
 #[allow(unused_imports)]
 pub use profiles::*;
 #[allow(unused_imports)]
@@ -3222,30 +3225,33 @@ fn run_provider_probe(
     }
 }
 
-fn resolve_profile_api_key(profile: &ModelProfile, base_dir: &Path) -> String {
-    // 1. Direct api_key field (user entered key directly in ClawPal)
-    if let Some(ref key) = profile.api_key {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-
-    // 2. Try auth_ref as env var name directly (e.g. "OPENAI_API_KEY")
+fn resolve_profile_api_key_with_priority(
+    profile: &ModelProfile,
+    base_dir: &Path,
+) -> Option<(String, u8)> {
+    // 1. Try auth_ref as env var name directly (e.g. "OPENAI_API_KEY")
     let auth_ref = profile.auth_ref.trim();
     if !auth_ref.is_empty() {
         if let Ok(val) = std::env::var(auth_ref) {
             if !val.trim().is_empty() {
-                return val;
+                return Some((val, 40));
             }
         }
     }
 
-    // 3. Look up auth_ref in agent-level auth store files
+    // 2. Look up auth_ref in agent-level auth store files
     //    Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
     if !auth_ref.is_empty() {
         if let Some(key) = resolve_key_from_agent_auth_profiles(base_dir, auth_ref) {
-            return key;
+            return Some((key, 30));
+        }
+    }
+
+    // 3. Direct api_key field (legacy/manual ClawPal input)
+    if let Some(ref key) = profile.api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Some((trimmed.to_string(), 20));
         }
     }
 
@@ -3256,13 +3262,19 @@ fn resolve_profile_api_key(profile: &ModelProfile, base_dir: &Path) -> String {
             let env_name = format!("{provider}{suffix}");
             if let Ok(val) = std::env::var(&env_name) {
                 if !val.trim().is_empty() {
-                    return val;
+                    return Some((val, 10));
                 }
             }
         }
     }
 
-    String::new()
+    None
+}
+
+fn resolve_profile_api_key(profile: &ModelProfile, base_dir: &Path) -> String {
+    resolve_profile_api_key_with_priority(profile, base_dir)
+        .map(|(key, _)| key)
+        .unwrap_or_default()
 }
 
 /// Internal helper: resolve available provider API keys from ClawPal model profiles.
@@ -3276,16 +3288,33 @@ pub(crate) fn collect_provider_api_keys_from_paths(
     paths: &crate::models::OpenClawPaths,
 ) -> HashMap<String, String> {
     let profiles = load_model_profiles(&paths);
-    let mut out = HashMap::<String, String>::new();
+    collect_provider_api_keys_from_profiles(&profiles, &paths.base_dir)
+}
+
+fn collect_provider_api_keys_from_profiles(
+    profiles: &[ModelProfile],
+    base_dir: &Path,
+) -> HashMap<String, String> {
+    let mut out = HashMap::<String, (String, u8)>::new();
     for profile in profiles.iter().filter(|p| p.enabled) {
-        let key = resolve_profile_api_key(profile, &paths.base_dir);
-        if key.is_empty() {
+        let Some((key, priority)) = resolve_profile_api_key_with_priority(profile, base_dir)
+        else {
             continue;
+        };
+        let provider = profile.provider.trim().to_lowercase();
+        match out.get_mut(&provider) {
+            Some((existing_key, existing_priority)) => {
+                if priority > *existing_priority {
+                    *existing_key = key;
+                    *existing_priority = priority;
+                }
+            }
+            None => {
+                out.insert(provider, (key, priority));
+            }
         }
-        out.entry(profile.provider.trim().to_lowercase())
-            .or_insert(key);
     }
-    out
+    out.into_iter().map(|(k, (v, _))| (k, v)).collect()
 }
 
 /// Reads agent-level auth store files to find the actual API key/token.
@@ -4500,6 +4529,96 @@ mod model_profile_upsert_tests {
     }
 
     #[test]
+    fn resolve_profile_api_key_prefers_auth_ref_store_over_direct_api_key() {
+        let tmp_root =
+            std::env::temp_dir().join(format!("clawpal-auth-priority-{}", uuid::Uuid::new_v4()));
+        let base_dir = tmp_root.join("openclaw");
+        let auth_file = base_dir
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        fs::create_dir_all(auth_file.parent().expect("auth parent")).expect("create auth dir");
+        let payload = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": "sk-anthropic-from-store"
+                }
+            }
+        });
+        write_text(
+            &auth_file,
+            &serde_json::to_string_pretty(&payload).expect("serialize payload"),
+        )
+        .expect("write auth payload");
+
+        let profile = mk_profile(
+            "p-anthropic",
+            "anthropic",
+            "claude-opus-4-5",
+            "anthropic:default",
+            Some("sk-stale-direct"),
+        );
+        let resolved = resolve_profile_api_key(&profile, &base_dir);
+        assert_eq!(resolved, "sk-anthropic-from-store");
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    fn collect_provider_api_keys_prefers_higher_priority_source_for_same_provider() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "clawpal-provider-key-priority-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let base_dir = tmp_root.join("openclaw");
+        let auth_file = base_dir
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        fs::create_dir_all(auth_file.parent().expect("auth parent")).expect("create auth dir");
+        let payload = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": "sk-anthropic-good"
+                }
+            }
+        });
+        write_text(
+            &auth_file,
+            &serde_json::to_string_pretty(&payload).expect("serialize payload"),
+        )
+        .expect("write auth payload");
+        let stale = mk_profile(
+            "anthropic-stale",
+            "anthropic",
+            "claude-opus-4-5",
+            "",
+            Some("sk-anthropic-stale"),
+        );
+        let preferred = mk_profile(
+            "anthropic-ref",
+            "anthropic",
+            "claude-opus-4-6",
+            "anthropic:default",
+            None,
+        );
+        let keys =
+            collect_provider_api_keys_from_profiles(&[stale, preferred], &base_dir);
+        assert_eq!(
+            keys.get("anthropic").map(String::as_str),
+            Some("sk-anthropic-good")
+        );
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
     fn collect_main_auth_candidates_prefers_defaults_and_main_agent() {
         let cfg = serde_json::json!({
             "agents": {
@@ -5211,6 +5330,17 @@ pub async fn connect_docker_instance(
 }
 
 #[tauri::command]
+pub async fn connect_local_instance(
+    home: String,
+    label: Option<String>,
+    instance_id: Option<String>,
+) -> Result<clawpal_core::instance::Instance, String> {
+    clawpal_core::connect::connect_local(&home, label.as_deref(), instance_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn connect_ssh_instance(
     host_id: String,
 ) -> Result<clawpal_core::instance::Instance, String> {
@@ -5261,9 +5391,12 @@ fn fallback_label_from_instance_id(instance_id: &str) -> String {
     }
     if let Some(suffix) = instance_id.strip_prefix("docker:") {
         if suffix.is_empty() {
-            return "Docker".to_string();
+            return "docker-local".to_string();
         }
-        return format!("Docker {suffix}");
+        if suffix.starts_with("docker-") {
+            return suffix.to_string();
+        }
+        return format!("docker-{suffix}");
     }
     if let Some(suffix) = instance_id.strip_prefix("ssh:") {
         return if suffix.is_empty() {
@@ -6187,15 +6320,21 @@ pub fn uninstall_watchdog() -> Result<bool, String> {
 // ---------------------------------------------------------------------------
 // Log reading commands
 // ---------------------------------------------------------------------------
+const MAX_LOG_TAIL_LINES: usize = 400;
+
+fn clamp_log_lines(lines: Option<usize>) -> usize {
+    let requested = lines.unwrap_or(200);
+    requested.clamp(1, MAX_LOG_TAIL_LINES)
+}
 
 #[tauri::command]
 pub fn read_app_log(lines: Option<usize>) -> Result<String, String> {
-    crate::logging::read_log_tail("app.log", lines.unwrap_or(200))
+    crate::logging::read_log_tail("app.log", clamp_log_lines(lines))
 }
 
 #[tauri::command]
 pub fn read_error_log(lines: Option<usize>) -> Result<String, String> {
-    crate::logging::read_log_tail("error.log", lines.unwrap_or(200))
+    crate::logging::read_log_tail("error.log", clamp_log_lines(lines))
 }
 
 #[tauri::command]
@@ -6214,11 +6353,7 @@ pub fn read_gateway_log(lines: Option<usize>) -> Result<String, String> {
     if !path.exists() {
         return Ok(String::new());
     }
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let all_lines: Vec<&str> = content.lines().collect();
-    let n = lines.unwrap_or(200);
-    let start = all_lines.len().saturating_sub(n);
-    Ok(all_lines[start..].join("\n"))
+    crate::logging::read_path_tail(&path, clamp_log_lines(lines))
 }
 
 #[tauri::command]
@@ -6228,11 +6363,7 @@ pub fn read_gateway_error_log(lines: Option<usize>) -> Result<String, String> {
     if !path.exists() {
         return Ok(String::new());
     }
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let all_lines: Vec<&str> = content.lines().collect();
-    let n = lines.unwrap_or(200);
-    let start = all_lines.len().saturating_sub(n);
-    Ok(all_lines[start..].join("\n"))
+    crate::logging::read_path_tail(&path, clamp_log_lines(lines))
 }
 
 // ---------------------------------------------------------------------------

@@ -71,8 +71,8 @@ fn test_run_openclaw_with_env_isolation() {
     );
 
     // Read from real config — should NOT have our value
-    let output =
-        run_openclaw(&["config", "get", "agents.defaults.model.primary"]).expect("should get real config");
+    let output = run_openclaw(&["config", "get", "agents.defaults.model.primary"])
+        .expect("should get real config");
     assert_eq!(output.exit_code, 0);
     assert!(
         !output.stdout.contains("test-model-12345"),
@@ -116,14 +116,25 @@ fn test_command_queue_basic() {
     // Enqueue
     let cmd1 = queue.enqueue(
         "Set model".to_string(),
-        vec!["openclaw".into(), "config".into(), "set".into(), "foo".into(), "bar".into()],
+        vec![
+            "openclaw".into(),
+            "config".into(),
+            "set".into(),
+            "foo".into(),
+            "bar".into(),
+        ],
     );
     assert_eq!(queue.len(), 1);
     assert!(!queue.is_empty());
 
     let cmd2 = queue.enqueue(
         "Add agent".to_string(),
-        vec!["openclaw".into(), "agents".into(), "add".into(), "test".into()],
+        vec![
+            "openclaw".into(),
+            "agents".into(),
+            "add".into(),
+            "test".into(),
+        ],
     );
     assert_eq!(queue.len(), 2);
 
@@ -149,9 +160,21 @@ fn test_remote_command_queues_isolation() {
     let queues = RemoteCommandQueues::new();
 
     // Enqueue to different hosts
-    queues.enqueue("host1", "Cmd A".to_string(), vec!["openclaw".into(), "a".into()]);
-    queues.enqueue("host2", "Cmd B".to_string(), vec!["openclaw".into(), "b".into()]);
-    queues.enqueue("host1", "Cmd C".to_string(), vec!["openclaw".into(), "c".into()]);
+    queues.enqueue(
+        "host1",
+        "Cmd A".to_string(),
+        vec!["openclaw".into(), "a".into()],
+    );
+    queues.enqueue(
+        "host2",
+        "Cmd B".to_string(),
+        vec!["openclaw".into(), "b".into()],
+    );
+    queues.enqueue(
+        "host1",
+        "Cmd C".to_string(),
+        vec!["openclaw".into(), "c".into()],
+    );
 
     assert_eq!(queues.len("host1"), 2);
     assert_eq!(queues.len("host2"), 1);

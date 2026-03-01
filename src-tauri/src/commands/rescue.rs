@@ -92,8 +92,6 @@ pub async fn remote_manage_rescue_bot(
     })
 }
 
-
-
 #[tauri::command]
 pub async fn remote_diagnose_primary_via_rescue(
     pool: State<'_, SshConnectionPool>,
@@ -105,8 +103,6 @@ pub async fn remote_diagnose_primary_via_rescue(
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile).await
 }
-
-
 
 #[tauri::command]
 pub async fn remote_repair_primary_via_rescue(

@@ -51,8 +51,6 @@ pub async fn remote_setup_agent_identity(
     Ok(true)
 }
 
-
-
 #[tauri::command]
 pub async fn remote_chat_via_openclaw(
     pool: State<'_, SshConnectionPool>,
@@ -166,8 +164,6 @@ pub fn create_agent(
     })
 }
 
-
-
 #[tauri::command]
 pub fn delete_agent(agent_id: String) -> Result<bool, String> {
     let agent_id = agent_id.trim().to_string();
@@ -210,8 +206,6 @@ pub fn delete_agent(agent_id: String) -> Result<bool, String> {
     Ok(true)
 }
 
-
-
 #[tauri::command]
 pub fn setup_agent_identity(
     agent_id: String,
@@ -230,8 +224,9 @@ pub fn setup_agent_identity(
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
 
-    let workspace = clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
-        .map(|s| expand_tilde(&s))?;
+    let workspace =
+        clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
+            .map(|s| expand_tilde(&s))?;
 
     // Build IDENTITY.md content
     let mut content = format!("- Name: {}\n", name);
@@ -250,8 +245,6 @@ pub fn setup_agent_identity(
 
     Ok(true)
 }
-
-
 
 #[tauri::command]
 pub async fn chat_via_openclaw(

@@ -94,13 +94,9 @@ fn check_remote_ssh(instance: &Instance) -> Result<HealthStatus> {
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
-        format!(
-            "ServerAliveInterval={HEALTH_SSH_SERVER_ALIVE_INTERVAL_SECS}"
-        ),
+        format!("ServerAliveInterval={HEALTH_SSH_SERVER_ALIVE_INTERVAL_SECS}"),
         "-o".to_string(),
-        format!(
-            "ServerAliveCountMax={HEALTH_SSH_SERVER_ALIVE_COUNT_MAX}"
-        ),
+        format!("ServerAliveCountMax={HEALTH_SSH_SERVER_ALIVE_COUNT_MAX}"),
     ];
     if let Some(key_path) = ssh.key_path.clone() {
         if !key_path.trim().is_empty() {

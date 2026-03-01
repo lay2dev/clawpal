@@ -82,8 +82,6 @@ echo "]"
         .collect())
 }
 
-
-
 #[tauri::command]
 pub async fn remote_delete_sessions_by_ids(
     pool: State<'_, SshConnectionPool>,
@@ -117,14 +115,14 @@ pub async fn remote_delete_sessions_by_ids(
     if let Ok(content) = pool.sftp_read(&host_id, &sessions_json_path).await {
         let ids: Vec<&str> = session_ids.iter().map(String::as_str).collect();
         if let Ok(updated) = clawpal_core::sessions::filter_sessions_by_ids(&content, &ids) {
-            let _ = pool.sftp_write(&host_id, &sessions_json_path, &updated).await;
+            let _ = pool
+                .sftp_write(&host_id, &sessions_json_path, &updated)
+                .await;
         }
     }
 
     Ok(deleted)
 }
-
-
 
 #[tauri::command]
 pub async fn remote_list_session_files(
@@ -167,8 +165,6 @@ echo "]"
         })
         .collect())
 }
-
-
 
 #[tauri::command]
 pub async fn remote_preview_session(
@@ -213,8 +209,6 @@ pub async fn remote_preview_session(
         .collect())
 }
 
-
-
 #[tauri::command]
 pub async fn remote_clear_all_sessions(
     pool: State<'_, SshConnectionPool>,
@@ -247,15 +241,11 @@ pub fn list_session_files() -> Result<Vec<SessionFile>, String> {
     list_session_files_detailed(&paths.base_dir)
 }
 
-
-
 #[tauri::command]
 pub fn clear_all_sessions() -> Result<usize, String> {
     let paths = resolve_paths();
     clear_agent_and_global_sessions(&paths.base_dir.join("agents"), None)
 }
-
-
 
 #[tauri::command]
 pub async fn analyze_sessions() -> Result<Vec<AgentSessionAnalysis>, String> {
@@ -263,8 +253,6 @@ pub async fn analyze_sessions() -> Result<Vec<AgentSessionAnalysis>, String> {
         .await
         .map_err(|e| e.to_string())?
 }
-
-
 
 #[tauri::command]
 pub async fn delete_sessions_by_ids(
@@ -277,8 +265,6 @@ pub async fn delete_sessions_by_ids(
     .await
     .map_err(|e| e.to_string())?
 }
-
-
 
 #[tauri::command]
 pub async fn preview_session(agent_id: String, session_id: String) -> Result<Vec<Value>, String> {

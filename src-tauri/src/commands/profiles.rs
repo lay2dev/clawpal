@@ -5,6 +5,122 @@ fn local_global_openclaw_base_dir() -> std::path::PathBuf {
     home.join(".openclaw")
 }
 
+fn normalize_profile_key(profile: &ModelProfile) -> String {
+    normalize_model_ref(&profile_to_model_value(profile))
+}
+
+fn is_non_empty(opt: Option<&str>) -> bool {
+    opt.map(str::trim).is_some_and(|v| !v.is_empty())
+}
+
+fn profile_quality_score(profile: &ModelProfile) -> usize {
+    let mut score = 0usize;
+    if is_non_empty(profile.api_key.as_deref()) {
+        score += 8;
+    }
+    if !profile.auth_ref.trim().is_empty() {
+        score += 4;
+    }
+    if is_non_empty(profile.base_url.as_deref()) {
+        score += 2;
+    }
+    if profile.enabled {
+        score += 1;
+    }
+    score
+}
+
+fn dedupe_profiles_by_model_key(profiles: Vec<ModelProfile>) -> Vec<ModelProfile> {
+    let mut deduped: Vec<ModelProfile> = Vec::new();
+    let mut key_index: HashMap<String, usize> = HashMap::new();
+
+    for profile in profiles {
+        let key = normalize_profile_key(&profile);
+        if key.is_empty() {
+            deduped.push(profile);
+            continue;
+        }
+        if let Some(existing_idx) = key_index.get(&key).copied() {
+            let existing_score = profile_quality_score(&deduped[existing_idx]);
+            let incoming_score = profile_quality_score(&profile);
+            if incoming_score > existing_score {
+                deduped[existing_idx] = profile;
+            }
+        } else {
+            key_index.insert(key, deduped.len());
+            deduped.push(profile);
+        }
+    }
+
+    deduped
+}
+
+fn merge_remote_profile_into_local(
+    local_profiles: &mut Vec<ModelProfile>,
+    remote: &ModelProfile,
+    resolved_api_key: Option<String>,
+    resolved_base_url: Option<String>,
+) -> bool {
+    let remote_key = normalize_profile_key(remote);
+    let target_idx = local_profiles
+        .iter()
+        .position(|candidate| candidate.id == remote.id)
+        .or_else(|| {
+            if remote_key.is_empty() {
+                None
+            } else {
+                local_profiles
+                    .iter()
+                    .position(|candidate| normalize_profile_key(candidate) == remote_key)
+            }
+        });
+
+    if let Some(idx) = target_idx {
+        let existing = &mut local_profiles[idx];
+        if existing.name.trim().is_empty() && !remote.name.trim().is_empty() {
+            existing.name = remote.name.clone();
+        }
+        if existing.description.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            existing.description = remote.description.clone();
+        }
+        if existing.provider.trim().is_empty() && !remote.provider.trim().is_empty() {
+            existing.provider = remote.provider.clone();
+        }
+        if existing.model.trim().is_empty() && !remote.model.trim().is_empty() {
+            existing.model = remote.model.clone();
+        }
+        if existing.auth_ref.trim().is_empty() && !remote.auth_ref.trim().is_empty() {
+            existing.auth_ref = remote.auth_ref.clone();
+        }
+        if !is_non_empty(existing.base_url.as_deref()) && is_non_empty(remote.base_url.as_deref()) {
+            existing.base_url = remote.base_url.clone();
+        }
+        if !is_non_empty(existing.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref()) {
+            existing.base_url = resolved_base_url;
+        }
+        if !is_non_empty(existing.api_key.as_deref()) && is_non_empty(remote.api_key.as_deref()) {
+            existing.api_key = remote.api_key.clone();
+        }
+        if !is_non_empty(existing.api_key.as_deref()) && is_non_empty(resolved_api_key.as_deref()) {
+            existing.api_key = resolved_api_key;
+        }
+        if !existing.enabled && remote.enabled {
+            existing.enabled = true;
+        }
+        return false;
+    }
+
+    let mut merged = remote.clone();
+    if !is_non_empty(merged.api_key.as_deref()) && is_non_empty(resolved_api_key.as_deref()) {
+        merged.api_key = resolved_api_key;
+    }
+    if !is_non_empty(merged.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref()) {
+        merged.base_url = resolved_base_url;
+    }
+    local_profiles.push(merged);
+    true
+}
+
 #[tauri::command]
 pub async fn remote_list_model_profiles(
     pool: State<'_, SshConnectionPool>,
@@ -229,6 +345,177 @@ pub async fn remote_extract_model_profiles_from_config(
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAuthSyncResult {
+    pub total_remote_profiles: usize,
+    pub synced_profiles: usize,
+    pub created_profiles: usize,
+    pub updated_profiles: usize,
+    pub resolved_keys: usize,
+    pub unresolved_keys: usize,
+    pub failed_key_resolves: usize,
+}
+
+#[tauri::command]
+pub async fn remote_sync_profiles_to_local_auth(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<RemoteAuthSyncResult, String> {
+    let content = match pool
+        .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
+        .await
+    {
+        Ok(content) => content,
+        Err(e) if is_remote_missing_path_error(&e) => r#"{"profiles":[]}"#.to_string(),
+        Err(e) => return Err(format!("Failed to read remote model profiles: {e}")),
+    };
+    let remote_profiles = clawpal_core::profile::list_profiles_from_storage_json(&content);
+    if remote_profiles.is_empty() {
+        return Ok(RemoteAuthSyncResult {
+            total_remote_profiles: 0,
+            synced_profiles: 0,
+            created_profiles: 0,
+            updated_profiles: 0,
+            resolved_keys: 0,
+            unresolved_keys: 0,
+            failed_key_resolves: 0,
+        });
+    }
+
+    let paths = resolve_paths();
+    let mut local_profiles = dedupe_profiles_by_model_key(load_model_profiles(&paths));
+
+    let mut created_profiles = 0usize;
+    let mut updated_profiles = 0usize;
+    let mut resolved_keys = 0usize;
+    let mut unresolved_keys = 0usize;
+    let mut failed_key_resolves = 0usize;
+
+    for remote in &remote_profiles {
+        let mut resolved_api_key: Option<String> = None;
+        match resolve_remote_profile_api_key(&pool, &host_id, remote).await {
+            Ok(api_key) if !api_key.trim().is_empty() => {
+                resolved_api_key = Some(api_key);
+                resolved_keys += 1;
+            }
+            Ok(_) => {
+                unresolved_keys += 1;
+            }
+            Err(_) => {
+                failed_key_resolves += 1;
+            }
+        }
+
+        let resolved_base_url = if remote
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|v| !v.is_empty())
+        {
+            None
+        } else {
+            match resolve_remote_profile_base_url(&pool, &host_id, remote).await {
+                Ok(Some(remote_base)) if !remote_base.trim().is_empty() => {
+                    Some(remote_base.trim().to_string())
+                }
+                _ => None,
+            }
+        };
+
+        if merge_remote_profile_into_local(
+            &mut local_profiles,
+            remote,
+            resolved_api_key,
+            resolved_base_url,
+        ) {
+            created_profiles += 1;
+        } else {
+            updated_profiles += 1;
+        }
+    }
+
+    save_model_profiles(&paths, &local_profiles)?;
+
+    Ok(RemoteAuthSyncResult {
+        total_remote_profiles: remote_profiles.len(),
+        synced_profiles: created_profiles + updated_profiles,
+        created_profiles,
+        updated_profiles,
+        resolved_keys,
+        unresolved_keys,
+        failed_key_resolves,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(id: &str, provider: &str, model: &str, auth_ref: &str, api_key: Option<&str>) -> ModelProfile {
+        ModelProfile {
+            id: id.to_string(),
+            name: format!("{provider}/{model}"),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            auth_ref: auth_ref.to_string(),
+            api_key: api_key.map(|v| v.to_string()),
+            base_url: None,
+            description: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn merge_remote_profile_reuses_local_entry_by_provider_model() {
+        let mut local = vec![profile("local-1", "anthropic", "claude-4-5", "anthropic:default", Some("local-key"))];
+        let remote = profile("remote-9", "anthropic", "claude-4-5", "anthropic:remote", None);
+
+        let created = merge_remote_profile_into_local(&mut local, &remote, None, None);
+
+        assert!(!created);
+        assert_eq!(local.len(), 1);
+        assert_eq!(local[0].id, "local-1");
+        assert_eq!(local[0].api_key.as_deref(), Some("local-key"));
+        assert_eq!(local[0].auth_ref, "anthropic:default");
+    }
+
+    #[test]
+    fn merge_remote_profile_fills_missing_local_key_from_resolved_remote() {
+        let mut local = vec![profile("local-2", "openai", "gpt-4.1", "openai:default", None)];
+        let remote = profile("remote-2", "openai", "gpt-4.1", "openai:default", None);
+
+        let created = merge_remote_profile_into_local(
+            &mut local,
+            &remote,
+            Some("resolved-remote-key".to_string()),
+            None,
+        );
+
+        assert!(!created);
+        assert_eq!(local.len(), 1);
+        assert_eq!(local[0].api_key.as_deref(), Some("resolved-remote-key"));
+    }
+
+    #[test]
+    fn dedupe_profiles_prefers_entry_with_api_key() {
+        let weak = profile("weak", "anthropic", "claude-4-5", "", None);
+        let strong = profile(
+            "strong",
+            "anthropic",
+            "claude-4-5",
+            "anthropic:default",
+            Some("k-123"),
+        );
+
+        let deduped = dedupe_profiles_by_model_key(vec![weak, strong]);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].id, "strong");
+        assert_eq!(deduped[0].api_key.as_deref(), Some("k-123"));
+    }
+}
+
 #[tauri::command]
 pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
     let paths = resolve_paths();
@@ -335,7 +622,8 @@ pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult
 #[tauri::command]
 pub fn upsert_model_profile(mut profile: ModelProfile) -> Result<ModelProfile, String> {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    profile = clawpal_core::profile::upsert_profile(&openclaw, profile).map_err(|e| e.to_string())?;
+    profile =
+        clawpal_core::profile::upsert_profile(&openclaw, profile).map_err(|e| e.to_string())?;
     Ok(profile)
 }
 
@@ -430,10 +718,44 @@ pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
 
 #[tauri::command]
 pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
-    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    let result =
-        clawpal_core::profile::test_profile(&openclaw, &profile_id).map_err(|e| e.to_string())?;
-    Ok(result.ok)
+    let paths = resolve_paths();
+    let profiles = load_model_profiles(&paths);
+    let profile = profiles
+        .into_iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
+
+    if !profile.enabled {
+        return Err("Profile is disabled".into());
+    }
+
+    let global_base = local_global_openclaw_base_dir();
+    let api_key = resolve_profile_api_key(&profile, &global_base);
+    if api_key.trim().is_empty() {
+        return Err(
+            "No API key resolved for this profile. Set apiKey directly, configure auth_ref in auth store (auth-profiles.json/auth.json), or export auth_ref on local shell.".into(),
+        );
+    }
+
+    let resolved_base_url = profile
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .or_else(|| {
+            read_openclaw_config(&paths)
+                .ok()
+                .and_then(|cfg| resolve_model_provider_base_url(&cfg, &profile.provider))
+        });
+
+    tauri::async_runtime::spawn_blocking(move || {
+        run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
+    })
+    .await
+    .map_err(|e| format!("Task join failed: {e}"))??;
+
+    Ok(true)
 }
 
 #[tauri::command]

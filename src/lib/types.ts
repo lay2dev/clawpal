@@ -184,6 +184,16 @@ export interface ResolvedApiKey {
   maskedKey: string;
 }
 
+export interface RemoteAuthSyncResult {
+  totalRemoteProfiles: number;
+  syncedProfiles: number;
+  createdProfiles: number;
+  updatedProfiles: number;
+  resolvedKeys: number;
+  unresolvedKeys: number;
+  failedKeyResolves: number;
+}
+
 export interface AppPreferences {
   zeroclawModel: string | null;
 }
@@ -195,6 +205,14 @@ export interface ZeroclawUsageStats {
   completionTokens: number;
   totalTokens: number;
   lastUpdatedMs: number;
+}
+
+export interface ZeroclawRuntimeTarget {
+  provider: string | null;
+  model: string | null;
+  source: "preferred" | "auto" | "provider_only" | "unavailable" | string;
+  preferredModel: string | null;
+  providerOrder: string[];
 }
 
 export interface HistoryItem {

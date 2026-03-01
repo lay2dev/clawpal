@@ -23,13 +23,14 @@ export function SshFormWidget({ invokeId, defaults, onSubmit, onCancel }: SshFor
   const [host, setHost] = useState(defaults?.host ?? "");
   const [port, setPort] = useState(String(defaults?.port ?? 22));
   const [username, setUsername] = useState(defaults?.username ?? "");
-  const [authMethod, setAuthMethod] = useState<"ssh_config" | "key">(
-    (defaults?.authMethod as "ssh_config" | "key") ?? "ssh_config",
+  const [authMethod, setAuthMethod] = useState<"ssh_config" | "key" | "password">(
+    (defaults?.authMethod as "ssh_config" | "key" | "password") ?? "ssh_config",
   );
   const [keyPath, setKeyPath] = useState(defaults?.keyPath ?? "");
+  const [password, setPassword] = useState(defaults?.password ?? "");
   const [label, setLabel] = useState(defaults?.label ?? "");
 
-  const isValid = host.trim().length > 0;
+  const isValid = host.trim().length > 0 && (authMethod !== "password" || password.length > 0);
 
   const handleSubmit = () => {
     if (!isValid) return;
@@ -41,6 +42,7 @@ export function SshFormWidget({ invokeId, defaults, onSubmit, onCancel }: SshFor
       username: username.trim(),
       authMethod,
       keyPath: authMethod === "key" ? keyPath.trim() : undefined,
+      password: authMethod === "password" ? password : undefined,
     });
   };
 
@@ -80,7 +82,7 @@ export function SshFormWidget({ invokeId, defaults, onSubmit, onCancel }: SshFor
         <label className="text-xs font-medium">{t("installChat.sshAuthMethod")}</label>
         <Select
           value={authMethod}
-          onValueChange={(v) => setAuthMethod(v as "ssh_config" | "key")}
+          onValueChange={(v) => setAuthMethod(v as "ssh_config" | "key" | "password")}
         >
           <SelectTrigger className="h-8 text-sm">
             <SelectValue />
@@ -88,6 +90,7 @@ export function SshFormWidget({ invokeId, defaults, onSubmit, onCancel }: SshFor
           <SelectContent>
             <SelectItem value="ssh_config">{t("installChat.sshAuthSshConfig")}</SelectItem>
             <SelectItem value="key">{t("installChat.sshAuthKey")}</SelectItem>
+            <SelectItem value="password">{t("installChat.sshAuthPassword")}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -98,6 +101,18 @@ export function SshFormWidget({ invokeId, defaults, onSubmit, onCancel }: SshFor
             value={keyPath}
             onChange={(e) => setKeyPath(e.target.value)}
             placeholder="~/.ssh/id_ed25519"
+            className="h-8 text-sm"
+          />
+        </div>
+      )}
+      {authMethod === "password" && (
+        <div className="space-y-1">
+          <label className="text-xs font-medium">{t("installChat.sshPassword")}</label>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
             className="h-8 text-sm"
           />
         </div>

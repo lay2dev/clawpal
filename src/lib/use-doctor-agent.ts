@@ -253,8 +253,10 @@ export function useDoctorAgent() {
       bind<{ reason: string }>("doctor:bridge-disconnected", () => {
         setBridgeConnected(false);
       }),
-      bind<{ message: string }>("doctor:error", (e) => {
-        setError(e.payload.message);
+      bind<{ message: string; code?: string }>("doctor:error", (e) => {
+        const code = e.payload.code?.trim();
+        const message = e.payload.message || "Unknown runtime error";
+        setError(code ? `[${code}] ${message}` : message);
         setLoading(false);
       }),
     ]).catch((err) => {

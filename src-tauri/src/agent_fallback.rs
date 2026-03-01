@@ -1,6 +1,6 @@
+use crate::json_util::extract_json_objects;
 use crate::runtime::zeroclaw::process::run_zeroclaw_message;
 use crate::ssh::SshConnectionPool;
-use crate::json_util::extract_json_objects;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -93,20 +93,21 @@ fn rules_fallback(
             || lower.contains("deserialize"))
     {
         return GuidanceBody {
-            summary: "检测到 openclaw 配置字段不兼容（ownerDisplay）。系统已尝试自动修复并建议复测。"
-                .to_string(),
+            summary:
+                "检测到 openclaw 配置字段不兼容（ownerDisplay）。系统已尝试自动修复并建议复测。"
+                    .to_string(),
             actions: vec![
                 "重新进入该实例并等待 1-2 秒后自动刷新。".to_string(),
                 "若仍失败，打开 Doctor 让 Agent继续执行更细粒度修复。".to_string(),
             ],
-            structured_actions: vec![
-                GuidanceAction {
-                    label: "让小龙虾修复".to_string(),
-                    action_type: "doctor_handoff".to_string(),
-                    tool: None, args: None, invoke_type: None,
-                    context: Some(format!("ownerDisplay 字段不兼容: {}", error_text)),
-                },
-            ],
+            structured_actions: vec![GuidanceAction {
+                label: "让小龙虾修复".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None,
+                args: None,
+                invoke_type: None,
+                context: Some(format!("ownerDisplay 字段不兼容: {}", error_text)),
+            }],
         };
     }
     // --- NEW: Auth expired (401/403/invalid key) ---
@@ -122,19 +123,21 @@ fn rules_fallback(
                 "检查当前实例使用的能力档案（Profile）中的 API Key 是否仍然有效。".to_string(),
                 "如需更换密钥，前往能力档案页面更新对应的 Provider 配置。".to_string(),
             ],
-            structured_actions: vec![
-                GuidanceAction {
-                    label: "让小龙虾修复".to_string(),
-                    action_type: "doctor_handoff".to_string(),
-                    tool: None, args: None, invoke_type: None,
-                    context: Some(format!("API 认证失败: {}", error_text)),
-                },
-            ],
+            structured_actions: vec![GuidanceAction {
+                label: "让小龙虾修复".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None,
+                args: None,
+                invoke_type: None,
+                context: Some(format!("API 认证失败: {}", error_text)),
+            }],
         };
     }
     // --- NEW: Container not found (orphaned Docker instance) ---
     if lower.contains("no such container")
-        || (lower.contains("container") && lower.contains("not found") && !lower.contains("openclaw"))
+        || (lower.contains("container")
+            && lower.contains("not found")
+            && !lower.contains("openclaw"))
     {
         return GuidanceBody {
             summary: "实例对应的 Docker 容器已不存在，可能已被手动删除。".to_string(),
@@ -142,28 +145,34 @@ fn rules_fallback(
                 "重新安装该实例，或从实例列表中移除。".to_string(),
                 "打开 Doctor 页面让小龙虾诊断并修复。".to_string(),
             ],
-            structured_actions: vec![
-                GuidanceAction {
-                    label: "让小龙虾修复".to_string(),
-                    action_type: "doctor_handoff".to_string(),
-                    tool: None, args: None, invoke_type: None,
-                    context: Some(format!("Docker 容器不存在: {}", error_text)),
-                },
-            ],
+            structured_actions: vec![GuidanceAction {
+                label: "让小龙虾修复".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None,
+                args: None,
+                invoke_type: None,
+                context: Some(format!("Docker 容器不存在: {}", error_text)),
+            }],
         };
     }
     if looks_like_openclaw_binary_missing(error_text) {
-        let mut summary = "目标实例缺少 openclaw 命令，或登录 shell 的 PATH 未包含该命令。".to_string();
+        let mut summary =
+            "目标实例缺少 openclaw 命令，或登录 shell 的 PATH 未包含该命令。".to_string();
         let mut actions = Vec::new();
         if let Some(result) = probe {
             if let Some(path) = result.openclaw_path.as_deref() {
                 summary = format!(
                     "探测到 openclaw 路径为 `{path}`，但当前业务调用仍报命令不存在，通常是登录 shell 初始化不一致。"
                 );
-                actions.push("检查远程登录 shell 配置（如 `.bashrc` / `.zshrc`）是否在非交互会话加载 PATH。".to_string());
-                actions.push("在远程执行 `openclaw --version` 验证同一会话可直接运行。".to_string());
+                actions.push(
+                    "检查远程登录 shell 配置（如 `.bashrc` / `.zshrc`）是否在非交互会话加载 PATH。"
+                        .to_string(),
+                );
+                actions
+                    .push("在远程执行 `openclaw --version` 验证同一会话可直接运行。".to_string());
             } else {
-                actions.push("自动探测已执行：`command -v openclaw` 未返回可执行路径。".to_string());
+                actions
+                    .push("自动探测已执行：`command -v openclaw` 未返回可执行路径。".to_string());
                 actions.push("在目标实例安装/修复 openclaw 后，重新登录 SSH 会话。".to_string());
             }
             if let Some(path_env) = result.path.as_deref() {
@@ -178,14 +187,14 @@ fn rules_fallback(
         return GuidanceBody {
             summary,
             actions,
-            structured_actions: vec![
-                GuidanceAction {
-                    label: "让小龙虾修复".to_string(),
-                    action_type: "doctor_handoff".to_string(),
-                    tool: None, args: None, invoke_type: None,
-                    context: Some(format!("openclaw 命令缺失: {}", error_text)),
-                },
-            ],
+            structured_actions: vec![GuidanceAction {
+                label: "让小龙虾修复".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None,
+                args: None,
+                invoke_type: None,
+                context: Some(format!("openclaw 命令缺失: {}", error_text)),
+            }],
         };
     }
     if lower.contains("not connected to remote")
@@ -211,7 +220,9 @@ fn rules_fallback(
                 GuidanceAction {
                     label: "让小龙虾修复".to_string(),
                     action_type: "doctor_handoff".to_string(),
-                    tool: None, args: None, invoke_type: None,
+                    tool: None,
+                    args: None,
+                    invoke_type: None,
                     context: Some(format!("SSH 连接失败: {}", error_text)),
                 },
             ],
@@ -219,25 +230,26 @@ fn rules_fallback(
     }
 
     GuidanceBody {
-        summary: format!(
-            "操作 `{operation}` 在 `{transport}` 环境执行失败，建议先做诊断再继续。"
-        ),
+        summary: format!("操作 `{operation}` 在 `{transport}` 环境执行失败，建议先做诊断再继续。"),
         actions: vec![
             "打开 Doctor 页面运行诊断，获取可执行修复步骤。".to_string(),
             "按诊断结果优先处理阻塞项后，再重试当前操作。".to_string(),
         ],
-        structured_actions: vec![
-            GuidanceAction {
-                label: "让小龙虾修复".to_string(),
-                action_type: "doctor_handoff".to_string(),
-                tool: None, args: None, invoke_type: None,
-                context: Some(format!("操作失败: {}", error_text)),
-            },
-        ],
+        structured_actions: vec![GuidanceAction {
+            label: "让小龙虾修复".to_string(),
+            action_type: "doctor_handoff".to_string(),
+            tool: None,
+            args: None,
+            invoke_type: None,
+            context: Some(format!("操作失败: {}", error_text)),
+        }],
     }
 }
 
-async fn probe_remote_openclaw(pool: &SshConnectionPool, instance_id: &str) -> Option<OpenclawProbe> {
+async fn probe_remote_openclaw(
+    pool: &SshConnectionPool,
+    instance_id: &str,
+) -> Option<OpenclawProbe> {
     let which = pool
         .exec_login(instance_id, "command -v openclaw 2>/dev/null || true")
         .await;
@@ -280,7 +292,11 @@ fn compose_message(summary: &str, actions: &[String]) -> String {
     if actions.is_empty() {
         return summary.to_string();
     }
-    let mut lines = vec![summary.to_string(), "".to_string(), "下一步建议：".to_string()];
+    let mut lines = vec![
+        summary.to_string(),
+        "".to_string(),
+        "下一步建议：".to_string(),
+    ];
     for (idx, action) in actions.iter().enumerate() {
         lines.push(format!("{}. {}", idx + 1, action));
     }
@@ -297,8 +313,8 @@ pub async fn explain_operation_error(
     language: Option<String>,
 ) -> Result<ErrorGuidance, String> {
     let lower_error = error.to_lowercase();
-    let should_probe_openclaw = transport == "remote_ssh"
-        && looks_like_openclaw_binary_missing(&lower_error);
+    let should_probe_openclaw =
+        transport == "remote_ssh" && looks_like_openclaw_binary_missing(&lower_error);
     let probe = if should_probe_openclaw {
         probe_remote_openclaw(&pool, &instance_id).await
     } else {
@@ -417,9 +433,16 @@ mod tests {
             "listAgents",
             None,
         );
-        assert!(result.summary.contains("API") || result.summary.contains("密钥") || result.summary.contains("认证"));
+        assert!(
+            result.summary.contains("API")
+                || result.summary.contains("密钥")
+                || result.summary.contains("认证")
+        );
         assert!(!result.structured_actions.is_empty());
-        assert!(result.structured_actions.iter().any(|a| a.action_type == "doctor_handoff"));
+        assert!(result
+            .structured_actions
+            .iter()
+            .any(|a| a.action_type == "doctor_handoff"));
     }
 
     #[test]
@@ -431,7 +454,10 @@ mod tests {
             None,
         );
         assert!(result.summary.contains("容器") || result.summary.contains("container"));
-        assert!(result.structured_actions.iter().any(|a| a.action_type == "doctor_handoff"));
+        assert!(result
+            .structured_actions
+            .iter()
+            .any(|a| a.action_type == "doctor_handoff"));
     }
 
     #[test]
@@ -450,6 +476,9 @@ mod tests {
             "getStatus",
             None,
         );
-        assert!(result.structured_actions.iter().any(|a| a.action_type == "inline_fix" && a.tool.as_deref() == Some("clawpal")));
+        assert!(result
+            .structured_actions
+            .iter()
+            .any(|a| a.action_type == "inline_fix" && a.tool.as_deref() == Some("clawpal")));
     }
 }

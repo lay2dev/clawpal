@@ -208,8 +208,6 @@ pub async fn remote_list_discord_guild_channels(
     Ok(entries)
 }
 
-
-
 #[tauri::command]
 pub async fn remote_list_bindings(
     pool: State<'_, SshConnectionPool>,
@@ -231,8 +229,6 @@ pub async fn remote_list_bindings(
     let json = crate::cli_runner::parse_json_output(&output)?;
     clawpal_core::discovery::parse_bindings(&json.to_string())
 }
-
-
 
 #[tauri::command]
 pub async fn remote_list_channels_minimal(
@@ -262,15 +258,13 @@ pub async fn remote_list_channels_minimal(
     Ok(collect_channel_nodes(&cfg))
 }
 
-
-
 #[tauri::command]
 pub async fn remote_list_agents_overview(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
-    let output = run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"])
-        .await?;
+    let output =
+        run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
     if output.exit_code != 0 {
         let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
         return Err(format!(
@@ -309,8 +303,6 @@ pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
     .await
     .map_err(|e| e.to_string())?
 }
-
-
 
 #[tauri::command]
 pub async fn list_channels_minimal(
@@ -352,8 +344,6 @@ pub async fn list_channels_minimal(
     .map_err(|e| e.to_string())?
 }
 
-
-
 #[tauri::command]
 pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
     let paths = resolve_paths();
@@ -365,8 +355,6 @@ pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String>
     }
     Ok(Vec::new())
 }
-
-
 
 #[tauri::command]
 pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
@@ -628,8 +616,6 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
     .map_err(|e| e.to_string())?
 }
 
-
-
 #[tauri::command]
 pub async fn list_bindings(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
@@ -659,8 +645,6 @@ pub async fn list_bindings(
     .await
     .map_err(|e| e.to_string())?
 }
-
-
 
 #[tauri::command]
 pub async fn list_agents_overview(
