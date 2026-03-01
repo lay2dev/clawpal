@@ -7,7 +7,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { useApi } from "@/lib/use-api";
 import { useTheme } from "@/lib/use-theme";
-import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion, ResolvedApiKey } from "@/lib/types";
+import { useFont } from "@/lib/use-font";
+import type { UiFont } from "@/lib/use-font";
+import { profileToModelValue } from "@/lib/model-value";
+import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion, ResolvedApiKey, ZeroclawUsageStats } from "@/lib/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,6 +54,7 @@ type ProfileForm = {
 };
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
+const ENABLE_PROFILE_TEST_BUTTON = false;
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
 
@@ -147,6 +151,7 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
   const { t, i18n } = useTranslation();
   const ua = useApi();
   const { theme, setTheme } = useTheme();
+  const { font, setFont } = useFont();
   const [profiles, setProfiles] = useState<ModelProfile[] | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalogProvider[]>([]);
   const [apiKeys, setApiKeys] = useState<ResolvedApiKey[]>([]);
@@ -155,6 +160,12 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
   const [message, setMessage] = useState("");
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
+  const [zeroclawModel, setZeroclawModel] = useState("");
+  const [zeroclawSaving, setZeroclawSaving] = useState(false);
+  const [zeroclawUsage, setZeroclawUsage] = useState<ZeroclawUsageStats | null>(null);
+  const [zeroclawUsageLoading, setZeroclawUsageLoading] = useState(true);
+  const zeroclawPrefsLoadedRef = useRef(false);
+  const zeroclawLastSavedRef = useRef("");
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -254,6 +265,40 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
 
   useEffect(refreshProfiles, [ua]);
 
+  useEffect(() => {
+    ua.getAppPreferences()
+      .then((prefs) => {
+        const value = prefs.zeroclawModel || "";
+        setZeroclawModel(value);
+        zeroclawLastSavedRef.current = value.trim();
+        zeroclawPrefsLoadedRef.current = true;
+      })
+      .catch((e) => console.error("Failed to load app preferences:", e));
+  }, [ua]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadUsage = () => {
+      setZeroclawUsageLoading(true);
+      ua.getZeroclawUsageStats()
+        .then((stats) => {
+          if (!cancelled) setZeroclawUsage(stats);
+        })
+        .catch(() => {
+          if (!cancelled) setZeroclawUsage(null);
+        })
+        .finally(() => {
+          if (!cancelled) setZeroclawUsageLoading(false);
+        });
+    };
+    loadUsage();
+    const timer = window.setInterval(loadUsage, 4_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [ua]);
+
   // Load catalog on mount
   useEffect(() => {
     const now = Date.now();
@@ -326,6 +371,13 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
     const found = catalog.find((c) => c.provider === form.provider);
     return found?.models || [];
   }, [catalog, form.provider]);
+
+  const zeroclawModelCandidates = useMemo(() => {
+    const fromProfiles = (profiles || [])
+      .filter((profile) => profile.enabled)
+      .map((profile) => profileToModelValue(profile));
+    return Array.from(new Set(fromProfiles)).sort((a, b) => a.localeCompare(b));
+  }, [profiles]);
 
   const upsert = (event: FormEvent) => {
     event.preventDefault();
@@ -430,6 +482,29 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
   const showProfiles = section !== "preferences";
   const showPreferences = section !== "profiles";
 
+  useEffect(() => {
+    if (!zeroclawPrefsLoadedRef.current) return;
+    const next = zeroclawModel.trim();
+    if (next === zeroclawLastSavedRef.current) return;
+    const timer = window.setTimeout(() => {
+      setZeroclawSaving(true);
+      ua.setZeroclawModelPreference(next.length > 0 ? next : null)
+        .then((prefs) => {
+          const persisted = prefs.zeroclawModel || "";
+          zeroclawLastSavedRef.current = persisted.trim();
+          if (persisted !== zeroclawModel) {
+            setZeroclawModel(persisted);
+          }
+        })
+        .catch((e) => {
+          const errorText = e instanceof Error ? e.message : String(e);
+          toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
+        })
+        .finally(() => setZeroclawSaving(false));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [ua, zeroclawModel, t]);
+
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
@@ -527,6 +602,74 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="flex items-center gap-3">
+                    <Label className="text-sm font-semibold shrink-0">{t('settings.font')}</Label>
+                    <Select value={font} onValueChange={(val) => setFont(val as UiFont)}>
+                      <SelectTrigger className="w-[160px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="wenkai">{t('settings.fontWenkai')}</SelectItem>
+                        <SelectItem value="nunito">{t('settings.fontNunito')}</SelectItem>
+                        <SelectItem value="system">{t('settings.fontSystem')}</SelectItem>
+                        <SelectItem value="serif">{t('settings.fontSerif')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="h-px bg-border" />
+
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Label className="text-sm font-semibold shrink-0">{t("settings.zeroclawModel")}</Label>
+                  <div className="w-[320px] max-w-full">
+                    <Select
+                      value={zeroclawModel ? (zeroclawModelCandidates.includes(zeroclawModel) ? zeroclawModel : "__raw__") : "__none__"}
+                      onValueChange={(val) => {
+                        if (val === "__raw__") return;
+                        setZeroclawModel(val === "__none__" ? "" : val);
+                      }}
+                      disabled={zeroclawSaving}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t("settings.zeroclawModelPlaceholder")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">
+                          <span className="text-muted-foreground">{t("home.notSet")}</span>
+                        </SelectItem>
+                        {zeroclawModel && !zeroclawModelCandidates.includes(zeroclawModel) && (
+                          <SelectItem value="__raw__">{zeroclawModel}</SelectItem>
+                        )}
+                        {zeroclawModelCandidates.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {zeroclawSaving && (
+                    <span className="text-xs text-muted-foreground">{t("settings.saving")}</span>
+                  )}
+                  <div className="ml-auto text-right text-xs text-muted-foreground min-w-[240px]">
+                    {zeroclawUsageLoading ? (
+                      <div>{t("settings.zeroclawUsageLoading")}</div>
+                    ) : (
+                      <>
+                        <div>
+                          {t("settings.zeroclawUsageTotalTokens", {
+                            count: zeroclawUsage?.totalTokens || 0,
+                          })}
+                        </div>
+                        <div>
+                          {t("settings.zeroclawUsageCalls", {
+                            count: zeroclawUsage?.totalCalls || 0,
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -574,15 +717,17 @@ export function Settings({ onDataChange, hasAppUpdate, onAppUpdateSeen, globalMo
                         </div>
                       )}
                       <div className="flex gap-1.5 mt-1.5">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          type="button"
-                          onClick={() => testProfile(profile)}
-                          disabled={testingProfileId === profile.id}
-                        >
-                          {testingProfileId === profile.id ? t('settings.testing') : t('settings.test')}
-                        </Button>
+                        {ENABLE_PROFILE_TEST_BUTTON && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            type="button"
+                            onClick={() => testProfile(profile)}
+                            disabled={testingProfileId === profile.id}
+                          >
+                            {testingProfileId === profile.id ? t('settings.testing') : t('settings.test')}
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="outline"

@@ -1,11 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus, ZeroclawUsageStats } from "./types";
 
 export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
     invoke("set_active_openclaw_home", { path }),
   setActiveClawpalDataDir: (path: string | null): Promise<boolean> =>
     invoke("set_active_clawpal_data_dir", { path }),
+  getAppPreferences: (): Promise<AppPreferences> =>
+    invoke("get_app_preferences", {}),
+  getZeroclawUsageStats: (): Promise<ZeroclawUsageStats> =>
+    invoke("get_zeroclaw_usage_stats", {}),
+  setZeroclawModelPreference: (model: string | null): Promise<AppPreferences> =>
+    invoke("set_zeroclaw_model_preference", { model }),
   explainOperationError: (
     instanceId: string,
     operation: string,
@@ -57,6 +63,12 @@ export const api = {
     instanceId?: string,
   ): Promise<RegisteredInstance> =>
     invoke("connect_docker_instance", { home, label: label ?? null, instanceId: instanceId ?? null }),
+  connectLocalInstance: (
+    home: string,
+    label?: string,
+    instanceId?: string,
+  ): Promise<RegisteredInstance> =>
+    invoke("connect_local_instance", { home, label: label ?? null, instanceId: instanceId ?? null }),
   connectSshInstance: (hostId: string): Promise<RegisteredInstance> =>
     invoke("connect_ssh_instance", { hostId }),
   migrateLegacyInstances: (

@@ -184,6 +184,19 @@ export interface ResolvedApiKey {
   maskedKey: string;
 }
 
+export interface AppPreferences {
+  zeroclawModel: string | null;
+}
+
+export interface ZeroclawUsageStats {
+  totalCalls: number;
+  usageCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  lastUpdatedMs: number;
+}
+
 export interface HistoryItem {
   id: string;
   recipeId?: string;

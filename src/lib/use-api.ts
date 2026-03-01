@@ -349,10 +349,10 @@ export function useApi() {
       deleteModelProfile: withGlobalInvalidation(
         api.deleteModelProfile,
       ),
-      testModelProfile: dispatch(
-        api.testModelProfile,
-        api.remoteTestModelProfile,
-      ),
+      testModelProfile: ((profileId: string) =>
+        api.testModelProfile(profileId).catch(async (error) => {
+          throw await explainAndWrapError("testModelProfile", error);
+        })),
       resolveApiKeys: localGlobalCached(
         "resolveApiKeys",
         10_000,
@@ -562,6 +562,20 @@ export function useApi() {
       collectDoctorContextRemote: api.collectDoctorContextRemote,
 
       // Local-only (no remote equivalent needed)
+      getAppPreferences: localGlobalCached(
+        "getAppPreferences",
+        10_000,
+        api.getAppPreferences,
+      ),
+      getZeroclawUsageStats: localGlobalCached(
+        "getZeroclawUsageStats",
+        2_000,
+        api.getZeroclawUsageStats,
+      ),
+      setZeroclawModelPreference: withGlobalInvalidation(
+        api.setZeroclawModelPreference,
+        ["getAppPreferences"],
+      ),
       ensureAccessProfile: api.ensureAccessProfile,
       recordInstallExperience: api.recordInstallExperience,
       openUrl: api.openUrl,
