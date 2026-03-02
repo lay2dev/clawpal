@@ -71,10 +71,13 @@ impl ZeroclawDoctorAdapter {
 
     fn parse_diagnosis(raw: &str) -> Option<(RuntimeEvent, String)> {
         let result = crate::runtime::zeroclaw::tool_intent::parse_diagnosis_result(raw)?;
-        let summary = result
-            .summary
-            .clone()
-            .unwrap_or_else(|| format!("诊断完成，发现 {} 个问题。", result.items.len()));
+        let count = result.items.len();
+        let summary = result.summary.clone().unwrap_or_else(|| {
+            format!(
+                "Diagnosis complete — found {count} issue{}.",
+                if count == 1 { "" } else { "s" }
+            )
+        });
         let items_value = serde_json::to_value(&result.items).ok()?;
         Some((RuntimeEvent::diagnosis_report(items_value), summary))
     }

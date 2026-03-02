@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import i18n from "../i18n";
 import { api } from "./api";
 import { doctorStartPromptTemplate, renderPromptTemplate } from "./prompt-templates";
-import type { DoctorChatMessage, DoctorInvoke } from "./types";
+import type { DiagnosisReportItem, DoctorChatMessage, DoctorInvoke } from "./types";
 
 let msgCounter = 0;
 function nextMsgId(): string {
@@ -171,6 +171,39 @@ export function useDoctorAgent() {
             return [...prev.slice(0, -1), { ...last, content: text }];
           }
           return [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+        });
+      }),
+      bind<{ items: DiagnosisReportItem[] }>("doctor:diagnosis-report", (e) => {
+        if (!sessionActiveRef.current) return;
+        const items = e.payload.items;
+        if (!items || items.length === 0) return;
+        // Attach the diagnosis report to the most recent assistant message,
+        // or create a new one if none exists yet.
+        setMessages((prev) => {
+          let lastAssistantIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "assistant" && !prev[i].invoke) {
+              lastAssistantIdx = i;
+              break;
+            }
+          }
+          if (lastAssistantIdx !== -1) {
+            const updated = [...prev];
+            updated[lastAssistantIdx] = {
+              ...updated[lastAssistantIdx],
+              diagnosisReport: { items },
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              id: nextMsgId(),
+              role: "assistant",
+              content: "",
+              diagnosisReport: { items },
+            },
+          ];
         });
       }),
       bind<DoctorInvoke>("doctor:invoke", (e) => {

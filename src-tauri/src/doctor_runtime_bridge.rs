@@ -8,6 +8,7 @@ pub fn map_runtime_event_name(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ChatDelta { .. } => "doctor:chat-delta",
         RuntimeEvent::ChatFinal { .. } => "doctor:chat-final",
         RuntimeEvent::Invoke { .. } => "doctor:invoke",
+        RuntimeEvent::DiagnosisReport { .. } => "doctor:diagnosis-report",
         RuntimeEvent::Error { .. } => "doctor:error",
         RuntimeEvent::Status { .. } => "doctor:status",
     }
@@ -34,6 +35,9 @@ pub fn emit_runtime_event(app: &AppHandle, event: RuntimeEvent) {
                     "actionHint": error.action_hint,
                 }),
             );
+        }
+        RuntimeEvent::DiagnosisReport { items } => {
+            let _ = app.emit(name, json!({ "items": items }));
         }
         RuntimeEvent::Status { text } => {
             let _ = app.emit(name, json!({ "text": text }));
