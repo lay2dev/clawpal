@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn wrap_remote_health_command_uses_login_shell_for_bash_and_zsh() {
         let wrapped = wrap_remote_health_command("openclaw --version");
-        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -ilc"));
+        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -lc"));
         assert!(wrapped.contains("*) \"$LOGIN_SHELL\" -lc"));
     }
 
