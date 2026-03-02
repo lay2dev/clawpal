@@ -841,7 +841,10 @@ pub fn run_zeroclaw_message(
         "-m".to_string(),
         message,
     ];
-    let preferred_model = crate::commands::load_zeroclaw_model_preference();
+    // Per-session model override takes priority over global preference.
+    let preferred_model =
+        crate::commands::preferences::lookup_session_model_override(session_scope)
+            .or_else(|| crate::commands::load_zeroclaw_model_preference());
     let provider_order = provider_order_for_runtime(&env_pairs, preferred_model.as_deref());
     if provider_order.is_empty() {
         return Err(
@@ -858,7 +861,13 @@ pub fn run_zeroclaw_message(
         let stdout = sanitize_output(&String::from_utf8_lossy(&output.stdout));
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         record_zeroclaw_usage(&stdout, &stderr);
-        if parse_usage_from_text(&stdout).is_none() && parse_usage_from_text(&stderr).is_none() {
+        // Also record per-session usage.
+        let session_usage =
+            parse_usage_from_text(&stdout).or_else(|| parse_usage_from_text(&stderr));
+        if let Some((prompt, completion, _total)) = session_usage {
+            record_session_usage(session_scope, prompt, completion);
+        }
+        if session_usage.is_none() {
             if let Ok(mut stats) = usage_store().lock() {
                 if let Some((prompt, completion, total)) =
                     read_usage_from_builtin_traces(&cmd, &cfg, &env_pairs)
@@ -868,6 +877,8 @@ pub fn run_zeroclaw_message(
                     stats.completion_tokens = stats.completion_tokens.saturating_add(completion);
                     stats.total_tokens = stats.total_tokens.saturating_add(total);
                     stats.last_updated_ms = now_ms();
+                    // Record per-session usage from traces as well.
+                    record_session_usage(session_scope, prompt, completion);
                 }
             }
         }

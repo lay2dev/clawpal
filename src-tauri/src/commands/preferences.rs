@@ -126,6 +126,15 @@ fn session_model_overrides() -> &'static Mutex<HashMap<String, String>> {
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Look up a session model override without going through Tauri command dispatch.
+pub fn lookup_session_model_override(session_id: &str) -> Option<String> {
+    session_model_overrides()
+        .lock()
+        .ok()?
+        .get(session_id)
+        .cloned()
+}
+
 #[tauri::command]
 pub fn set_session_model_override(session_id: String, model: String) -> Result<(), String> {
     let trimmed = model.trim().to_string();

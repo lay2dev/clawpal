@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
@@ -135,6 +136,7 @@ export function Doctor({
   const ua = useApi();
   const { instanceId, isDocker, isRemote, isConnected } = useInstance();
   const doctor = useDoctorAgent();
+  const [runtimeModel, setRuntimeModel] = useState<string | undefined>(undefined);
   const [remoteConnState, setRemoteConnState] = useState<"checking" | "connected" | "disconnected">("checking");
 
   const [diagnosing, setDiagnosing] = useState(false);
@@ -200,6 +202,19 @@ export function Doctor({
     doctor.setTarget(isRemote ? instanceId : "local");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doctor.setTarget, instanceId, isRemote]);
+
+  // Fetch runtime target model for TokenBadge / ModelSwitcher.
+  useEffect(() => {
+    invoke<{ model?: string }>("get_zeroclaw_runtime_target")
+      .then((target) => {
+        if (target?.model) setRuntimeModel(target.model);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Use instanceId as the stable session key for model override / usage tracking.
+  // This matches the backend which looks up overrides by instance_id.
+  const doctorSessionId = instanceId || "local";
 
   const handleStartDiagnosis = async (extraContext?: string) => {
     setStartError(null);
@@ -1040,8 +1055,8 @@ export function Doctor({
                     <span className={`inline-block w-1.5 h-1.5 rounded-full ${doctor.bridgeConnected ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
                     {doctor.bridgeConnected ? t("doctor.bridgeConnected") : t("doctor.bridgeDisconnected")}
                   </Badge>
-                  <TokenBadge sessionId="zeroclaw-doctor" model="gpt-4o" />
-                  <ModelSwitcher sessionId="zeroclaw-doctor" defaultModel="gpt-4o" />
+                  <TokenBadge sessionId={doctorSessionId} model={runtimeModel} />
+                  <ModelSwitcher sessionId={doctorSessionId} defaultModel={runtimeModel} />
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
