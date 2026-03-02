@@ -70,15 +70,23 @@ pub async fn remote_chat_via_openclaw(
         cmd.push_str(&format!(" --session-id '{}'", escaped_sid));
     }
     let result = pool.exec_login(&host_id, &cmd).await?;
+    // Try to extract JSON from stdout first — even on non-zero exit the
+    // command may have produced valid output (e.g. bash job-control warnings
+    // in stderr cause exit 1 but the actual command succeeded).
+    if let Some(json_str) = clawpal_core::doctor::extract_json_from_output(&result.stdout) {
+        return serde_json::from_str(json_str)
+            .map_err(|e| format!("Failed to parse remote chat response: {e}"));
+    }
     if result.exit_code != 0 {
         return Err(format!(
             "Remote chat failed (exit {}): {}",
             result.exit_code, result.stderr
         ));
     }
-    let json_str = clawpal_core::doctor::extract_json_from_output(&result.stdout)
-        .ok_or_else(|| format!("No JSON in remote openclaw output: {}", result.stdout))?;
-    serde_json::from_str(json_str).map_err(|e| format!("Failed to parse remote chat response: {e}"))
+    Err(format!(
+        "No JSON in remote openclaw output: {}",
+        result.stdout
+    ))
 }
 
 #[tauri::command]

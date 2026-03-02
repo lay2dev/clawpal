@@ -474,6 +474,7 @@ export function useApi() {
       chatViaOpenclaw: dispatch(
         api.chatViaOpenclaw,
         api.remoteChatViaOpenclaw,
+        "chatViaOpenclaw",
       ),
 
       // Backup & Upgrade

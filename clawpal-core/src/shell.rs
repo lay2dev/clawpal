@@ -9,7 +9,7 @@ pub fn wrap_login_shell_eval(command: &str) -> String {
 LOGIN_SHELL=\"${{SHELL:-/bin/sh}}\"; \
 [ -x \"$LOGIN_SHELL\" ] || LOGIN_SHELL=\"/bin/sh\"; \
 case \"$LOGIN_SHELL\" in \
-  */zsh|*/bash) \"$LOGIN_SHELL\" -ilc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
+  */zsh|*/bash) \"$LOGIN_SHELL\" -lc 'eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
   *) \"$LOGIN_SHELL\" -lc '[ -f ~/.profile ] && . ~/.profile >/dev/null 2>&1 || true; eval \"$CLAWPAL_LOGIN_CMD\"' ;; \
 esac"
     )
@@ -25,9 +25,9 @@ mod tests {
     }
 
     #[test]
-    fn wrap_login_shell_eval_uses_interactive_login_for_bash_zsh() {
+    fn wrap_login_shell_eval_uses_login_shell_for_bash_zsh() {
         let wrapped = wrap_login_shell_eval("openclaw --version");
-        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -ilc"));
+        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -lc"));
         assert!(wrapped.contains("[ -f ~/.profile ]"));
         assert!(wrapped.contains("eval \"$CLAWPAL_LOGIN_CMD\""));
     }
