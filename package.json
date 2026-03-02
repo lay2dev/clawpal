@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:tauri": "bunx @tauri-apps/cli dev",
+    "test": "bun test",
     "build": "tsc && vite build",
     "build:tauri": "bunx @tauri-apps/cli build",
     "lint": "tsc --noEmit",

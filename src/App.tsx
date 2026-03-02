@@ -32,6 +32,11 @@ import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstan
 import { GuidanceCard } from "./components/GuidanceCard";
 import { SshFormWidget } from "./components/SshFormWidget";
 import type { AgentGuidanceItem } from "./components/GuidanceCard";
+import {
+  SSH_PASSPHRASE_RETRY_HINT,
+  buildSshPassphraseConnectErrorMessage,
+  buildSshPassphraseCancelMessage,
+} from "@/lib/sshConnectErrors";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -79,6 +84,16 @@ interface ProfileSyncStatus {
   instanceId: string | null;
 }
 
+function logDevException(label: string, detail: unknown): void {
+  if (!import.meta.env.DEV) return;
+  console.error(`[dev exception] ${label}`, detail);
+}
+
+function logDevIgnoredError(context: string, detail: unknown): void {
+  if (!import.meta.env.DEV) return;
+  console.warn(`[dev ignored error] ${context}`, detail);
+}
+
 // AgentGuidanceItem is imported from ./components/GuidanceCard
 
 let toastIdCounter = 0;
@@ -92,9 +107,6 @@ const SSH_ERROR_MAP: Array<[RegExp, string]> = [
   [/host key verification failed/i, "ssh.errorHostKey"],
   [/timed?\s*out/i, "ssh.errorTimeout"],
 ];
-
-const SSH_PASSPHRASE_RETRY_HINT =
-  /passphrase|sign_and_send_pubkey|agent refused operation|can't open \/dev\/tty|authentication agent|key is encrypted/i;
 
 function friendlySshError(raw: string, t: (key: string, opts?: Record<string, string>) => string): string {
   for (const [pattern, key] of SSH_ERROR_MAP) {
@@ -226,13 +238,16 @@ export function App() {
   const refreshHosts = useCallback(() => {
     withGuidance(() => api.listSshHosts(), "listSshHosts", "local", "local")
       .then(setSshHosts)
-      .catch((e) => console.warn("refreshHosts:", e));
+      .catch((error) => {
+        logDevIgnoredError("refreshHosts", error);
+      });
   }, []);
 
   const refreshRegisteredInstances = useCallback(() => {
     withGuidance(() => api.listRegisteredInstances(), "listRegisteredInstances", "local", "local")
       .then(setRegisteredInstances)
-      .catch(() => {
+      .catch((error) => {
+        logDevIgnoredError("listRegisteredInstances", error);
         setRegisteredInstances([]);
       });
   }, []);
@@ -246,7 +261,10 @@ export function App() {
       "local",
     )
       .then(setDiscoveredInstances)
-      .catch(() => setDiscoveredInstances([]))
+      .catch((error) => {
+        logDevIgnoredError("discoverLocalInstances", error);
+        setDiscoveredInstances([]);
+      })
       .finally(() => setDiscoveringInstances(false));
   }, []);
 
@@ -285,7 +303,10 @@ export function App() {
       "listRegisteredInstances",
       "local",
       "local",
-    ).catch(() => null);
+    ).catch((error) => {
+      logDevIgnoredError("listRegisteredInstances after connect", error);
+      return null;
+    });
     if (updated) setRegisteredInstances(updated);
     return registered;
   }, []);
@@ -361,7 +382,7 @@ export function App() {
     // Silent update check
     check()
       .then((update) => { if (update) setAppUpdateAvailable(true); })
-      .catch(() => {});
+      .catch((error) => logDevIgnoredError("check", error));
 
     // Analytics ping (fire-and-forget)
     getVersion().then((version) => {
@@ -372,8 +393,8 @@ export function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ v: version, id: installId, platform: navigator.platform }),
-      }).catch(() => {});
-    }).catch(() => {});
+      }).catch((error) => logDevIgnoredError("analytics ping request", error));
+    }).catch((error) => logDevIgnoredError("getVersion", error));
 
   }, []);
 
@@ -387,6 +408,7 @@ export function App() {
   const [doctorLaunchByInstance, setDoctorLaunchByInstance] = useState<Record<string, AgentGuidanceItem | null>>({});
   const [agentGuidanceOpen, setAgentGuidanceOpen] = useState(false);
   const [unreadGuidance, setUnreadGuidance] = useState(false);
+  const [doctorNavPulse, setDoctorNavPulse] = useState(false);
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
   const legacyMigrationDoneRef = useRef(false);
   const passphraseResolveRef = useRef<((value: string | null) => void) | null>(null);
@@ -458,7 +480,9 @@ export function App() {
       } else if (errors.length > 1) {
         showToast(`${errors[0].message}（还有 ${errors.length - 1} 个问题）`, "error");
       }
-    }).catch(() => { /* precheck failure should not block app */ });
+    }).catch((error) => {
+      logDevIgnoredError("precheckRegistry", error);
+    });
   }, [showToast]);
 
   useEffect(() => {
@@ -486,7 +510,10 @@ export function App() {
           const before = await api.listModelProfiles();
           if (cancelled || before.some((p) => p.enabled)) return;
 
-          await api.extractModelProfilesFromConfig().catch(() => null);
+          await api.extractModelProfilesFromConfig().catch((error) => {
+            logDevIgnoredError("bootstrap extractModelProfilesFromConfig", error);
+            return null;
+          });
           const after = await api.listModelProfiles();
           if (cancelled || after.some((p) => p.enabled)) return;
 
@@ -587,10 +614,13 @@ export function App() {
     };
 
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      logDevException("unhandledRejection", event.reason);
       handleUnhandled("unhandledRejection", event.reason);
     };
     const onGlobalError = (event: ErrorEvent) => {
-      handleUnhandled("unhandledError", event.error ?? event.message ?? "unknown error");
+      const detail = event.error ?? event.message ?? "unknown error";
+      logDevException("unhandledError", detail);
+      handleUnhandled("unhandledError", detail);
     };
 
     window.addEventListener("unhandledrejection", onUnhandledRejection);
@@ -608,7 +638,9 @@ export function App() {
       "ensureAccessProfile",
       instanceId,
       transport,
-    ).catch((e) => console.warn("ensureAccessProfile:", e));
+    ).catch((error) => {
+      logDevIgnoredError("ensureAccessProfile", error);
+    });
     // Auth precheck: warn if model profiles are misconfigured
     withGuidance(
       () => api.precheckAuth(instanceId),
@@ -622,7 +654,9 @@ export function App() {
       } else if (errors.length > 1) {
         showToast(`${errors[0].message}（还有 ${errors.length - 1} 个问题）`, "error");
       }
-    }).catch(() => { /* ignore */ });
+    }).catch((error) => {
+      logDevIgnoredError("precheckAuth", error);
+    });
   }, [resolveInstanceTransport, showToast]);
 
   const scheduleEnsureAccessForInstance = useCallback((instanceId: string, delayMs = 1200) => {
@@ -732,29 +766,43 @@ export function App() {
 
   const connectWithPassphraseFallback = useCallback(async (hostId: string) => {
     const host = sshHosts.find((h) => h.id === hostId);
+    const hostLabel = host?.label || host?.host || hostId;
     try {
-      await withGuidance(
-        () => api.sshConnect(hostId),
-        "sshConnect",
-        hostId,
-        "remote_ssh",
-      );
+      await api.sshConnect(hostId);
       return;
     } catch (err) {
       const raw = String(err);
-      if (host && host.authMethod !== "password" && SSH_PASSPHRASE_RETRY_HINT.test(raw)) {
-        const passphrase = await requestPassphrase(host.label || host.host);
+      if ((!host || host.authMethod !== "password") && SSH_PASSPHRASE_RETRY_HINT.test(raw)) {
+        const passphrase = await requestPassphrase(hostLabel);
         if (passphrase !== null) {
-          await withGuidance(
-            () => api.sshConnectWithPassphrase(hostId, passphrase),
-            "sshConnectWithPassphrase",
-            hostId,
-            "remote_ssh",
+          try {
+            await api.sshConnectWithPassphrase(hostId, passphrase);
+            return;
+          } catch (passphraseErr) {
+            const passphraseRaw = String(passphraseErr);
+            const fallbackMessage = buildSshPassphraseConnectErrorMessage(passphraseRaw, hostLabel);
+            if (fallbackMessage) {
+              throw new Error(fallbackMessage);
+            }
+            throw await explainAndBuildGuidanceError({
+              method: "sshConnectWithPassphrase",
+              instanceId: hostId,
+              transport: "remote_ssh",
+              rawError: passphraseErr,
+            });
+          }
+        } else {
+          throw new Error(
+            buildSshPassphraseCancelMessage(hostLabel),
           );
-          return;
         }
       }
-      throw err;
+      throw await explainAndBuildGuidanceError({
+        method: "sshConnect",
+        instanceId: hostId,
+        transport: "remote_ssh",
+        rawError: err,
+      });
     }
   }, [requestPassphrase, sshHosts]);
 
@@ -771,7 +819,10 @@ export function App() {
     try {
       const result = await api.remoteSyncProfilesToLocalAuth(hostId);
       invalidateGlobalReadCache(["listModelProfiles", "resolveApiKeys"]);
-      const localProfiles = await api.listModelProfiles().catch(() => []);
+      const localProfiles = await api.listModelProfiles().catch((error) => {
+        logDevIgnoredError("syncRemoteAuthAfterConnect listModelProfiles", error);
+        return [];
+      });
       if (result.resolvedKeys > 0 || result.syncedProfiles > 0) {
         if (localProfiles.length > 0) {
           const message = `已同步远程认证：profiles ${result.syncedProfiles}，keys ${result.resolvedKeys}`;
@@ -869,7 +920,9 @@ export function App() {
       } else if (blocking.length > 1) {
         showToast(`${blocking[0].message}（还有 ${blocking.length - 1} 个问题）`, "error");
       }
-    }).catch(() => { /* ignore */ });
+    }).catch((error) => {
+      logDevIgnoredError("precheckInstance", error);
+    });
     const transport = resolveInstanceTransport(id);
     // Transport precheck for non-SSH targets.
     // SSH switching immediately triggers reconnect flow below, so running
@@ -892,7 +945,9 @@ export function App() {
             showToast(warnings[0].message, "error");
           }
         }
-      }).catch(() => { /* ignore */ });
+      }).catch((error) => {
+        logDevIgnoredError("precheckTransport", error);
+      });
     }
     if (transport !== "remote_ssh") return;
     // Check if backend still has a live connection before reconnecting.
@@ -918,7 +973,8 @@ export function App() {
             });
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        logDevIgnoredError("sshStatus or reconnect", error);
         // sshStatus failed or reconnect failed — try fresh connect
         connectWithPassphraseFallback(id)
           .then(() => {
@@ -966,13 +1022,13 @@ export function App() {
     const applyOverrides = async () => {
       if (nextHome === null && nextDataDir === null) {
         await Promise.all([
-          api.setActiveOpenclawHome(null).catch(() => {}),
-          api.setActiveClawpalDataDir(null).catch(() => {}),
+          api.setActiveOpenclawHome(null).catch((error) => logDevIgnoredError("setActiveOpenclawHome", error)),
+          api.setActiveClawpalDataDir(null).catch((error) => logDevIgnoredError("setActiveClawpalDataDir", error)),
         ]);
       } else {
         await Promise.all([
-          api.setActiveOpenclawHome(nextHome).catch(() => {}),
-          api.setActiveClawpalDataDir(nextDataDir).catch(() => {}),
+          api.setActiveOpenclawHome(nextHome).catch((error) => logDevIgnoredError("setActiveOpenclawHome", error)),
+          api.setActiveClawpalDataDir(nextDataDir).catch((error) => logDevIgnoredError("setActiveClawpalDataDir", error)),
         ]);
       }
       if (!cancelled) {
@@ -1001,7 +1057,9 @@ export function App() {
         transport: "remote_ssh",
         rawError: rawError,
         emitEvent: true,
-      }).catch(() => null);
+      }).catch((error) => {
+        logDevIgnoredError("autoheal explainAndBuildGuidanceError", error);
+      });
       showToast(friendlySshError(errorText, t), "error");
     };
     const markFailure = (rawError: unknown) => {
@@ -1030,7 +1088,7 @@ export function App() {
           return;
         }
         try {
-          await api.sshConnect(hostId);
+          await connectWithPassphraseFallback(hostId);
           if (!cancelled) {
             sshHealthFailStreakRef.current[hostId] = 0;
             setConnectionStatus((prev) => ({ ...prev, [hostId]: "connected" }));
@@ -1116,7 +1174,10 @@ export function App() {
         } else {
           setHasEscalatedCron(false);
         }
-      }).catch(() => setHasEscalatedCron(false));
+      }).catch((error) => {
+        logDevIgnoredError("watchdog status fetch", error);
+        setHasEscalatedCron(false);
+      });
     };
     const initialDelayMs = isRemote ? 5000 : 500;
     const initial = setTimeout(check, initialDelayMs);
@@ -1135,6 +1196,15 @@ export function App() {
     setInStart(true);
     setStartSection("overview");
   }, []);
+
+  const openDoctor = useCallback(() => {
+    setDoctorNavPulse(true);
+    setInStart(false);
+    navigateRoute("doctor");
+    window.setTimeout(() => {
+      setDoctorNavPulse(false);
+    }, 1400);
+  }, [navigateRoute]);
 
   useEffect(() => {
     if (INSTANCE_ROUTES.includes(route)) {
@@ -1188,7 +1258,10 @@ export function App() {
       const hostLabel = readArtifactString(["ssh_host_label", "sshHostLabel", "host_label", "hostLabel"]);
       const hostAddr = readArtifactString(["ssh_host", "sshHost", "host"]);
       if (!hostId) {
-        const knownHosts = await api.listSshHosts().catch(() => [] as SshHost[]);
+        const knownHosts = await api.listSshHosts().catch((error) => {
+          logDevIgnoredError("handleInstallReady listSshHosts", error);
+          return [] as SshHost[];
+        });
         if (hostLabel) {
           const byLabel = knownHosts.find((item) => item.label === hostLabel);
           if (byLabel) hostId = byLabel.id;
@@ -1268,6 +1341,16 @@ export function App() {
         onClick: () => { navigateRoute("home"); setStartSection("profiles"); },
       },
       {
+        key: "start-doctor",
+        active: route === "doctor",
+        icon: <StethoscopeIcon className="size-4" />,
+        label: t("nav.doctor"),
+        badge: doctorNavPulse ? <span className="ml-auto h-2 w-2 rounded-full bg-primary animate-pulse" /> : undefined,
+        onClick: () => {
+          openDoctor();
+        },
+      },
+      {
         key: "start-settings",
         active: startSection === "settings",
         icon: <SettingsIcon className="size-4" />,
@@ -1310,7 +1393,12 @@ export function App() {
         active: route === "doctor",
         icon: <StethoscopeIcon className="size-4" />,
         label: t("nav.doctor"),
-        onClick: () => navigateRoute("doctor"),
+        onClick: () => {
+          openDoctor();
+        },
+        badge: doctorNavPulse
+          ? <span className="ml-auto h-2 w-2 rounded-full bg-primary animate-pulse" />
+          : undefined,
       },
       {
         key: "history",
@@ -1459,6 +1547,7 @@ export function App() {
               sshHosts={sshHosts}
               registeredInstances={registeredInstances}
               openTabIds={new Set(openTabIds)}
+              connectRemoteHost={connectWithPassphraseFallback}
               onOpenInstance={openTab}
               onRenameDocker={renameDockerInstance}
               onDeleteDocker={deleteDockerInstance}
@@ -1478,6 +1567,7 @@ export function App() {
               onInstallReady={handleInstallReady}
               showToast={showToast}
               onNavigate={(r) => navigateRoute(r as Route)}
+              onOpenDoctor={openDoctor}
               discoveredInstances={discoveredInstances}
               discoveringInstances={discoveringInstances}
               onConnectDiscovered={handleConnectDiscovered}
@@ -1488,6 +1578,7 @@ export function App() {
               key="global-profiles"
               globalMode
               section="profiles"
+              onOpenDoctor={openDoctor}
               onDataChange={bumpConfigVersion}
             />
           )}
@@ -1496,6 +1587,7 @@ export function App() {
               key="global-settings"
               globalMode
               section="preferences"
+              onOpenDoctor={openDoctor}
               onDataChange={bumpConfigVersion}
               hasAppUpdate={appUpdateAvailable}
               onAppUpdateSeen={() => setAppUpdateAvailable(false)}
@@ -1542,6 +1634,7 @@ export function App() {
             <Doctor
               key={activeInstance}
               active
+              connectRemoteHost={connectWithPassphraseFallback}
               launchGuidance={doctorLaunchByInstance[activeInstance] || null}
               onLaunchGuidanceConsumed={(instanceId) => {
                 setDoctorLaunchByInstance((prev) => ({
