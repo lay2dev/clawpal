@@ -322,7 +322,7 @@ fn fill_profile_auth_from_existing_or_provider_donor(
             if profile
                 .api_key
                 .as_ref()
-                .map_or(true, |key| key.trim().is_empty())
+                .is_none_or(|key| key.trim().is_empty())
             {
                 profile.api_key = existing.api_key.clone();
             }
@@ -341,7 +341,7 @@ fn fill_profile_auth_from_existing_or_provider_donor(
     if profile
         .api_key
         .as_ref()
-        .map_or(true, |key| key.trim().is_empty())
+        .is_none_or(|key| key.trim().is_empty())
     {
         if let Some(donor) = profiles.iter().find(|candidate| {
             candidate.provider.eq_ignore_ascii_case(provider)

@@ -193,9 +193,7 @@ fn parse_ssh_config_entry(line: &str) -> Option<(String, String)> {
         }
     }
 
-    let Some((sep_idx, is_eq)) = sep else {
-        return None;
-    };
+    let (sep_idx, is_eq) = sep?;
 
     let key = line[..sep_idx].trim().to_ascii_lowercase();
     if key.is_empty() {

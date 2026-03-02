@@ -48,10 +48,11 @@ pub enum InstallError {
 pub type Result<T> = std::result::Result<T, InstallError>;
 
 pub fn install_docker(options: DockerInstallOptions) -> Result<InstallResult> {
-    let mut steps = Vec::new();
-    steps.push(docker::pull(&options)?);
-    steps.push(docker::configure(&options)?);
-    steps.push(docker::up(&options)?);
+    let steps = vec![
+        docker::pull(&options)?,
+        docker::configure(&options)?,
+        docker::up(&options)?,
+    ];
 
     let home = options
         .home

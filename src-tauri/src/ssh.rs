@@ -79,8 +79,7 @@ impl SshConnectionPool {
             let message = error.to_string();
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] connect_with_passphrase session connect failed id={} error={}",
-                config.id,
-                message
+                config.id, message
             ));
             message
         })?;
@@ -98,8 +97,7 @@ impl SshConnectionPool {
             .unwrap_or_else(|| "/root".to_string());
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] connect_with_passphrase resolved_home id={} home={}",
-            config.id,
-            home
+            config.id, home
         ));
 
         self.connections.lock().await.insert(
@@ -121,16 +119,13 @@ impl SshConnectionPool {
     }
 
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_pool] disconnect begin id={id}"
-        ));
+        crate::commands::logs::log_dev(format!("[dev][ssh_pool] disconnect begin id={id}"));
         if let Some(host) = self.connections.lock().await.remove(id) {
             let session = host.session.lock().await.clone();
             session.close().await;
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] disconnect removed id={} home={}",
-                id,
-                host.home_dir
+                id, host.home_dir
             ));
         } else {
             let known = {
@@ -149,15 +144,13 @@ impl SshConnectionPool {
     pub async fn reconnect(&self, id: &str) -> Result<(), String> {
         let (config, passphrase) = {
             let guard = self.connections.lock().await;
-            let host = guard
-                .get(id)
-                .ok_or_else(|| {
-                    crate::commands::logs::log_dev(format!(
-                        "[dev][ssh_pool] reconnect missing connection id={id} known={}",
-                        Self::format_connection_ids(&guard)
-                    ));
-                    format!("No connection for id: {id}")
-                })?;
+            let host = guard.get(id).ok_or_else(|| {
+                crate::commands::logs::log_dev(format!(
+                    "[dev][ssh_pool] reconnect missing connection id={id} known={}",
+                    Self::format_connection_ids(&guard)
+                ));
+                format!("No connection for id: {id}")
+            })?;
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] reconnect begin id={} passphrase_present={}",
                 id,
@@ -165,17 +158,17 @@ impl SshConnectionPool {
             ));
             (host.config.clone(), host.passphrase.clone())
         };
-        if let Err(error) = self.connect_with_passphrase(&config, passphrase.as_deref()).await {
+        if let Err(error) = self
+            .connect_with_passphrase(&config, passphrase.as_deref())
+            .await
+        {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] reconnect failed id={} error={}",
-                id,
-                error
+                id, error
             ));
             return Err(format!("ssh reconnect failed: {error}"));
         }
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_pool] reconnect success id={id}"
-        ));
+        crate::commands::logs::log_dev(format!("[dev][ssh_pool] reconnect success id={id}"));
         Ok(())
     }
 
@@ -189,15 +182,13 @@ impl SshConnectionPool {
 
     pub async fn get_home_dir(&self, id: &str) -> Result<String, String> {
         let guard = self.connections.lock().await;
-        let conn = guard
-            .get(id)
-            .ok_or_else(|| {
-                crate::commands::logs::log_dev(format!(
-                    "[dev][ssh_pool] get_home_dir missing connection id={id} known={}",
-                    Self::format_connection_ids(&guard)
-                ));
-                format!("No connection for id: {id}")
-            })?;
+        let conn = guard.get(id).ok_or_else(|| {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] get_home_dir missing connection id={id} known={}",
+                Self::format_connection_ids(&guard)
+            ));
+            format!("No connection for id: {id}")
+        })?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] get_home_dir found id={id} home={}",
             conn.home_dir
@@ -218,23 +209,16 @@ impl SshConnectionPool {
         let conn = self.lookup_connected_host(id).await?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] exec start id={} command={}",
-            id,
-            command
+            id, command
         ));
-        let _permit = conn
-            .op_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| {
-                let message = format!("ssh limiter acquire failed: {e}");
-                crate::commands::logs::log_dev(format!(
-                    "[dev][ssh_pool] exec acquire semaphore failed id={} error={}",
-                    id,
-                    message
-                ));
-                message
-            })?;
+        let _permit = conn.op_limiter.clone().acquire_owned().await.map_err(|e| {
+            let message = format!("ssh limiter acquire failed: {e}");
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] exec acquire semaphore failed id={} error={}",
+                id, message
+            ));
+            message
+        })?;
         let mut result = {
             let session = conn.session.lock().await.clone();
             session.exec(command).await
@@ -242,8 +226,7 @@ impl SshConnectionPool {
         if let Err(err) = &result {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] exec got session error id={} error={}",
-                id,
-                err
+                id, err
             ));
             if is_retryable_session_error(&err.to_string()) {
                 self.refresh_session(&conn).await?;
@@ -255,8 +238,7 @@ impl SshConnectionPool {
             let message = e.to_string();
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] exec failed id={} error={}",
-                id,
-                message
+                id, message
             ));
             message
         })?;
@@ -283,23 +265,16 @@ impl SshConnectionPool {
         let conn = self.lookup_connected_host(id).await?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_read start id={} path={}",
-            id,
-            resolved
+            id, resolved
         ));
-        let _permit = conn
-            .op_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| {
-                let message = format!("ssh limiter acquire failed: {e}");
-                crate::commands::logs::log_dev(format!(
-                    "[dev][ssh_pool] sftp_read acquire semaphore failed id={} error={}",
-                    id,
-                    message
-                ));
-                message
-            })?;
+        let _permit = conn.op_limiter.clone().acquire_owned().await.map_err(|e| {
+            let message = format!("ssh limiter acquire failed: {e}");
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_read acquire semaphore failed id={} error={}",
+                id, message
+            ));
+            message
+        })?;
         let mut bytes = {
             let session = conn.session.lock().await.clone();
             session.sftp_read(&resolved).await
@@ -307,9 +282,7 @@ impl SshConnectionPool {
         if let Err(err) = &bytes {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] sftp_read primary error id={} path={} error={}",
-                id,
-                resolved,
-                err
+                id, resolved, err
             ));
             if is_retryable_session_error(&err.to_string()) {
                 self.refresh_session(&conn).await?;
@@ -324,9 +297,7 @@ impl SshConnectionPool {
                 if !should_attempt_sftp_exec_fallback(&primary_msg) {
                     crate::commands::logs::log_dev(format!(
                         "[dev][ssh_pool] sftp_read failed without fallback id={} path={} error={}",
-                        id,
-                        resolved,
-                        primary_msg
+                        id, resolved, primary_msg
                     ));
                     return Err(primary_msg);
                 }
@@ -335,9 +306,7 @@ impl SshConnectionPool {
                     Err(fallback_err) => {
                         crate::commands::logs::log_dev(format!(
                             "[dev][ssh_pool] sftp_read fallback failed id={} path={} error={}",
-                            id,
-                            resolved,
-                            fallback_err
+                            id, resolved, fallback_err
                         ));
                         return Err(format!(
                             "{primary_msg}; fallback via ssh cat failed: {fallback_err}"
@@ -359,24 +328,17 @@ impl SshConnectionPool {
         let resolved = self.resolve_path(id, path).await?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_write start id={} path={}",
-            id,
-            resolved
+            id, resolved
         ));
         let conn = self.lookup_connected_host(id).await?;
-        let _permit = conn
-            .op_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| {
-                let message = format!("ssh limiter acquire failed: {e}");
-                crate::commands::logs::log_dev(format!(
-                    "[dev][ssh_pool] sftp_write acquire semaphore failed id={} error={}",
-                    id,
-                    message
-                ));
-                message
-            })?;
+        let _permit = conn.op_limiter.clone().acquire_owned().await.map_err(|e| {
+            let message = format!("ssh limiter acquire failed: {e}");
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_write acquire semaphore failed id={} error={}",
+                id, message
+            ));
+            message
+        })?;
         let mut write_res = {
             let session = conn.session.lock().await.clone();
             session.sftp_write(&resolved, content.as_bytes()).await
@@ -384,9 +346,7 @@ impl SshConnectionPool {
         if let Err(err) = &write_res {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] sftp_write primary error id={} path={} error={}",
-                id,
-                resolved,
-                err
+                id, resolved, err
             ));
             if is_retryable_session_error(&err.to_string()) {
                 self.refresh_session(&conn).await?;
@@ -398,16 +358,13 @@ impl SshConnectionPool {
             let message = e.to_string();
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] sftp_write failed id={} path={} error={}",
-                id,
-                resolved,
-                message
+                id, resolved, message
             ));
             message
         })?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_write success id={} path={}",
-            id,
-            resolved
+            id, resolved
         ));
         Ok(())
     }
@@ -444,44 +401,37 @@ impl SshConnectionPool {
         let resolved = self.resolve_path(id, path).await?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_remove start id={} path={}",
-            id,
-            resolved
+            id, resolved
         ));
         let cmd = format!("rm -f {}", shell_quote(&resolved));
         let exec_result = self.exec(id, &cmd).await;
         if let Err(error) = exec_result {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] sftp_remove exec failed id={} path={} error={}",
-                id,
-                resolved,
-                error
+                id, resolved, error
             ));
             return Err(error);
         }
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_remove success id={} path={}",
-            id,
-            resolved
+            id, resolved
         ));
         Ok(())
     }
 
     async fn lookup_connected_host(&self, id: &str) -> Result<ConnectedHost, String> {
         let guard = self.connections.lock().await;
-        let conn = guard
-            .get(id)
-            .ok_or_else(|| {
-                crate::commands::logs::log_dev(format!(
-                    "[dev][ssh_pool] lookup_connected_host missing id={} known={}",
-                    id,
-                    Self::format_connection_ids(&guard)
-                ));
-                format!("No connection for id: {id}")
-            })?;
+        let conn = guard.get(id).ok_or_else(|| {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] lookup_connected_host missing id={} known={}",
+                id,
+                Self::format_connection_ids(&guard)
+            ));
+            format!("No connection for id: {id}")
+        })?;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] lookup_connected_host found id={} host={}",
-            id,
-            conn.config.host
+            id, conn.config.host
         ));
         Ok(conn.clone())
     }
@@ -501,8 +451,7 @@ impl SshConnectionPool {
                 let message = error.to_string();
                 crate::commands::logs::log_dev(format!(
                     "[dev][ssh_pool] refresh_session connect failed id={} error={}",
-                    conn.config.id,
-                    message
+                    conn.config.id, message
                 ));
                 message
             })?,
@@ -524,8 +473,7 @@ impl SshConnectionPool {
     ) -> Result<Vec<u8>, String> {
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] exec_cat_read_with_retry start id={} path={}",
-            conn.config.id,
-            path
+            conn.config.id, path
         ));
         let mut out = {
             let session = conn.session.lock().await.clone();
@@ -535,9 +483,7 @@ impl SshConnectionPool {
         if let Err(err) = &out {
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] exec_cat_read_with_retry primary error id={} path={} error={}",
-                conn.config.id,
-                path,
-                err
+                conn.config.id, path, err
             ));
             if is_retryable_session_error(&err.to_string()) {
                 self.refresh_session(conn).await?;
@@ -550,9 +496,7 @@ impl SshConnectionPool {
             let message = error.to_string();
             crate::commands::logs::log_dev(format!(
                 "[dev][ssh_pool] exec_cat_read_with_retry failed id={} path={} error={}",
-                conn.config.id,
-                path,
-                message
+                conn.config.id, path, message
             ));
             message
         })?;

@@ -9,14 +9,14 @@ import {
   buildSshPassphraseConnectErrorMessage,
 } from "../sshConnectErrors";
 
-const t = (key: string, opts: Record<string, string> = {}) => {
+const t = (key: string, opts: Record<string, string | number | boolean> = {}) => {
   const text = {
     "ssh.passphraseValidationFailed": "PASS_FAIL_{{host}}",
     "ssh.missingKeyFile": "MISSING_KEY_{{host}}",
     "ssh.publicKeyRejected": "PUBLIC_KEY_REJECTED_{{host}}",
     "ssh.passphraseCancelled": "CANCEL_{{host}}",
   }[key] || key;
-  return text.replace("{{host}}", opts.host ?? "");
+  return text.replace("{{host}}", String(opts.host ?? ""));
 };
 
 describe("sshConnectErrors", () => {
