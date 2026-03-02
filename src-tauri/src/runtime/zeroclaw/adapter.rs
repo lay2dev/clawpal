@@ -69,6 +69,16 @@ impl ZeroclawDoctorAdapter {
         raw
     }
 
+    fn parse_diagnosis(raw: &str) -> Option<(RuntimeEvent, String)> {
+        let result = crate::runtime::zeroclaw::tool_intent::parse_diagnosis_result(raw)?;
+        let summary = result
+            .summary
+            .clone()
+            .unwrap_or_else(|| format!("诊断完成，发现 {} 个问题。", result.items.len()));
+        let items_value = serde_json::to_value(&result.items).ok()?;
+        Some((RuntimeEvent::diagnosis_report(items_value), summary))
+    }
+
     fn parse_tool_intent(raw: &str) -> Option<(RuntimeEvent, String)> {
         let intent = crate::runtime::zeroclaw::tool_intent::parse_tool_intent(raw)?;
         let reason = intent
@@ -133,6 +143,10 @@ impl RuntimeAdapter for ZeroclawDoctorAdapter {
             .map(Self::normalize_doctor_output)
             .map_err(Self::map_error)?;
         append_history(&session_key, "system", &prompt);
+        if let Some((report, summary)) = Self::parse_diagnosis(&text) {
+            append_history(&session_key, "assistant", &summary);
+            return Ok(vec![RuntimeEvent::chat_final(summary), report]);
+        }
         if let Some((invoke, note)) = Self::parse_tool_intent(&text) {
             append_history(&session_key, "assistant", &note);
             return Ok(vec![RuntimeEvent::chat_final(note), invoke]);
@@ -153,6 +167,10 @@ impl RuntimeAdapter for ZeroclawDoctorAdapter {
         let text = run_zeroclaw_message(&guarded, &key.instance_id, &key.storage_key())
             .map(Self::normalize_doctor_output)
             .map_err(Self::map_error)?;
+        if let Some((report, summary)) = Self::parse_diagnosis(&text) {
+            append_history(&session_key, "assistant", &summary);
+            return Ok(vec![RuntimeEvent::chat_final(summary), report]);
+        }
         if let Some((invoke, note)) = Self::parse_tool_intent(&text) {
             append_history(&session_key, "assistant", &note);
             return Ok(vec![RuntimeEvent::chat_final(note), invoke]);

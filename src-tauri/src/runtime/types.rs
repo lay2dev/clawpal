@@ -96,6 +96,7 @@ pub enum RuntimeEvent {
     ChatDelta { text: String },
     ChatFinal { text: String },
     Invoke { payload: Value },
+    DiagnosisReport { items: Value },
     Error { error: RuntimeError },
     Status { text: String },
 }
@@ -106,6 +107,7 @@ impl RuntimeEvent {
             Self::ChatDelta { .. } => "chat-delta",
             Self::ChatFinal { .. } => "chat-final",
             Self::Invoke { .. } => "invoke",
+            Self::DiagnosisReport { .. } => "diagnosis-report",
             Self::Error { .. } => "error",
             Self::Status { .. } => "status",
         }
@@ -117,6 +119,10 @@ impl RuntimeEvent {
 
     pub fn chat_final(text: String) -> Self {
         Self::ChatFinal { text }
+    }
+
+    pub fn diagnosis_report(items: Value) -> Self {
+        Self::DiagnosisReport { items }
     }
 }
 

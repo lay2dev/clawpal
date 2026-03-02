@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentMessageBubble } from "@/components/AgentMessageBubble";
+import { DiagnosisCard } from "@/components/DiagnosisCard";
 import type { DoctorChatMessage } from "@/lib/types";
 
 interface DoctorChatProps {
@@ -53,12 +54,18 @@ export function DoctorChat({
             </div>
           )}
           {messages.map((msg) => (
-            <AgentMessageBubble
-              key={msg.id}
-              message={msg}
-              onApprove={onApproveInvoke}
-              onReject={onRejectInvoke}
-            />
+            <div key={msg.id}>
+              <AgentMessageBubble
+                message={msg}
+                onApprove={onApproveInvoke}
+                onReject={onRejectInvoke}
+              />
+              {msg.diagnosisReport && msg.diagnosisReport.items.length > 0 && (
+                <div className="mt-2">
+                  <DiagnosisCard items={msg.diagnosisReport.items} />
+                </div>
+              )}
+            </div>
           ))}
           {loading && (
             <div className="text-sm text-muted-foreground animate-pulse">

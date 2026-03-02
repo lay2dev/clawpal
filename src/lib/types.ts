@@ -499,6 +499,13 @@ export interface DoctorInvoke {
   type: "read" | "write";
 }
 
+export interface DiagnosisReportItem {
+  problem: string;
+  severity: "error" | "warn" | "info";
+  fix_options: string[];
+  action?: { tool: string; args: string; instance?: string; reason?: string };
+}
+
 export interface DoctorChatMessage {
   id: string;
   role: "assistant" | "user" | "tool-call" | "tool-result";
@@ -507,6 +514,7 @@ export interface DoctorChatMessage {
   invokeResult?: unknown;
   invokeId?: string;
   status?: "pending" | "approved" | "rejected" | "auto";
+  diagnosisReport?: { items: DiagnosisReportItem[] };
 }
 
 export interface ApplyQueueResult {
