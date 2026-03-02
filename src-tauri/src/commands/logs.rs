@@ -35,7 +35,9 @@ pub async fn remote_read_app_log(
 ) -> Result<String, String> {
     let n = clamp_lines(lines);
     let cmd = format!("tail -n {n} ~/.clawpal/logs/app.log 2>/dev/null || echo ''");
-    log_debug(&format!("remote_read_app_log start host_id={host_id} lines={n} cmd={cmd}"));
+    log_debug(&format!(
+        "remote_read_app_log start host_id={host_id} lines={n} cmd={cmd}"
+    ));
     let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
         log_debug(&format!(
             "remote_read_app_log failed host_id={host_id} error={error}"
@@ -53,7 +55,9 @@ pub async fn remote_read_error_log(
 ) -> Result<String, String> {
     let n = clamp_lines(lines);
     let cmd = format!("tail -n {n} ~/.clawpal/logs/error.log 2>/dev/null || echo ''");
-    log_debug(&format!("remote_read_error_log start host_id={host_id} lines={n} cmd={cmd}"));
+    log_debug(&format!(
+        "remote_read_error_log start host_id={host_id} lines={n} cmd={cmd}"
+    ));
     let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
         log_debug(&format!(
             "remote_read_error_log failed host_id={host_id} error={error}"
@@ -71,7 +75,9 @@ pub async fn remote_read_gateway_log(
 ) -> Result<String, String> {
     let n = clamp_lines(lines);
     let cmd = format!("tail -n {n} ~/.openclaw/logs/gateway.log 2>/dev/null || echo ''");
-    log_debug(&format!("remote_read_gateway_log start host_id={host_id} lines={n} cmd={cmd}"));
+    log_debug(&format!(
+        "remote_read_gateway_log start host_id={host_id} lines={n} cmd={cmd}"
+    ));
     let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
         log_debug(&format!(
             "remote_read_gateway_log failed host_id={host_id} error={error}"

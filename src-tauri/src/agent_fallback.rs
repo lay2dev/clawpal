@@ -525,16 +525,11 @@ mod tests {
             "testModelProfile",
             None,
         );
-        assert!(
-            result.summary.contains("实例 `ssh:hetzner`")
-                || result.summary.contains("实例")
-        );
+        assert!(result.summary.contains("实例 `ssh:hetzner`") || result.summary.contains("实例"));
         assert!(result.actions.iter().any(|a| a.contains("重连")));
-        assert!(
-            result
-                .structured_actions
-                .iter()
-                .any(|a| a.action_type == "inline_fix" && a.tool.as_deref() == Some("clawpal"))
-        );
+        assert!(result
+            .structured_actions
+            .iter()
+            .any(|a| a.action_type == "inline_fix" && a.tool.as_deref() == Some("clawpal")));
     }
 }

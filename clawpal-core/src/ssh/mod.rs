@@ -250,7 +250,7 @@ impl SshSession {
                 let mut exit_code = -1;
                 while let Some(msg) = mkdir_ch.wait().await {
                     match msg {
-                        russh::ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
+                        russh::ChannelMsg::ExtendedData { data, ext: 1 } => {
                             stderr.extend_from_slice(&data);
                         }
                         russh::ChannelMsg::ExitStatus { exit_status } => {
@@ -481,15 +481,17 @@ async fn connect_and_auth(
         let key_pair = passphrase
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .and_then(|phrase| {
-                match russh_keys::load_secret_key(&expanded, Some(phrase)) {
+            .and_then(
+                |phrase| match russh_keys::load_secret_key(&expanded, Some(phrase)) {
                     Ok(pair) => Some(pair),
                     Err(err) => {
-                        attempts.push(format!("{expanded}: encrypted or passphrase mismatch ({err})"));
+                        attempts.push(format!(
+                            "{expanded}: encrypted or passphrase mismatch ({err})"
+                        ));
                         None
                     }
-                }
-            })
+                },
+            )
             .or_else(|| match russh_keys::load_secret_key(&expanded, None) {
                 Ok(pair) => Some(pair),
                 Err(err) => {
@@ -520,10 +522,7 @@ async fn connect_and_auth(
     };
     Err(SshError::Auth(format!(
         "public key authentication failed for {}@{}:{} after trying {}",
-        resolved.username,
-        resolved.host,
-        resolved.port,
-        details
+        resolved.username, resolved.host, resolved.port, details
     )))
 }
 
