@@ -654,14 +654,32 @@ fn run_zeroclaw_agent_decider(
 }
 
 fn zeroclaw_env_pairs_from_clawpal() -> Vec<(String, String)> {
-    let provider_keys = crate::commands::collect_provider_api_keys_for_internal();
+    let provider_credentials = crate::commands::collect_provider_credentials_for_internal();
     let mut out = Vec::<(String, String)>::new();
-    for (provider, key) in provider_keys {
+    for (provider, credential) in provider_credentials {
+        let key = credential.secret.trim().to_ascii_lowercase();
+        let mismatched = match provider.as_str() {
+            "openrouter" => key.starts_with("sk-kimi-"),
+            "moonshot" | "kimi-code" | "kimi-coding" => key.starts_with("sk-or-"),
+            "anthropic" => key.starts_with("sk-kimi-"),
+            _ => false,
+        };
+        if mismatched {
+            continue;
+        }
         match provider.as_str() {
-            "openrouter" => out.push(("OPENROUTER_API_KEY".to_string(), key)),
-            "openai" | "openai-codex" => out.push(("OPENAI_API_KEY".to_string(), key)),
-            "anthropic" => out.push(("ANTHROPIC_API_KEY".to_string(), key)),
-            "gemini" | "google" => out.push(("GEMINI_API_KEY".to_string(), key)),
+            "openrouter" => out.push(("OPENROUTER_API_KEY".to_string(), credential.secret)),
+            "openai" | "openai-codex" => {
+                out.push(("OPENAI_API_KEY".to_string(), credential.secret))
+            }
+            "anthropic" => {
+                let env_name = match credential.kind {
+                    crate::commands::InternalAuthKind::Authorization => "ANTHROPIC_OAUTH_TOKEN",
+                    crate::commands::InternalAuthKind::ApiKey => "ANTHROPIC_API_KEY",
+                };
+                out.push((env_name.to_string(), credential.secret));
+            }
+            "gemini" | "google" => out.push(("GEMINI_API_KEY".to_string(), credential.secret)),
             _ => {}
         }
     }
@@ -675,7 +693,10 @@ fn pick_zeroclaw_provider(env_pairs: &[(String, String)]) -> Option<&'static str
     if env_pairs.iter().any(|(k, _)| k == "OPENAI_API_KEY") {
         return Some("openai");
     }
-    if env_pairs.iter().any(|(k, _)| k == "ANTHROPIC_API_KEY") {
+    if env_pairs
+        .iter()
+        .any(|(k, _)| k == "ANTHROPIC_API_KEY" || k == "ANTHROPIC_OAUTH_TOKEN")
+    {
         return Some("anthropic");
     }
     None

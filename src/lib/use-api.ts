@@ -55,6 +55,10 @@ function invalidateReadCacheForInstance(instanceCacheKey: string, methods?: stri
   }
 }
 
+export function invalidateGlobalReadCache(methods?: string[]) {
+  invalidateReadCacheForInstance("__global__", methods);
+}
+
 function callWithReadCache<TResult>(
   instanceCacheKey: string,
   method: string,

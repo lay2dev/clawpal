@@ -1,8 +1,7 @@
 use super::*;
 
 fn local_global_openclaw_base_dir() -> std::path::PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    home.join(".openclaw")
+    resolve_paths().base_dir
 }
 
 fn normalize_profile_key(profile: &ModelProfile) -> String {
@@ -80,7 +79,13 @@ fn merge_remote_profile_into_local(
         if existing.name.trim().is_empty() && !remote.name.trim().is_empty() {
             existing.name = remote.name.clone();
         }
-        if existing.description.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if existing
+            .description
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             existing.description = remote.description.clone();
         }
         if existing.provider.trim().is_empty() && !remote.provider.trim().is_empty() {
@@ -95,14 +100,16 @@ fn merge_remote_profile_into_local(
         if !is_non_empty(existing.base_url.as_deref()) && is_non_empty(remote.base_url.as_deref()) {
             existing.base_url = remote.base_url.clone();
         }
-        if !is_non_empty(existing.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref()) {
+        if !is_non_empty(existing.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref())
+        {
             existing.base_url = resolved_base_url;
         }
-        if !is_non_empty(existing.api_key.as_deref()) && is_non_empty(remote.api_key.as_deref()) {
-            existing.api_key = remote.api_key.clone();
-        }
-        if !is_non_empty(existing.api_key.as_deref()) && is_non_empty(resolved_api_key.as_deref()) {
+        if is_non_empty(resolved_api_key.as_deref()) {
             existing.api_key = resolved_api_key;
+        } else if !is_non_empty(existing.api_key.as_deref())
+            && is_non_empty(remote.api_key.as_deref())
+        {
+            existing.api_key = remote.api_key.clone();
         }
         if !existing.enabled && remote.enabled {
             existing.enabled = true;
@@ -111,7 +118,7 @@ fn merge_remote_profile_into_local(
     }
 
     let mut merged = remote.clone();
-    if !is_non_empty(merged.api_key.as_deref()) && is_non_empty(resolved_api_key.as_deref()) {
+    if is_non_empty(resolved_api_key.as_deref()) {
         merged.api_key = resolved_api_key;
     }
     if !is_non_empty(merged.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref()) {
@@ -452,7 +459,13 @@ pub async fn remote_sync_profiles_to_local_auth(
 mod tests {
     use super::*;
 
-    fn profile(id: &str, provider: &str, model: &str, auth_ref: &str, api_key: Option<&str>) -> ModelProfile {
+    fn profile(
+        id: &str,
+        provider: &str,
+        model: &str,
+        auth_ref: &str,
+        api_key: Option<&str>,
+    ) -> ModelProfile {
         ModelProfile {
             id: id.to_string(),
             name: format!("{provider}/{model}"),
@@ -468,8 +481,20 @@ mod tests {
 
     #[test]
     fn merge_remote_profile_reuses_local_entry_by_provider_model() {
-        let mut local = vec![profile("local-1", "anthropic", "claude-4-5", "anthropic:default", Some("local-key"))];
-        let remote = profile("remote-9", "anthropic", "claude-4-5", "anthropic:remote", None);
+        let mut local = vec![profile(
+            "local-1",
+            "anthropic",
+            "claude-4-5",
+            "anthropic:default",
+            Some("local-key"),
+        )];
+        let remote = profile(
+            "remote-9",
+            "anthropic",
+            "claude-4-5",
+            "anthropic:remote",
+            None,
+        );
 
         let created = merge_remote_profile_into_local(&mut local, &remote, None, None);
 
@@ -482,7 +507,13 @@ mod tests {
 
     #[test]
     fn merge_remote_profile_fills_missing_local_key_from_resolved_remote() {
-        let mut local = vec![profile("local-2", "openai", "gpt-4.1", "openai:default", None)];
+        let mut local = vec![profile(
+            "local-2",
+            "openai",
+            "gpt-4.1",
+            "openai:default",
+            None,
+        )];
         let remote = profile("remote-2", "openai", "gpt-4.1", "openai:default", None);
 
         let created = merge_remote_profile_into_local(
@@ -495,6 +526,34 @@ mod tests {
         assert!(!created);
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].api_key.as_deref(), Some("resolved-remote-key"));
+    }
+
+    #[test]
+    fn merge_remote_profile_prefers_resolved_key_over_stale_remote_key() {
+        let mut local = vec![profile(
+            "local-3",
+            "anthropic",
+            "claude-4-5",
+            "anthropic:default",
+            None,
+        )];
+        let remote = profile(
+            "remote-3",
+            "anthropic",
+            "claude-4-5",
+            "anthropic:default",
+            Some("stale-remote-key"),
+        );
+
+        let created = merge_remote_profile_into_local(
+            &mut local,
+            &remote,
+            Some("resolved-valid-key".to_string()),
+            None,
+        );
+
+        assert!(!created);
+        assert_eq!(local[0].api_key.as_deref(), Some("resolved-valid-key"));
     }
 
     #[test]

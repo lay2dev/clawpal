@@ -61,8 +61,8 @@ impl SshConnectionPool {
                 config,
                 passphrase_owned.as_deref(),
             )
-                .await
-                .map_err(|e| e.to_string())?,
+            .await
+            .map_err(|e| e.to_string())?,
         );
         let home = session
             .exec("echo $HOME")
@@ -274,8 +274,8 @@ impl SshConnectionPool {
                 &conn.config,
                 conn.passphrase.as_deref(),
             )
-                .await
-                .map_err(|e| e.to_string())?,
+            .await
+            .map_err(|e| e.to_string())?,
         );
         let mut guard = conn.session.lock().await;
         let old = std::mem::replace(&mut *guard, new_session);

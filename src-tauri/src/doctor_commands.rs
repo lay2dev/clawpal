@@ -13,6 +13,49 @@ use crate::runtime::zeroclaw::adapter::ZeroclawDoctorAdapter;
 use crate::runtime::zeroclaw::install_adapter::ZeroclawInstallAdapter;
 use crate::ssh::SshConnectionPool;
 
+const DOCTOR_RESULT_STREAM_MAX_BYTES: usize = 10 * 1024;
+const DOCTOR_RESULT_TEXT_MAX_BYTES: usize = 24 * 1024;
+
+fn truncate_utf8_tail(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
+    }
+    let mut start = input.len().saturating_sub(max_bytes);
+    while start < input.len() && !input.is_char_boundary(start) {
+        start += 1;
+    }
+    input[start..].to_string()
+}
+
+fn clamp_doctor_result_stream(label: &str, input: &str) -> String {
+    if input.len() <= DOCTOR_RESULT_STREAM_MAX_BYTES {
+        return input.to_string();
+    }
+    let marker = format!(
+        "[clawpal notice] {label} truncated (showing latest {} bytes)\n",
+        DOCTOR_RESULT_STREAM_MAX_BYTES
+    );
+    let keep = DOCTOR_RESULT_STREAM_MAX_BYTES.saturating_sub(marker.len());
+    let tail = truncate_utf8_tail(input, keep);
+    format!("{marker}{tail}")
+}
+
+fn clamp_doctor_result_text(input: String) -> String {
+    if input.len() <= DOCTOR_RESULT_TEXT_MAX_BYTES {
+        return input;
+    }
+    let marker = format!(
+        "[clawpal notice] command result payload truncated to {} bytes.\n",
+        DOCTOR_RESULT_TEXT_MAX_BYTES
+    );
+    let keep = DOCTOR_RESULT_TEXT_MAX_BYTES.saturating_sub(marker.len());
+    let tail = truncate_utf8_tail(&input, keep);
+    format!("{marker}{tail}")
+}
+
 fn zeroclaw_pending_invokes() -> &'static Mutex<HashMap<String, Value>> {
     static STORE: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -178,8 +221,10 @@ pub async fn doctor_approve_invoke(
     // Feed execution result back into zeroclaw session so it can continue the diagnosis.
     let command = command.to_string();
     let invoke_desc = describe_invoke(&command, &args);
-    let result_text = if let Some(stdout) = result.get("stdout").and_then(|v| v.as_str()) {
-        let stderr = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let result_text = if let Some(stdout_raw) = result.get("stdout").and_then(|v| v.as_str()) {
+        let stdout = clamp_doctor_result_stream("stdout", stdout_raw);
+        let stderr_raw = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+        let stderr = clamp_doctor_result_stream("stderr", stderr_raw);
         let exit_code = result
             .get("exitCode")
             .and_then(|v| v.as_i64())
@@ -196,6 +241,7 @@ pub async fn doctor_approve_invoke(
     } else {
         format!("[Command executed: `{invoke_desc}`]\nResult: {result}")
     };
+    let result_text = clamp_doctor_result_text(result_text);
     let is_install = domain.as_deref() == Some("install");
     let rt_domain = if is_install {
         RuntimeDomain::Install

@@ -384,10 +384,11 @@ fn profiles_path() -> PathBuf {
     if let Ok(dir) = std::env::var("CLAWPAL_DATA_DIR") {
         return PathBuf::from(dir).join("model-profiles.json");
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".clawpal")
-        .join("model-profiles.json")
+    let home = dirs::home_dir()
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".clawpal").join("model-profiles.json")
 }
 
 #[cfg(test)]

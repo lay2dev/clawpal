@@ -19,6 +19,7 @@ import logoUrl from "./assets/logo.png";
 import { InstanceTabBar } from "./components/InstanceTabBar";
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
+import { invalidateGlobalReadCache } from "./lib/use-api";
 import { explainAndBuildGuidanceError, withGuidance } from "./lib/guidance";
 import { useFont } from "./lib/use-font";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,12 @@ interface ToastItem {
   id: number;
   message: string;
   type: "success" | "error";
+}
+
+interface ProfileSyncStatus {
+  phase: "idle" | "syncing" | "success" | "error";
+  message: string;
+  instanceId: string | null;
 }
 
 // AgentGuidanceItem is imported from ./components/GuidanceCard
@@ -371,6 +378,11 @@ export function App() {
   }, []);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [profileSyncStatus, setProfileSyncStatus] = useState<ProfileSyncStatus>({
+    phase: "idle",
+    message: "",
+    instanceId: null,
+  });
   const [agentGuidanceByInstance, setAgentGuidanceByInstance] = useState<Record<string, AgentGuidanceItem>>({});
   const [doctorLaunchByInstance, setDoctorLaunchByInstance] = useState<Record<string, AgentGuidanceItem | null>>({});
   const [agentGuidanceOpen, setAgentGuidanceOpen] = useState(false);
@@ -751,20 +763,58 @@ export function App() {
     const last = remoteAuthSyncAtRef.current[hostId] || 0;
     if (now - last < 30_000) return;
     remoteAuthSyncAtRef.current[hostId] = now;
+    setProfileSyncStatus({
+      phase: "syncing",
+      message: "正在同步远程模型认证…",
+      instanceId: hostId,
+    });
     try {
       const result = await api.remoteSyncProfilesToLocalAuth(hostId);
+      invalidateGlobalReadCache(["listModelProfiles", "resolveApiKeys"]);
+      const localProfiles = await api.listModelProfiles().catch(() => []);
       if (result.resolvedKeys > 0 || result.syncedProfiles > 0) {
-        showToast(
-          `已同步远程认证：profiles ${result.syncedProfiles}，keys ${result.resolvedKeys}`,
-          "success",
-        );
+        if (localProfiles.length > 0) {
+          const message = `已同步远程认证：profiles ${result.syncedProfiles}，keys ${result.resolvedKeys}`;
+          showToast(message, "success");
+          setProfileSyncStatus({
+            phase: "success",
+            message,
+            instanceId: hostId,
+          });
+        } else {
+          const message = "远程同步返回成功，但本地模型列表仍为空（请检查本地 profiles 路径和读取权限）";
+          showToast(message, "error");
+          setProfileSyncStatus({
+            phase: "error",
+            message,
+            instanceId: hostId,
+          });
+        }
       } else if (result.totalRemoteProfiles > 0) {
-        showToast("远程已有 profiles，但未解析到可用 key（请检查 auth_ref/环境变量）", "error");
+        const message = "远程已有 profiles，但未解析到可用 key（请检查 auth_ref/环境变量）";
+        showToast(message, "error");
+        setProfileSyncStatus({
+          phase: "error",
+          message,
+          instanceId: hostId,
+        });
       } else {
-        showToast("远程实例未发现可同步的模型配置", "error");
+        const message = "远程实例未发现可同步的模型配置";
+        showToast(message, "error");
+        setProfileSyncStatus({
+          phase: "error",
+          message,
+          instanceId: hostId,
+        });
       }
     } catch (e) {
-      showToast(`同步远程认证信息失败：${e}`, "error");
+      const message = `同步远程认证信息失败：${e}`;
+      showToast(message, "error");
+      setProfileSyncStatus({
+        phase: "error",
+        message,
+        instanceId: hostId,
+      });
     }
   }, [showToast]);
 
@@ -1347,6 +1397,33 @@ export function App() {
           >
             @zhixian
           </a>
+        </div>
+        <div className="px-5 pb-3 text-[11px] text-muted-foreground/80">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "inline-block h-1.5 w-1.5 rounded-full",
+                profileSyncStatus.phase === "syncing" && "bg-amber-500 animate-pulse",
+                profileSyncStatus.phase === "success" && "bg-green-500",
+                profileSyncStatus.phase === "error" && "bg-red-500",
+                profileSyncStatus.phase === "idle" && "bg-muted-foreground/40",
+              )}
+            />
+            <span>
+              {profileSyncStatus.phase === "idle"
+                ? "模型同步：待命"
+                : profileSyncStatus.phase === "syncing"
+                  ? `模型同步中：${profileSyncStatus.instanceId || "当前实例"}`
+                  : profileSyncStatus.phase === "success"
+                    ? `模型同步成功：${profileSyncStatus.instanceId || "当前实例"}`
+                    : `模型同步失败：${profileSyncStatus.instanceId || "当前实例"}`}
+            </span>
+          </div>
+          {profileSyncStatus.message && (
+            <div className="mt-1 break-words text-muted-foreground/70" title={profileSyncStatus.message}>
+              {profileSyncStatus.message}
+            </div>
+          )}
         </div>
 
         {!inStart && (

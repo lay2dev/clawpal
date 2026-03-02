@@ -67,6 +67,16 @@ const ZEROCLAW_SUPPORTED_PROVIDERS = new Set([
   "openai",
   "openai-codex",
   "anthropic",
+  "github-copilot",
+  "copilot",
+  "gemini",
+  "google",
+  "google-vertex",
+  "google-gemini-cli",
+  "google-antigravity",
+  "moonshot",
+  "kimi-code",
+  "kimi-coding",
 ]);
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;

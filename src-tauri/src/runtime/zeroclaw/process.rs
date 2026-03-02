@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
     collections::hash_map::DefaultHasher,
+    collections::HashSet,
     hash::{Hash, Hasher},
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -45,6 +46,32 @@ fn now_ms() -> u64 {
         .ok()
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+const ZEROCLAW_MESSAGE_MAX_BYTES: usize = 24 * 1024;
+
+fn truncate_utf8_tail(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
+    }
+    let mut start = input.len().saturating_sub(max_bytes);
+    while start < input.len() && !input.is_char_boundary(start) {
+        start += 1;
+    }
+    input[start..].to_string()
+}
+
+fn clamp_message_for_cli(message: &str) -> String {
+    if message.len() <= ZEROCLAW_MESSAGE_MAX_BYTES {
+        return message.to_string();
+    }
+    let marker = "[clawpal notice] earlier context truncated to fit runtime argument limits.\n";
+    let keep = ZEROCLAW_MESSAGE_MAX_BYTES.saturating_sub(marker.len());
+    let tail = truncate_utf8_tail(message, keep);
+    format!("{marker}{tail}")
 }
 
 fn as_u64(value: &Value) -> Option<u64> {
@@ -420,22 +447,23 @@ fn resolve_zeroclaw_command_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-fn collect_provider_api_keys_for_doctor() -> std::collections::HashMap<String, String> {
-    let keys = crate::commands::collect_provider_api_keys_for_internal();
-    if !keys.is_empty() {
-        return keys;
+fn collect_provider_credentials_for_doctor(
+) -> std::collections::HashMap<String, crate::commands::InternalProviderCredential> {
+    let credentials = crate::commands::collect_provider_credentials_for_internal();
+    if !credentials.is_empty() {
+        return credentials;
     }
 
     // Fallback for docker-local and other overridden contexts:
     // if instance-specific data has no profiles yet, reuse host default profiles.
     let current = resolve_paths();
     let Some(home) = dirs::home_dir() else {
-        return keys;
+        return credentials;
     };
     let default_clawpal = home.join(".clawpal");
     let default_openclaw = home.join(".openclaw");
     if current.clawpal_dir == default_clawpal {
-        return keys;
+        return credentials;
     }
     let fallback = OpenClawPaths {
         openclaw_dir: default_openclaw.clone(),
@@ -445,19 +473,66 @@ fn collect_provider_api_keys_for_doctor() -> std::collections::HashMap<String, S
         history_dir: default_clawpal.join("history"),
         metadata_path: default_clawpal.join("metadata.json"),
     };
-    crate::commands::collect_provider_api_keys_from_paths(&fallback)
+    crate::commands::collect_provider_credentials_from_paths(&fallback)
+}
+
+fn normalize_profile_provider_for_zeroclaw(provider: &str) -> Option<&'static str> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openrouter" => Some("openrouter"),
+        "openai" | "openai-codex" | "github-copilot" | "copilot" => Some("openai"),
+        "anthropic" => Some("anthropic"),
+        "google" | "gemini" | "google-vertex" | "google-gemini-cli" | "google-antigravity" => {
+            Some("gemini")
+        }
+        "kimi-coding" | "kimi-code" => Some("kimi-code"),
+        "moonshot" => Some("moonshot"),
+        _ => None,
+    }
+}
+
+fn credential_clearly_mismatched_for_provider(provider: &str, secret: &str) -> bool {
+    let key = secret.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return true;
+    }
+    match provider {
+        // OpenRouter keys should not be Moonshot/Kimi keys.
+        "openrouter" => key.starts_with("sk-kimi-"),
+        // Moonshot keys should not be OpenRouter keys.
+        "moonshot" | "kimi-code" => key.starts_with("sk-or-"),
+        // Anthropic key path should not receive Moonshot keys.
+        "anthropic" => key.starts_with("sk-kimi-"),
+        _ => false,
+    }
 }
 
 fn zeroclaw_env_pairs_from_clawpal() -> Vec<(String, String)> {
-    let provider_keys = collect_provider_api_keys_for_doctor();
+    let provider_credentials = collect_provider_credentials_for_doctor();
     let mut out = Vec::<(String, String)>::new();
-    for (provider, key) in provider_keys {
-        match provider.as_str() {
-            "openrouter" => out.push(("OPENROUTER_API_KEY".to_string(), key)),
-            "openai" | "openai-codex" => out.push(("OPENAI_API_KEY".to_string(), key)),
-            "anthropic" => out.push(("ANTHROPIC_API_KEY".to_string(), key)),
-            "gemini" | "google" => out.push(("GEMINI_API_KEY".to_string(), key)),
-            _ => {}
+    let mut seen = HashSet::<String>::new();
+    for (provider, credential) in provider_credentials {
+        let Some(mapped) = normalize_profile_provider_for_zeroclaw(&provider) else {
+            continue;
+        };
+        if credential_clearly_mismatched_for_provider(mapped, &credential.secret) {
+            continue;
+        }
+        let Some(env_name) = (match mapped {
+            "openrouter" => Some("OPENROUTER_API_KEY"),
+            "openai" => Some("OPENAI_API_KEY"),
+            "anthropic" => Some(match credential.kind {
+                crate::commands::InternalAuthKind::Authorization => "ANTHROPIC_OAUTH_TOKEN",
+                crate::commands::InternalAuthKind::ApiKey => "ANTHROPIC_API_KEY",
+            }),
+            "gemini" => Some("GEMINI_API_KEY"),
+            "kimi-code" => Some("MOONSHOT_API_KEY"),
+            "moonshot" => Some("MOONSHOT_API_KEY"),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if seen.insert(env_name.to_string()) {
+            out.push((env_name.to_string(), credential.secret));
         }
     }
     out
@@ -470,8 +545,17 @@ fn pick_zeroclaw_provider(env_pairs: &[(String, String)]) -> Option<&'static str
     if env_pairs.iter().any(|(k, _)| k == "OPENAI_API_KEY") {
         return Some("openai");
     }
-    if env_pairs.iter().any(|(k, _)| k == "ANTHROPIC_API_KEY") {
+    if env_pairs
+        .iter()
+        .any(|(k, _)| k == "ANTHROPIC_API_KEY" || k == "ANTHROPIC_OAUTH_TOKEN")
+    {
         return Some("anthropic");
+    }
+    if env_pairs.iter().any(|(k, _)| k == "GEMINI_API_KEY") {
+        return Some("gemini");
+    }
+    if env_pairs.iter().any(|(k, _)| k == "MOONSHOT_API_KEY") {
+        return Some("moonshot");
     }
     None
 }
@@ -480,7 +564,11 @@ fn provider_available(env_pairs: &[(String, String)], provider: &str) -> bool {
     match provider {
         "openrouter" => env_pairs.iter().any(|(k, _)| k == "OPENROUTER_API_KEY"),
         "openai" => env_pairs.iter().any(|(k, _)| k == "OPENAI_API_KEY"),
-        "anthropic" => env_pairs.iter().any(|(k, _)| k == "ANTHROPIC_API_KEY"),
+        "anthropic" => env_pairs
+            .iter()
+            .any(|(k, _)| k == "ANTHROPIC_API_KEY" || k == "ANTHROPIC_OAUTH_TOKEN"),
+        "gemini" => env_pairs.iter().any(|(k, _)| k == "GEMINI_API_KEY"),
+        "moonshot" | "kimi-code" => env_pairs.iter().any(|(k, _)| k == "MOONSHOT_API_KEY"),
         _ => false,
     }
 }
@@ -488,8 +576,12 @@ fn provider_available(env_pairs: &[(String, String)], provider: &str) -> bool {
 fn normalize_zeroclaw_provider(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "openrouter" => Some("openrouter"),
-        "openai" | "openai-codex" => Some("openai"),
+        "openai" | "openai-codex" | "github-copilot" | "copilot" => Some("openai"),
         "anthropic" => Some("anthropic"),
+        "gemini" | "google" | "google-vertex" | "google-gemini-cli" | "google-antigravity" => {
+            Some("gemini")
+        }
+        "moonshot" | "kimi-code" | "kimi-coding" => Some("moonshot"),
         _ => None,
     }
 }
@@ -511,7 +603,7 @@ fn provider_order_for_runtime(
             }
         }
     }
-    for provider in ["openrouter", "openai", "anthropic"] {
+    for provider in ["openrouter", "openai", "anthropic", "gemini", "moonshot"] {
         if provider_available(env_pairs, provider) && !provider_order.contains(&provider) {
             provider_order.push(provider);
         }
@@ -528,7 +620,8 @@ pub fn get_zeroclaw_runtime_target() -> ZeroclawRuntimeTarget {
     let env_pairs = zeroclaw_env_pairs_from_clawpal();
     let preferred_model = crate::commands::load_zeroclaw_model_preference();
     let provider_order = provider_order_for_runtime(&env_pairs, preferred_model.as_deref());
-    let provider_order_text: Vec<String> = provider_order.iter().map(|p| (*p).to_string()).collect();
+    let provider_order_text: Vec<String> =
+        provider_order.iter().map(|p| (*p).to_string()).collect();
     let Some(provider) = provider_order.first().copied() else {
         return ZeroclawRuntimeTarget {
             provider: None,
@@ -578,22 +671,38 @@ fn default_model_for_provider(provider: &str) -> Option<&'static str> {
         "anthropic" => Some("claude-3-7-sonnet-latest"),
         "openai" => Some("gpt-4o-mini"),
         "openrouter" => Some("anthropic/claude-3.5-sonnet"),
+        "gemini" => Some("gemini-2.0-flash"),
+        "moonshot" => Some("kimi-k2.5"),
         _ => None,
     }
 }
 
 fn candidate_models_for_provider(provider: &str) -> Vec<String> {
     let mut out = Vec::<String>::new();
+    let provider_aliases: &[&str] = match provider {
+        "openai" => &["openai", "openai-codex", "github-copilot", "copilot"],
+        "gemini" => &[
+            "gemini",
+            "google",
+            "google-vertex",
+            "google-gemini-cli",
+            "google-antigravity",
+        ],
+        "moonshot" => &["moonshot", "kimi-code", "kimi-coding"],
+        _ => &[provider],
+    };
     if let Ok(profiles) = crate::commands::list_model_profiles() {
-        for p in profiles
-            .into_iter()
-            .filter(|p| p.enabled && p.provider.trim().eq_ignore_ascii_case(provider))
-        {
+        for p in profiles.into_iter().filter(|p| {
+            p.enabled
+                && provider_aliases
+                    .iter()
+                    .any(|alias| p.provider.trim().eq_ignore_ascii_case(alias))
+        }) {
             let mut model = p.model.trim().to_string();
             if model.is_empty() {
                 continue;
             }
-            if provider != "openrouter" {
+            if provider != "openrouter" && provider != "moonshot" {
                 if let Some((_, tail)) = model.split_once('/') {
                     model = tail.to_string();
                 }
@@ -620,10 +729,7 @@ fn normalize_model_for_provider(model: &str, provider: Option<&str>) -> String {
     if let Some(provider_name) = provider {
         if provider_name == "openrouter" {
             let provider_prefix = "openrouter/";
-            if normalized
-                .to_ascii_lowercase()
-                .starts_with(provider_prefix)
-            {
+            if normalized.to_ascii_lowercase().starts_with(provider_prefix) {
                 normalized = normalized[provider_prefix.len()..].to_string();
             }
         } else {
@@ -690,17 +796,20 @@ pub fn run_zeroclaw_message(
         );
     }
     let cfg_arg = cfg.to_string_lossy().to_string();
+    let message = clamp_message_for_cli(message);
     let base_args = vec![
         "--config-dir".to_string(),
         cfg_arg,
         "agent".to_string(),
         "-m".to_string(),
-        message.to_string(),
+        message,
     ];
     let preferred_model = crate::commands::load_zeroclaw_model_preference();
     let provider_order = provider_order_for_runtime(&env_pairs, preferred_model.as_deref());
     if provider_order.is_empty() {
-        return Err("No supported zeroclaw provider is available from current profiles.".to_string());
+        return Err(
+            "No supported zeroclaw provider is available from current profiles.".to_string(),
+        );
     }
     let mut attempt_errors = Vec::<String>::new();
     let try_once = |args: Vec<String>| -> Result<String, String> {
@@ -740,7 +849,11 @@ pub fn run_zeroclaw_message(
         provider_base_args.push(provider.to_string());
 
         let mut model_candidates = candidate_models_for_provider(provider);
-        prepend_preferred_model_candidate(&mut model_candidates, preferred_model.clone(), Some(provider));
+        prepend_preferred_model_candidate(
+            &mut model_candidates,
+            preferred_model.clone(),
+            Some(provider),
+        );
         if model_candidates.is_empty() {
             match try_once(provider_base_args.clone()) {
                 Ok(v) => return Ok(v),
@@ -789,8 +902,9 @@ pub fn run_zeroclaw_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_model_for_provider, parse_usage_from_text, parse_usage_from_value,
-        prepend_preferred_model_candidate, sanitize_instance_namespace, zeroclaw_command_candidates,
+        credential_clearly_mismatched_for_provider, normalize_model_for_provider,
+        parse_usage_from_text, parse_usage_from_value, prepend_preferred_model_candidate,
+        sanitize_instance_namespace, zeroclaw_command_candidates,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -833,8 +947,10 @@ mod tests {
 
     #[test]
     fn preferred_model_strips_openrouter_prefix_for_openrouter_provider() {
-        let normalized =
-            normalize_model_for_provider("openrouter/anthropic/claude-3.7-sonnet", Some("openrouter"));
+        let normalized = normalize_model_for_provider(
+            "openrouter/anthropic/claude-3.7-sonnet",
+            Some("openrouter"),
+        );
         assert_eq!(normalized, "anthropic/claude-3.7-sonnet");
     }
 
@@ -916,5 +1032,21 @@ done"#;
             candidates.iter().any(|p| p == &expected),
             "missing expected candidate: {expected:?}\nactual={candidates:?}"
         );
+    }
+
+    #[test]
+    fn credential_guard_skips_obvious_provider_key_mismatch() {
+        assert!(credential_clearly_mismatched_for_provider(
+            "openrouter",
+            "sk-kimi-abcdef"
+        ));
+        assert!(credential_clearly_mismatched_for_provider(
+            "moonshot",
+            "sk-or-v1-abcdef"
+        ));
+        assert!(!credential_clearly_mismatched_for_provider(
+            "openrouter",
+            "sk-or-v1-abcdef"
+        ));
     }
 }

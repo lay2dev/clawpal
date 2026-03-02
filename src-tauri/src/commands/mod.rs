@@ -3081,9 +3081,7 @@ fn clear_directory_contents(target: &Path) -> Result<usize, String> {
 }
 
 fn model_profiles_path(paths: &crate::models::OpenClawPaths) -> std::path::PathBuf {
-    let _ = paths;
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    home.join(".clawpal").join("model-profiles.json")
+    paths.clawpal_dir.join("model-profiles.json")
 }
 
 fn profile_to_model_value(profile: &ModelProfile) -> String {
@@ -3229,12 +3227,50 @@ fn resolve_profile_api_key_with_priority(
     profile: &ModelProfile,
     base_dir: &Path,
 ) -> Option<(String, u8)> {
+    resolve_profile_credential_with_priority(profile, base_dir)
+        .map(|(credential, priority)| (credential.secret, priority))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InternalAuthKind {
+    ApiKey,
+    Authorization,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InternalProviderCredential {
+    pub secret: String,
+    pub kind: InternalAuthKind,
+}
+
+fn infer_auth_kind(provider: &str, secret: &str, fallback: InternalAuthKind) -> InternalAuthKind {
+    if provider.trim().eq_ignore_ascii_case("anthropic") {
+        let lower = secret.trim().to_ascii_lowercase();
+        if lower.starts_with("sk-ant-oat") || lower.starts_with("oauth_") {
+            return InternalAuthKind::Authorization;
+        }
+    }
+    fallback
+}
+
+fn resolve_profile_credential_with_priority(
+    profile: &ModelProfile,
+    base_dir: &Path,
+) -> Option<(InternalProviderCredential, u8)> {
     // 1. Try auth_ref as env var name directly (e.g. "OPENAI_API_KEY")
     let auth_ref = profile.auth_ref.trim();
     if !auth_ref.is_empty() {
         if let Ok(val) = std::env::var(auth_ref) {
-            if !val.trim().is_empty() {
-                return Some((val, 40));
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let kind = infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
+                return Some((
+                    InternalProviderCredential {
+                        secret: trimmed.to_string(),
+                        kind,
+                    },
+                    40,
+                ));
             }
         }
     }
@@ -3242,8 +3278,8 @@ fn resolve_profile_api_key_with_priority(
     // 2. Look up auth_ref in agent-level auth store files
     //    Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
     if !auth_ref.is_empty() {
-        if let Some(key) = resolve_key_from_agent_auth_profiles(base_dir, auth_ref) {
-            return Some((key, 30));
+        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, auth_ref) {
+            return Some((credential, 30));
         }
     }
 
@@ -3251,7 +3287,14 @@ fn resolve_profile_api_key_with_priority(
     if let Some(ref key) = profile.api_key {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
-            return Some((trimmed.to_string(), 20));
+            let kind = infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
+            return Some((
+                InternalProviderCredential {
+                    secret: trimmed.to_string(),
+                    kind,
+                },
+                20,
+            ));
         }
     }
 
@@ -3261,8 +3304,21 @@ fn resolve_profile_api_key_with_priority(
         for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
             let env_name = format!("{provider}{suffix}");
             if let Ok(val) = std::env::var(&env_name) {
-                if !val.trim().is_empty() {
-                    return Some((val, 10));
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    let fallback_kind = if suffix == "_TOKEN" {
+                        InternalAuthKind::Authorization
+                    } else {
+                        InternalAuthKind::ApiKey
+                    };
+                    let kind = infer_auth_kind(&profile.provider, trimmed, fallback_kind);
+                    return Some((
+                        InternalProviderCredential {
+                            secret: trimmed.to_string(),
+                            kind,
+                        },
+                        10,
+                    ));
                 }
             }
         }
@@ -3277,49 +3333,50 @@ fn resolve_profile_api_key(profile: &ModelProfile, base_dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Internal helper: resolve available provider API keys from ClawPal model profiles.
-/// Returns provider -> full api key (unmasked). Used by internal sidecar integrations.
-pub(crate) fn collect_provider_api_keys_for_internal() -> HashMap<String, String> {
+pub(crate) fn collect_provider_credentials_for_internal(
+) -> HashMap<String, InternalProviderCredential> {
     let paths = resolve_paths();
-    collect_provider_api_keys_from_paths(&paths)
+    collect_provider_credentials_from_paths(&paths)
 }
 
-pub(crate) fn collect_provider_api_keys_from_paths(
+pub(crate) fn collect_provider_credentials_from_paths(
     paths: &crate::models::OpenClawPaths,
-) -> HashMap<String, String> {
+) -> HashMap<String, InternalProviderCredential> {
     let profiles = load_model_profiles(&paths);
-    collect_provider_api_keys_from_profiles(&profiles, &paths.base_dir)
+    collect_provider_credentials_from_profiles(&profiles, &paths.base_dir)
 }
 
-fn collect_provider_api_keys_from_profiles(
+fn collect_provider_credentials_from_profiles(
     profiles: &[ModelProfile],
     base_dir: &Path,
-) -> HashMap<String, String> {
-    let mut out = HashMap::<String, (String, u8)>::new();
+) -> HashMap<String, InternalProviderCredential> {
+    let mut out = HashMap::<String, (InternalProviderCredential, u8)>::new();
     for profile in profiles.iter().filter(|p| p.enabled) {
-        let Some((key, priority)) = resolve_profile_api_key_with_priority(profile, base_dir)
+        let Some((credential, priority)) =
+            resolve_profile_credential_with_priority(profile, base_dir)
         else {
             continue;
         };
         let provider = profile.provider.trim().to_lowercase();
         match out.get_mut(&provider) {
-            Some((existing_key, existing_priority)) => {
+            Some((existing_credential, existing_priority)) => {
                 if priority > *existing_priority {
-                    *existing_key = key;
+                    *existing_credential = credential;
                     *existing_priority = priority;
                 }
             }
             None => {
-                out.insert(provider, (key, priority));
+                out.insert(provider, (credential, priority));
             }
         }
     }
     out.into_iter().map(|(k, (v, _))| (k, v)).collect()
 }
 
-/// Reads agent-level auth store files to find the actual API key/token.
-/// Scans all agents and returns the first match.
-fn resolve_key_from_agent_auth_profiles(base_dir: &Path, auth_ref: &str) -> Option<String> {
+fn resolve_credential_from_agent_auth_profiles(
+    base_dir: &Path,
+    auth_ref: &str,
+) -> Option<InternalProviderCredential> {
     for root in local_openclaw_roots(base_dir) {
         let agents_dir = root.join("agents");
         if !agents_dir.exists() {
@@ -3331,15 +3388,20 @@ fn resolve_key_from_agent_auth_profiles(base_dir: &Path, auth_ref: &str) -> Opti
         };
         for entry in entries.flatten() {
             let agent_dir = entry.path().join("agent");
-            if let Some(key) = resolve_key_from_local_auth_store_dir(&agent_dir, auth_ref) {
-                return Some(key);
+            if let Some(credential) =
+                resolve_credential_from_local_auth_store_dir(&agent_dir, auth_ref)
+            {
+                return Some(credential);
             }
         }
     }
     None
 }
 
-fn resolve_key_from_local_auth_store_dir(agent_dir: &Path, auth_ref: &str) -> Option<String> {
+fn resolve_credential_from_local_auth_store_dir(
+    agent_dir: &Path,
+    auth_ref: &str,
+) -> Option<InternalProviderCredential> {
     for file_name in ["auth-profiles.json", "auth.json"] {
         let auth_file = agent_dir.join(file_name);
         if !auth_file.exists() {
@@ -3347,8 +3409,8 @@ fn resolve_key_from_local_auth_store_dir(agent_dir: &Path, auth_ref: &str) -> Op
         }
         let text = fs::read_to_string(&auth_file).ok()?;
         let data: Value = serde_json::from_str(&text).ok()?;
-        if let Some(key) = resolve_key_from_auth_store_json(&data, auth_ref) {
-            return Some(key);
+        if let Some(credential) = resolve_credential_from_auth_store_json(&data, auth_ref) {
+            return Some(credential);
         }
     }
     None
@@ -3401,6 +3463,13 @@ fn auth_ref_lookup_keys(auth_ref: &str) -> Vec<String> {
 }
 
 fn resolve_key_from_auth_store_json(data: &Value, auth_ref: &str) -> Option<String> {
+    resolve_credential_from_auth_store_json(data, auth_ref).map(|credential| credential.secret)
+}
+
+fn resolve_credential_from_auth_store_json(
+    data: &Value,
+    auth_ref: &str,
+) -> Option<InternalProviderCredential> {
     let keys = auth_ref_lookup_keys(auth_ref);
     if keys.is_empty() {
         return None;
@@ -3409,8 +3478,8 @@ fn resolve_key_from_auth_store_json(data: &Value, auth_ref: &str) -> Option<Stri
     if let Some(profiles) = data.get("profiles").and_then(Value::as_object) {
         for key in &keys {
             if let Some(auth_entry) = profiles.get(key) {
-                if let Some(token) = extract_token_from_auth_entry(auth_entry) {
-                    return Some(token);
+                if let Some(credential) = extract_credential_from_auth_entry(auth_entry) {
+                    return Some(credential);
                 }
             }
         }
@@ -3419,8 +3488,8 @@ fn resolve_key_from_auth_store_json(data: &Value, auth_ref: &str) -> Option<Stri
     if let Some(root_obj) = data.as_object() {
         for key in &keys {
             if let Some(auth_entry) = root_obj.get(key) {
-                if let Some(token) = extract_token_from_auth_entry(auth_entry) {
-                    return Some(token);
+                if let Some(credential) = extract_credential_from_auth_entry(auth_entry) {
+                    return Some(credential);
                 }
             }
         }
@@ -3431,7 +3500,23 @@ fn resolve_key_from_auth_store_json(data: &Value, auth_ref: &str) -> Option<Stri
 
 /// Extract the actual key/token from an agent auth-profiles entry.
 /// Handles different auth types: token, api_key, oauth.
-fn extract_token_from_auth_entry(entry: &Value) -> Option<String> {
+fn extract_credential_from_auth_entry(entry: &Value) -> Option<InternalProviderCredential> {
+    let auth_type = entry
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let provider = entry
+        .get("provider")
+        .or_else(|| entry.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let kind_from_type = match auth_type.as_str() {
+        "oauth" | "token" | "authorization" => Some(InternalAuthKind::Authorization),
+        "api_key" | "api-key" | "apikey" => Some(InternalAuthKind::ApiKey),
+        _ => None,
+    };
     // "token" type → "token" field (e.g. anthropic)
     // "api_key" type → "key" field (e.g. kimi-coding)
     // "oauth" type → "access" field (e.g. minimax-portal, openai-codex)
@@ -3439,7 +3524,16 @@ fn extract_token_from_auth_entry(entry: &Value) -> Option<String> {
         if let Some(val) = entry.get(field).and_then(Value::as_str) {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
+                let fallback_kind = match field {
+                    "token" | "access" => InternalAuthKind::Authorization,
+                    _ => InternalAuthKind::ApiKey,
+                };
+                let kind =
+                    infer_auth_kind(provider, trimmed, kind_from_type.unwrap_or(fallback_kind));
+                return Some(InternalProviderCredential {
+                    secret: trimmed.to_string(),
+                    kind,
+                });
             }
         }
     }
@@ -4523,8 +4617,11 @@ mod model_profile_upsert_tests {
         )
         .expect("write auth.json");
 
-        let resolved = resolve_key_from_local_auth_store_dir(&agent_dir, "openai:default");
-        assert_eq!(resolved, Some("sk-openai-legacy".to_string()));
+        let resolved = resolve_credential_from_local_auth_store_dir(&agent_dir, "openai:default");
+        assert_eq!(
+            resolved.map(|credential| credential.secret),
+            Some("sk-openai-legacy".to_string())
+        );
         let _ = fs::remove_dir_all(tmp_root);
     }
 
@@ -4609,12 +4706,15 @@ mod model_profile_upsert_tests {
             "anthropic:default",
             None,
         );
-        let keys =
-            collect_provider_api_keys_from_profiles(&[stale, preferred], &base_dir);
-        assert_eq!(
-            keys.get("anthropic").map(String::as_str),
-            Some("sk-anthropic-good")
+        let creds = collect_provider_credentials_from_profiles(
+            &[stale.clone(), preferred.clone()],
+            &base_dir,
         );
+        let anthropic = creds
+            .get("anthropic")
+            .expect("anthropic credential should exist");
+        assert_eq!(anthropic.secret, "sk-anthropic-good");
+        assert_eq!(anthropic.kind, InternalAuthKind::Authorization);
         let _ = fs::remove_dir_all(tmp_root);
     }
 
@@ -6071,15 +6171,20 @@ async fn resolve_remote_profile_api_key(
     host_id: &str,
     profile: &ModelProfile,
 ) -> Result<String, String> {
-    if let Some(key) = &profile.api_key {
-        let trimmed_key = key.trim();
-        if !trimmed_key.is_empty() {
-            return Ok(trimmed_key.to_string());
+    let mut auth_refs = Vec::<String>::new();
+    let auth_ref = profile.auth_ref.trim();
+    if !auth_ref.is_empty() {
+        auth_refs.push(auth_ref.to_string());
+    }
+    let provider = profile.provider.trim().to_lowercase();
+    if !provider.is_empty() {
+        let fallback = format!("{provider}:default");
+        if !auth_refs.iter().any(|candidate| candidate == &fallback) {
+            auth_refs.push(fallback);
         }
     }
 
-    let auth_ref = profile.auth_ref.trim();
-    if !auth_ref.is_empty() {
+    for auth_ref in &auth_refs {
         // Try auth_ref as remote env var name directly (e.g. OPENAI_API_KEY)
         if auth_ref
             .chars()
@@ -6099,13 +6204,21 @@ async fn resolve_remote_profile_api_key(
     }
 
     // Try provider-based env conventions as fallback
-    let provider = profile.provider.trim().to_uppercase().replace('-', "_");
-    if !provider.is_empty() {
+    let provider_env = profile.provider.trim().to_uppercase().replace('-', "_");
+    if !provider_env.is_empty() {
         for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-            let env_name = format!("{provider}{suffix}");
+            let env_name = format!("{provider_env}{suffix}");
             if let Some(key) = read_remote_env_var(pool, host_id, &env_name).await? {
                 return Ok(key);
             }
+        }
+    }
+
+    // Fallback to direct apiKey only when no authoritative source is resolved.
+    if let Some(key) = &profile.api_key {
+        let trimmed_key = key.trim();
+        if !trimmed_key.is_empty() {
+            return Ok(trimmed_key.to_string());
         }
     }
 
