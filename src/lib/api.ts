@@ -1,9 +1,83 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, GatewayCredentials, HistoryItem, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, ChannelNode, CronJob, CronRun, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SystemStatus, DoctorReport, SessionFile, SshHost, WatchdogStatus, ZeroclawRuntimeTarget, ZeroclawUsageStats } from "./types";
 
 export const api = {
+  setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
+    invoke("set_active_openclaw_home", { path }),
+  setActiveClawpalDataDir: (path: string | null): Promise<boolean> =>
+    invoke("set_active_clawpal_data_dir", { path }),
+  getAppPreferences: (): Promise<AppPreferences> =>
+    invoke("get_app_preferences", {}),
+  getZeroclawUsageStats: (): Promise<ZeroclawUsageStats> =>
+    invoke("get_zeroclaw_usage_stats", {}),
+  getZeroclawRuntimeTarget: (): Promise<ZeroclawRuntimeTarget> =>
+    invoke("get_zeroclaw_runtime_target", {}),
+  setZeroclawModelPreference: (model: string | null): Promise<AppPreferences> =>
+    invoke("set_zeroclaw_model_preference", { model }),
+  explainOperationError: (
+    instanceId: string,
+    operation: string,
+    transport: "local" | "docker_local" | "remote_ssh",
+    error: string,
+    language?: string,
+  ): Promise<{ message: string; summary: string; actions: string[]; structuredActions: GuidanceAction[]; source: string }> =>
+    invoke("explain_operation_error", {
+      instanceId,
+      operation,
+      transport,
+      error,
+      language: language ?? null,
+    }),
+  localOpenclawConfigExists: (openclawHome: string): Promise<boolean> =>
+    invoke("local_openclaw_config_exists", { openclawHome }),
+  deleteLocalInstanceHome: (openclawHome: string): Promise<boolean> =>
+    invoke("delete_local_instance_home", { openclawHome }),
+  ensureAccessProfile: (instanceId: string, transport: string): Promise<EnsureAccessResult> =>
+    invoke("ensure_access_profile", { instanceId, transport }),
+  recordInstallExperience: (sessionId: string, instanceId: string, goal: string): Promise<RecordInstallExperienceResult> =>
+    invoke("record_install_experience", { sessionId, instanceId, goal }),
+  installCreateSession: (
+    method: "local" | "wsl2" | "docker" | "remote_ssh",
+    options?: Record<string, unknown>,
+  ): Promise<InstallSession> =>
+    invoke("install_create_session", options ? { method, options } : { method }),
+  installGetSession: (sessionId: string): Promise<InstallSession> =>
+    invoke("install_get_session", { sessionId }),
+  installListMethods: (): Promise<InstallMethodCapability[]> =>
+    invoke("install_list_methods", {}),
+  installDecideTarget: (goal: string, context?: Record<string, unknown>): Promise<InstallTargetDecision> =>
+    invoke("install_decide_target", context ? { goal, context } : { goal }),
+  installOrchestratorNext: (sessionId: string, goal: string): Promise<InstallOrchestratorDecision> =>
+    invoke("install_orchestrator_next", { sessionId, goal }),
+  installRunStep: (sessionId: string, step: "precheck" | "install" | "init" | "verify"): Promise<InstallStepResult> =>
+    invoke("install_run_step", { sessionId, step }),
   getSystemStatus: (): Promise<SystemStatus> =>
     invoke("get_system_status", {}),
+  listRegisteredInstances: (): Promise<RegisteredInstance[]> =>
+    invoke("list_registered_instances", {}),
+  discoverLocalInstances: (): Promise<DiscoveredInstance[]> =>
+    invoke("discover_local_instances"),
+  deleteRegisteredInstance: (instanceId: string): Promise<boolean> =>
+    invoke("delete_registered_instance", { instanceId }),
+  connectDockerInstance: (
+    home: string,
+    label?: string,
+    instanceId?: string,
+  ): Promise<RegisteredInstance> =>
+    invoke("connect_docker_instance", { home, label: label ?? null, instanceId: instanceId ?? null }),
+  connectLocalInstance: (
+    home: string,
+    label?: string,
+    instanceId?: string,
+  ): Promise<RegisteredInstance> =>
+    invoke("connect_local_instance", { home, label: label ?? null, instanceId: instanceId ?? null }),
+  connectSshInstance: (hostId: string): Promise<RegisteredInstance> =>
+    invoke("connect_ssh_instance", { hostId }),
+  migrateLegacyInstances: (
+    legacyDockerInstances: DockerInstance[],
+    legacyOpenTabIds: string[],
+  ): Promise<{ importedSshHosts: number; importedDockerInstances: number; importedOpenTabInstances: number; totalInstances: number }> =>
+    invoke("migrate_legacy_instances", { legacyDockerInstances, legacyOpenTabIds }),
   getInstanceStatus: (): Promise<InstanceStatus> =>
     invoke("get_status_light", {}),
   getStatusExtra: (): Promise<StatusExtra> =>
@@ -56,6 +130,14 @@ export const api = {
     invoke("preview_session", { agentId, sessionId }),
   runDoctor: (): Promise<DoctorReport> =>
     invoke("run_doctor_command", {}),
+  precheckRegistry: (): Promise<PrecheckIssue[]> =>
+    invoke("precheck_registry"),
+  precheckInstance: (instanceId: string): Promise<PrecheckIssue[]> =>
+    invoke("precheck_instance", { instanceId }),
+  precheckTransport: (instanceId: string): Promise<PrecheckIssue[]> =>
+    invoke("precheck_transport", { instanceId }),
+  precheckAuth: (instanceId: string): Promise<PrecheckIssue[]> =>
+    invoke("precheck_auth", { instanceId }),
   fixIssues: (ids: string[]): Promise<{ ok: boolean; applied: string[]; remainingIssues: string[] }> =>
     invoke("fix_issues", { ids }),
   readRawConfig: (): Promise<string> =>
@@ -171,6 +253,8 @@ export const api = {
     invoke("remote_test_model_profile", { hostId, profileId }),
   remoteResolveApiKeys: (hostId: string): Promise<ResolvedApiKey[]> =>
     invoke("remote_resolve_api_keys", { hostId }),
+  remoteSyncProfilesToLocalAuth: (hostId: string): Promise<RemoteAuthSyncResult> =>
+    invoke("remote_sync_profiles_to_local_auth", { hostId }),
   remoteExtractModelProfilesFromConfig: (hostId: string): Promise<{ created: number; reused: number; skippedInvalid: number }> =>
     invoke("remote_extract_model_profiles_from_config", { hostId }),
   remoteRefreshModelCatalog: (hostId: string): Promise<ModelCatalogProvider[]> =>
@@ -274,35 +358,27 @@ export const api = {
     invoke("remote_queued_commands_count", { hostId }),
 
   // Doctor Agent
-  doctorPortForward: (hostId: string): Promise<number> =>
-    invoke("doctor_port_forward", { hostId }),
-  doctorReadRemoteCredentials: (hostId: string): Promise<GatewayCredentials> =>
-    invoke("doctor_read_remote_credentials", { hostId }),
-  doctorAutoPair: (hostId: string): Promise<number> =>
-    invoke("doctor_auto_pair", { hostId }),
-  doctorConnect: (url: string, credentials?: GatewayCredentials): Promise<void> =>
-    invoke("doctor_connect", { url, credentials: credentials ?? null }),
+  doctorConnect: (): Promise<void> =>
+    invoke("doctor_connect"),
   doctorDisconnect: (): Promise<void> =>
     invoke("doctor_disconnect"),
-  doctorStartDiagnosis: (context: string, sessionKey: string, agentId?: string): Promise<void> =>
-    invoke("doctor_start_diagnosis", { context, sessionKey, agentId: agentId ?? "main" }),
-  doctorSendMessage: (message: string, sessionKey: string, agentId?: string): Promise<void> =>
-    invoke("doctor_send_message", { message, sessionKey, agentId: agentId ?? "main" }),
-  doctorApproveInvoke: (invokeId: string, target: string, sessionKey: string, agentId: string): Promise<Record<string, unknown>> =>
-    invoke("doctor_approve_invoke", { invokeId, target, sessionKey, agentId }),
+  doctorStartDiagnosis: (context: string, sessionKey: string, agentId?: string, instanceId?: string): Promise<void> =>
+    invoke("doctor_start_diagnosis", { context, sessionKey, agentId: agentId ?? "main", instanceId: instanceId ?? "local" }),
+  doctorSendMessage: (message: string, sessionKey: string, agentId?: string, instanceId?: string): Promise<void> =>
+    invoke("doctor_send_message", { message, sessionKey, agentId: agentId ?? "main", instanceId: instanceId ?? "local" }),
+  doctorApproveInvoke: (invokeId: string, target: string, instanceId: string, sessionKey: string, agentId: string, domain?: string): Promise<Record<string, unknown>> =>
+    invoke("doctor_approve_invoke", { invokeId, target, instanceId, sessionKey, agentId, domain }),
   doctorRejectInvoke: (invokeId: string, reason: string): Promise<void> =>
     invoke("doctor_reject_invoke", { invokeId, reason }),
   collectDoctorContext: (): Promise<string> =>
     invoke("collect_doctor_context"),
   collectDoctorContextRemote: (hostId: string): Promise<string> =>
     invoke("collect_doctor_context_remote", { hostId }),
-  doctorBridgeConnect: (url: string, credentials?: GatewayCredentials): Promise<void> =>
-    invoke("doctor_bridge_connect", { url, credentials: credentials ?? null }),
-  doctorBridgeDisconnect: (): Promise<void> =>
-    invoke("doctor_bridge_disconnect"),
-  doctorBridgeNodeId: (): Promise<string> =>
-    invoke("doctor_bridge_node_id"),
-
+  // Install Agent
+  installStartSession: (context: string, sessionKey: string, agentId?: string, instanceId?: string): Promise<void> =>
+    invoke("install_start_session", { context, sessionKey, agentId: agentId ?? "main", instanceId: instanceId ?? "local" }),
+  installSendMessage: (message: string, sessionKey: string, agentId?: string, instanceId?: string): Promise<void> =>
+    invoke("install_send_message", { message, sessionKey, agentId: agentId ?? "main", instanceId: instanceId ?? "local" }),
   // Logs
   readAppLog: (lines?: number): Promise<string> =>
     invoke("read_app_log", { lines }),

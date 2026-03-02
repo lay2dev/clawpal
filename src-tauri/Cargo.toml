@@ -8,6 +8,7 @@ name = "clawpal"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+clawpal-core = { path = "../clawpal-core" }
 dirs = "5.0.1"
 json5 = "0.4.1"
 regex = "1.10.6"
@@ -24,15 +25,13 @@ tokio = { version = "1", features = ["sync", "process", "macros"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 shellexpand = "3.1"
+shell-words = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 hostname = "0.4"
 indexmap = "2"
 portpicker = "0.1.1"
-
-[target.'cfg(unix)'.dependencies]
-openssh = { version = "0.11", features = ["process-mux"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

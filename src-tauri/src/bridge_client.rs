@@ -11,23 +11,17 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::Message,
-    MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::models::resolve_paths;
-use crate::node_client::{GatewayCredentials, load_device_identity};
+use crate::node_client::{load_device_identity, GatewayCredentials};
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
 /// Commands that this node advertises to the gateway.
 /// Must use standard OpenClaw node command names so the gateway
 /// exposes them as tools to the agent.
-const NODE_COMMANDS: &[&str] = &[
-    "system.run",
-];
+const NODE_COMMANDS: &[&str] = &["clawpal", "openclaw"];
 
 /// Maximum number of pending invoke requests kept in memory.
 const MAX_PENDING_INVOKES: usize = 50;
@@ -73,7 +67,12 @@ impl BridgeClient {
 
     /// Connect to the gateway as a node via WebSocket.
     /// Uses the same URL as the operator connection but with `role: "node"`.
-    pub async fn connect(&self, url: &str, app: AppHandle, creds: Option<GatewayCredentials>) -> Result<(), String> {
+    pub async fn connect(
+        &self,
+        url: &str,
+        app: AppHandle,
+        creds: Option<GatewayCredentials>,
+    ) -> Result<(), String> {
         self.disconnect().await?;
 
         // Store credentials for use in handshake
@@ -113,8 +112,14 @@ impl BridgeClient {
                 match msg {
                     Ok(Message::Text(text)) => {
                         if let Ok(frame) = serde_json::from_str::<Value>(&text) {
-                            Self::handle_frame(frame, &inner_ref, &invokes_ref, &expired_ref, &app_clone)
-                                .await;
+                            Self::handle_frame(
+                                frame,
+                                &inner_ref,
+                                &invokes_ref,
+                                &expired_ref,
+                                &app_clone,
+                            )
+                            .await;
                         }
                     }
                     Ok(Message::Close(_)) => {
@@ -152,13 +157,24 @@ impl BridgeClient {
         // them — the gateway would ignore unauthenticated frames. Now that we're
         // authenticated, reject them so the agent session can unblock.
         let stale_invokes: Vec<(String, String)> = {
-            self.pending_invokes.lock().await.drain(..).map(|(id, inv)| {
-                let nid = inv.get("nodeId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                (id, nid)
-            }).collect()
+            self.pending_invokes
+                .lock()
+                .await
+                .drain(..)
+                .map(|(id, inv)| {
+                    let nid = inv
+                        .get("nodeId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (id, nid)
+                })
+                .collect()
         };
         for (id, nid) in &stale_invokes {
-            let _ = self.send_invoke_error(id, nid, "STALE", "Node reconnected, rejecting stale invoke").await;
+            let _ = self
+                .send_invoke_error(id, nid, "STALE", "Node reconnected, rejecting stale invoke")
+                .await;
         }
         let _ = app.emit("doctor:bridge-connected", json!({}));
         Ok(())
@@ -185,13 +201,22 @@ impl BridgeClient {
 
     /// Send a successful invoke result back to the gateway via `node.invoke.result`.
     /// `node_id` should be the gateway-assigned nodeId from the original invoke request.
-    pub async fn send_invoke_result(&self, invoke_id: &str, node_id: &str, result: Value) -> Result<(), String> {
-        self.send_request_fire("node.invoke.result", json!({
-            "id": invoke_id,
-            "nodeId": node_id,
-            "ok": true,
-            "payload": result,
-        })).await
+    pub async fn send_invoke_result(
+        &self,
+        invoke_id: &str,
+        node_id: &str,
+        result: Value,
+    ) -> Result<(), String> {
+        self.send_request_fire(
+            "node.invoke.result",
+            json!({
+                "id": invoke_id,
+                "nodeId": node_id,
+                "ok": true,
+                "payload": result,
+            }),
+        )
+        .await
     }
 
     /// Send an error invoke result back to the gateway via `node.invoke.result`.
@@ -203,15 +228,19 @@ impl BridgeClient {
         code: &str,
         message: &str,
     ) -> Result<(), String> {
-        self.send_request_fire("node.invoke.result", json!({
-            "id": invoke_id,
-            "nodeId": node_id,
-            "ok": false,
-            "error": {
-                "code": code,
-                "message": message,
-            },
-        })).await
+        self.send_request_fire(
+            "node.invoke.result",
+            json!({
+                "id": invoke_id,
+                "nodeId": node_id,
+                "ok": false,
+                "error": {
+                    "code": code,
+                    "message": message,
+                },
+            }),
+        )
+        .await
     }
 
     /// Take a pending invoke request by ID (removes it from the map).
@@ -311,7 +340,8 @@ impl BridgeClient {
             let signing_key = SigningKey::from_pkcs8_pem(&c.private_key_pem)
                 .map_err(|e| format!("Failed to parse remote Ed25519 private key: {e}"))?;
             let raw_public = signing_key.verifying_key().to_bytes();
-            let public_key_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_public);
+            let public_key_b64 =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_public);
             (c.token, c.device_id, signing_key, public_key_b64)
         } else {
             // Use local credentials
@@ -320,7 +350,8 @@ impl BridgeClient {
                 .ok()
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
                 .and_then(|config| {
-                    config.get("gateway")?
+                    config
+                        .get("gateway")?
                         .get("auth")?
                         .get("token")?
                         .as_str()
@@ -358,14 +389,17 @@ impl BridgeClient {
             &signing_key,
             &device_id,
             signed_at,
-            &token,  // gateway auth token
+            &token, // gateway auth token
             &nonce,
         );
 
         let version = env!("CARGO_PKG_VERSION");
         let node_id = {
             let guard = self.inner.lock().await;
-            guard.as_ref().map(|i| i.node_id.clone()).unwrap_or_default()
+            guard
+                .as_ref()
+                .map(|i| i.node_id.clone())
+                .unwrap_or_default()
         };
 
         let mut device = json!({
@@ -379,26 +413,31 @@ impl BridgeClient {
         }
 
         // Send connect with role=node and wait for hello-ok
-        let result = self.send_request("connect", json!({
-            "minProtocol": 3,
-            "maxProtocol": 3,
-            "auth": { "token": token },
-            "role": "node",
-            "scopes": [],
-            "caps": ["system"],
-            "commands": NODE_COMMANDS,
-            "device": device,
-            "client": {
-                "id": "node-host",
-                "displayName": "ClawPal",
-                "platform": std::env::consts::OS,
-                "mode": "node",
-                "version": version,
-                "instanceId": node_id,
-            },
-        })).await?;
+        let result = self
+            .send_request(
+                "connect",
+                json!({
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": token },
+                    "role": "node",
+                    "scopes": [],
+                    "caps": ["system"],
+                    "commands": NODE_COMMANDS,
+                    "device": device,
+                    "client": {
+                        "id": "node-host",
+                        "displayName": "ClawPal",
+                        "platform": std::env::consts::OS,
+                        "mode": "node",
+                        "version": version,
+                        "instanceId": node_id,
+                    },
+                }),
+            )
+            .await?;
 
-        let _ = result;  // handshake response consumed
+        let _ = result; // handshake response consumed
 
         Ok(())
     }
@@ -440,55 +479,37 @@ impl BridgeClient {
                     }
                     "node.invoke.request" => {
                         // Agent wants to invoke a command on this node
-                        let id = payload.get("id")
+                        let id = payload
+                            .get("id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let command = payload.get("command")
+                        let command = payload
+                            .get("command")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
                         // Capture the gateway-assigned nodeId from the request.
                         // We must echo this back in the result — using our hostname
                         // instead would cause a mismatch and the gateway would ignore the result.
-                        let request_node_id = payload.get("nodeId")
+                        let request_node_id = payload
+                            .get("nodeId")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         // Params arrive as a JSON string in paramsJSON
-                        let args = payload.get("paramsJSON")
+                        let args = payload
+                            .get("paramsJSON")
                             .and_then(|v| v.as_str())
                             .and_then(|s| serde_json::from_str::<Value>(s).ok())
                             .or_else(|| payload.get("params").cloned())
                             .unwrap_or(Value::Null);
 
-                        // Determine type: read-only commands vs write/exec
-                        let cmd_type = if command == "system.run" {
-                            // Gateway sends command as either a string or array
-                            // e.g. "ls -la" or ["/bin/sh", "-lc", "ls -la"]
-                            let shell_cmd = extract_shell_command(&args);
-                            if shell_cmd.starts_with("cat ")
-                                || shell_cmd.starts_with("ls ")
-                                || shell_cmd.starts_with("head ")
-                                || shell_cmd.starts_with("tail ")
-                                || shell_cmd.starts_with("wc ")
-                                || shell_cmd.starts_with("grep ")
-                                || shell_cmd.starts_with("find ")
-                                || shell_cmd.starts_with("which ")
-                                || shell_cmd.starts_with("echo ")
-                                || shell_cmd.starts_with("ps ")
-                                || shell_cmd.starts_with("df ")
-                                || shell_cmd.starts_with("free ")
-                                || ["date", "uname", "uptime", "hostname"]
-                                    .contains(&shell_cmd.trim())
-                            {
-                                "read"
-                            } else {
-                                "write"
-                            }
-                        } else {
-                            "write"
+                        let cmd_type = match command.as_str() {
+                            "clawpal" => "read",
+                            "openclaw" => "write",
+                            _ => "write",
                         };
 
                         let invoke_payload = json!({
@@ -510,8 +531,11 @@ impl BridgeClient {
                                 let mut to_evict = Vec::new();
                                 while map.len() >= MAX_PENDING_INVOKES {
                                     if let Some((eid, einv)) = map.shift_remove_index(0) {
-                                        let nid = einv.get("nodeId")
-                                            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                        let nid = einv
+                                            .get("nodeId")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
                                         to_evict.push((eid, nid));
                                     } else {
                                         break;
@@ -558,10 +582,15 @@ impl BridgeClient {
                         let timer_id = id.clone();
                         let timer_node_id = request_node_id.clone();
                         tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(INVOKE_AUTO_REJECT_SECS)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                INVOKE_AUTO_REJECT_SECS,
+                            ))
+                            .await;
                             // Check if invoke is still pending (user hasn't acted yet)
                             let still_pending = timer_invokes.lock().await.contains_key(&timer_id);
-                            if !still_pending { return; }
+                            if !still_pending {
+                                return;
+                            }
                             // Mark as expired — invoke stays in map so user can still execute later
                             timer_expired.lock().await.insert(timer_id.clone());
                             // Send USER_PENDING to gateway before its 30s timeout
@@ -601,28 +630,6 @@ impl Default for BridgeClient {
     }
 }
 
-/// Extract the actual shell command string from system.run args.
-/// The gateway sends `command` as either:
-/// - a plain string: `"ls -la"`
-/// - an array: `["/bin/sh", "-lc", "ls -la"]`
-/// For arrays, the last element is the actual shell command.
-pub fn extract_shell_command(args: &Value) -> String {
-    let cmd_val = match args.get("command") {
-        Some(v) => v,
-        None => return String::new(),
-    };
-    if let Some(s) = cmd_val.as_str() {
-        return s.to_string();
-    }
-    if let Some(arr) = cmd_val.as_array() {
-        // Last element is the actual command in ["/bin/sh", "-lc", "actual command"]
-        if let Some(last) = arr.last().and_then(|v| v.as_str()) {
-            return last.to_string();
-        }
-    }
-    String::new()
-}
-
 /// Sign the challenge payload for node role.
 /// Payload: `v2|<deviceId>|node-host|node|node||<signedAt>|<token>|<nonce>`
 fn sign_node_challenge(
@@ -632,9 +639,7 @@ fn sign_node_challenge(
     token: &str,
     nonce: &str,
 ) -> String {
-    let payload = format!(
-        "v2|{device_id}|node-host|node|node||{signed_at}|{token}|{nonce}"
-    );
+    let payload = format!("v2|{device_id}|node-host|node|node||{signed_at}|{token}|{nonce}");
     let signature = signing_key.sign(payload.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
 }

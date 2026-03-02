@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApi } from "@/lib/use-api";
+import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { DiffViewer } from "./DiffViewer";
 import { Button } from "@/components/ui/button";
@@ -95,7 +95,7 @@ export function PendingChangesBar({ onApplied, showToast }: PendingChangesBarPro
         setPreview(result);
         setShowPreview(true);
       })
-      .catch((e) => showToast(String(e), "error"))
+      .catch((e) => { if (!hasGuidanceEmitted(e)) showToast(String(e), "error"); })
       .finally(() => setPreviewing(false));
   }, [api, showToast]);
 

@@ -1,14 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api } from "@/lib/api";
-import { useApi } from "@/lib/use-api";
+import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
 import type {
   RescuePrimaryDiagnosisResult,
   RescuePrimaryIssue,
   RescuePrimaryRepairResult,
-  SshHost,
 } from "@/lib/types";
 import {
   Card,
@@ -24,11 +22,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DoctorChat } from "@/components/DoctorChat";
-
-interface DoctorProps {
-  sshHosts: SshHost[];
-}
+import { SessionAnalysisPanel } from "@/components/SessionAnalysisPanel";
+import type { BackupInfo } from "@/lib/types";
+import { formatTime, formatBytes } from "@/lib/utils";
 
 type RescueMessageTone = "info" | "success" | "error";
 
@@ -54,6 +63,23 @@ interface PrimaryRecoveryState {
   repairError: string | null;
 }
 
+interface DoctorLaunchGuidance {
+  message: string;
+  summary: string;
+  actions: string[];
+  operation: string;
+  instanceId: string;
+  transport: string;
+  rawError: string;
+  createdAt: number;
+}
+
+interface DoctorProps {
+  active?: boolean;
+  launchGuidance?: DoctorLaunchGuidance | null;
+  onLaunchGuidanceConsumed?: (instanceId: string) => void;
+}
+
 const createInitialRescueUiState = (): RescueUiState => ({
   activating: false,
   deactivating: false,
@@ -76,20 +102,45 @@ const createInitialPrimaryRecoveryState = (): PrimaryRecoveryState => ({
   repairError: null,
 });
 
-export function Doctor({ sshHosts }: DoctorProps) {
+function buildLaunchGuidanceContext(guidance: DoctorLaunchGuidance): string {
+  const lines: string[] = [
+    "[Escalated App Error Context]",
+    `instance: ${guidance.instanceId}`,
+    `transport: ${guidance.transport}`,
+    `operation: ${guidance.operation}`,
+    `error: ${guidance.rawError}`,
+  ];
+  const summary = (guidance.summary || guidance.message || "").trim();
+  if (summary) lines.push(`assistant_summary: ${summary}`);
+  if (guidance.actions.length > 0) {
+    lines.push("assistant_suggested_actions:");
+    for (const action of guidance.actions) {
+      lines.push(`- ${action}`);
+    }
+  }
+  lines.push("Please prioritize diagnosing and fixing this exact failure path first.");
+  return lines.join("\n");
+}
+
+export function Doctor({
+  active = false,
+  launchGuidance = null,
+  onLaunchGuidanceConsumed,
+}: DoctorProps) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { instanceId, isRemote, isConnected } = useInstance();
+  const { instanceId, isDocker, isRemote, isConnected } = useInstance();
   const doctor = useDoctorAgent();
+  const [remoteConnState, setRemoteConnState] = useState<"checking" | "connected" | "disconnected">("checking");
 
-  // Agent source: an instance id ("local" / host uuid) or "remote" (hosted doctor)
-  const [agentSource, setAgentSource] = useState("remote");
   const [diagnosing, setDiagnosing] = useState(false);
-  const selectableSources = [
-    ...(doctor.target !== "local" ? ["local"] : []),
-    ...sshHosts.filter((h) => h.id !== doctor.target).map((h) => h.id),
-  ];
-  const canStartDiagnosis = selectableSources.includes(agentSource);
+  const [startupStage, setStartupStage] = useState<"idle" | "connecting" | "collecting" | "starting">("idle");
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // Backups state
+  const [backups, setBackups] = useState<BackupInfo[] | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
+  const [backupMessage, setBackupMessage] = useState("");
 
   // Full-auto confirmation dialog
   const [fullAutoConfirmOpen, setFullAutoConfirmOpen] = useState(false);
@@ -103,6 +154,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
   const logsContentRef = useRef<HTMLPreElement>(null);
   const [rescueState, setRescueState] = useState<RescueUiState>(createInitialRescueUiState);
   const [primaryState, setPrimaryState] = useState<PrimaryRecoveryState>(createInitialPrimaryRecoveryState);
+  const lastAutoLaunchKeyRef = useRef<string | null>(null);
 
   const {
     activating: rescueActivating,
@@ -133,91 +185,75 @@ export function Doctor({ sshHosts }: DoctorProps) {
     setPrimaryState((prev) => ({ ...prev, ...patch }));
   };
 
-  // Reset doctor agent when switching instances
+  // Keep execution target synced with current instance tab:
+  // - local/docker: execute on local machine
+  // - remote ssh: execute on selected remote host
   useEffect(() => {
     doctor.reset();
     doctor.disconnect();
     setRescueState(createInitialRescueUiState());
     setPrimaryState(createInitialPrimaryRecoveryState());
+    doctor.setTarget(isRemote ? instanceId : "local");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId]);
+  }, [doctor.setTarget, instanceId, isRemote]);
 
-  // Auto-infer target from active instance tab
-  useEffect(() => {
-    if (isRemote) {
-      doctor.setTarget(instanceId);
-    } else {
-      doctor.setTarget("local");
-    }
-  }, [instanceId, isRemote, doctor.setTarget]);
-
-  // Keep selected source valid when target/hosts change.
-  useEffect(() => {
-    if (canStartDiagnosis) return;
-    if (selectableSources.length > 0) {
-      setAgentSource(selectableSources[0]);
-    }
-  }, [canStartDiagnosis, selectableSources]);
-
-  const handleStartDiagnosis = async () => {
+  const handleStartDiagnosis = async (extraContext?: string) => {
+    setStartError(null);
     setDiagnosing(true);
+    setStartupStage("connecting");
     try {
-      let url: string;
-      let credentials;
-      let agentId = "main";
-      if (agentSource === "remote") {
-        url = "wss://doctor.openclaw.ai";
-      } else if (agentSource === "local") {
-        url = "ws://localhost:18789";
-      } else {
-        // Remote gateway: ensure SSH connected, read credentials, tunnel
-        const status = await api.sshStatus(agentSource);
+      if (isRemote && !instanceId.trim()) {
+        throw new Error(t("doctor.targetUnavailable"));
+      }
+      const diagnosisScope = isRemote
+        ? instanceId
+        : isDocker
+          ? instanceId
+          : "local";
+
+      if (isRemote) {
+        setRemoteConnState("checking");
+        const status = await ua.sshStatus(instanceId);
         if (status !== "connected") {
-          await api.sshConnect(agentSource);
+          await ua.sshConnect(instanceId);
         }
-        credentials = await api.doctorReadRemoteCredentials(agentSource);
-        // Get the first agent ID from the remote gateway
-        const agents = await api.remoteListAgentsOverview(agentSource);
-        if (agents.length > 0) {
-          agentId = agents[0].id;
-        }
-        const localPort = await api.doctorPortForward(agentSource);
-        url = `ws://localhost:${localPort}`;
+        setRemoteConnState("connected");
       }
 
-      const isRemoteGateway = agentSource !== "local" && agentSource !== "remote";
-      try {
-        await doctor.connect(url, credentials, isRemoteGateway ? agentSource : undefined);
-      } catch (connectErr) {
-        // Auto-fix NOT_PAIRED: approve pending device requests via SSH and retry
-        if (String(connectErr).includes("NOT_PAIRED") && isRemoteGateway) {
-          const approved = await api.doctorAutoPair(agentSource);
-          if (approved > 0) {
-            await doctor.connect(url, credentials, agentSource);
-          } else {
-            throw connectErr;
-          }
-        } else {
-          throw connectErr;
-        }
+      await doctor.connect();
+      setStartupStage("collecting");
+      const baseContext = isRemote
+        ? await ua.collectDoctorContextRemote(instanceId)
+        : await ua.collectDoctorContext();
+      const context = extraContext
+        ? `${baseContext}\n\n${extraContext}`
+        : baseContext;
+      const diagnosisTransport: "local" | "docker_local" | "remote_ssh" = isRemote
+        ? "remote_ssh"
+        : isDocker
+          ? "docker_local"
+          : "local";
+      setStartupStage("starting");
+      await doctor.startDiagnosis(context, "main", diagnosisScope, diagnosisTransport);
+    } catch (err) {
+      const msg = String(err);
+      setStartError(msg);
+      if (isRemote) {
+        setRemoteConnState("disconnected");
       }
-
-      // Brief delay after bridge connection so the gateway propagates the
-      // node's registered commands (system.run) to the agent's tool list.
-      // Without this, the agent may start before it knows about our tools.
-      await new Promise((r) => setTimeout(r, 800));
-
-      const context = doctor.target === "local"
-        ? await ua.collectDoctorContext()
-        : await ua.collectDoctorContextRemote(doctor.target);
-
-      await doctor.startDiagnosis(context, agentId);
-    } catch {
-      // Error is surfaced via doctor.error state from the hook
     } finally {
       setDiagnosing(false);
+      setStartupStage("idle");
     }
   };
+
+  const startupHint = diagnosing && doctor.messages.length === 0
+    ? (startupStage === "collecting"
+      ? t("doctor.startupCollecting")
+      : startupStage === "starting"
+        ? t("doctor.startupStarting")
+        : t("doctor.startupConnecting"))
+    : null;
 
   const handleStopDiagnosis = async () => {
     await doctor.disconnect();
@@ -230,7 +266,7 @@ export function Doctor({ sshHosts }: DoctorProps) {
     const fn = source === "clawpal"
       ? (which === "app" ? ua.readAppLog : ua.readErrorLog)
       : (which === "app" ? ua.readGatewayLog : ua.readGatewayErrorLog);
-    fn(500)
+    fn(200)
       .then((text) => {
         setLogsContent(text);
         setTimeout(() => {
@@ -547,15 +583,65 @@ export function Doctor({ sshHosts }: DoctorProps) {
   }, [instanceId, isRemote, isConnected]);
 
   useEffect(() => {
+    if (!active || !launchGuidance) return;
+    const launchKey = `${launchGuidance.instanceId}:${launchGuidance.operation}:${launchGuidance.createdAt}`;
+    if (lastAutoLaunchKeyRef.current === launchKey) return;
+    lastAutoLaunchKeyRef.current = launchKey;
+    onLaunchGuidanceConsumed?.(launchGuidance.instanceId);
+    void handleStartDiagnosis(buildLaunchGuidanceContext(launchGuidance));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, launchGuidance, onLaunchGuidanceConsumed]);
+
+  useEffect(() => {
     if (logsOpen) fetchLog(logsSource, logsTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logsOpen, logsSource, logsTab]);
+
+  useEffect(() => {
+    if (!isRemote) {
+      setRemoteConnState("connected");
+      return;
+    }
+    let cancelled = false;
+    setRemoteConnState("checking");
+    ua.sshStatus(instanceId)
+      .then((status) => {
+        if (!cancelled) {
+          setRemoteConnState(status === "connected" ? "connected" : "disconnected");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRemoteConnState("disconnected");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ua, instanceId, isRemote]);
+
+  // Backups
+  const refreshBackups = useCallback(() => {
+    ua.listBackups().then(setBackups).catch((e) => console.error("Failed to load backups:", e));
+  }, [ua]);
+  useEffect(refreshBackups, [refreshBackups]);
+  const showLegacyRecoveryCards = false;
+  const isWsl2 = instanceId.startsWith("wsl2:");
+  const displayedDoctorTarget = isRemote || isDocker || isWsl2 ? instanceId : "local";
+  const instanceTypeLabel = isRemote
+    ? t("doctor.targetTypeSsh")
+    : isDocker
+      ? t("doctor.targetTypeDocker")
+      : isWsl2
+        ? t("doctor.targetTypeWsl2")
+        : t("doctor.targetTypeLocal");
+  const isPureLocal = !isRemote && !isDocker && !isWsl2;
 
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t("doctor.title")}</h2>
 
-      <Card className="mb-4 gap-2 py-4">
+      {showLegacyRecoveryCards && <Card className="mb-4 gap-2 py-4">
         <CardHeader className="pb-0">
           <CardTitle className="text-base">{t("doctor.rescueBotTitle")}</CardTitle>
         </CardHeader>
@@ -646,9 +732,9 @@ export function Doctor({ sshHosts }: DoctorProps) {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
-      <Card className="mb-4 gap-2 py-4">
+      {showLegacyRecoveryCards && <Card className="mb-4 gap-2 py-4">
         <CardHeader className="pb-0">
           <CardTitle className="text-base">{t("doctor.primaryRecoveryTitle")}</CardTitle>
         </CardHeader>
@@ -850,13 +936,33 @@ export function Doctor({ sshHosts }: DoctorProps) {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
       <Card className="gap-2 py-4">
         <CardHeader className="pb-0">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-base">{t("doctor.agentSource")}</CardTitle>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <span className="text-xs text-muted-foreground">{t("doctor.targetExecutionLabel")}</span>
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{displayedDoctorTarget}</code>
+              <Badge variant="outline" className="text-[10px]">{instanceTypeLabel}</Badge>
+              {isRemote && (
+                <Badge
+                  variant={remoteConnState === "disconnected" ? "destructive" : "outline"}
+                  className="text-[10px]"
+                >
+                  {remoteConnState === "checking"
+                    ? t("doctor.connecting")
+                    : remoteConnState === "connected"
+                      ? t("doctor.connected")
+                      : t("doctor.disconnected")}
+                </Badge>
+              )}
+              {isPureLocal && (
+                <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                  {t("doctor.targetExecutionLocalWarning")}
+                </span>
+              )}
               <Button variant="ghost" size="sm" onClick={() => openLogs("clawpal")}>
                 {t("doctor.clawpalLogs")}
               </Button>
@@ -869,64 +975,18 @@ export function Doctor({ sshHosts }: DoctorProps) {
         <CardContent>
           {!doctor.connected && doctor.messages.length === 0 ? (
             <>
-              {/* Source radio — instance gateways (excluding current target) + remote doctor */}
-              <div className="text-sm text-muted-foreground mb-2">{t("doctor.agentSourceHint")}</div>
-              <div className="flex items-center gap-4 mb-4 flex-wrap">
-                {doctor.target !== "local" && (
-                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <input
-                      type="radio"
-                      name="agentSource"
-                      value="local"
-                      checked={agentSource === "local"}
-                      onChange={() => setAgentSource("local")}
-                      className="accent-primary"
-                    />
-                    {t("instance.local")}
-                  </label>
-                )}
-                {sshHosts
-                  .filter((h) => h.id !== doctor.target)
-                  .map((h) => (
-                    <label key={h.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        name="agentSource"
-                        value={h.id}
-                        checked={agentSource === h.id}
-                        onChange={() => setAgentSource(h.id)}
-                        className="accent-primary"
-                      />
-                      {h.label || h.host}
-                    </label>
-                  ))}
-                <label className="flex items-center gap-1.5 text-sm cursor-not-allowed text-muted-foreground">
-                  <input
-                    type="radio"
-                    name="agentSource"
-                    value="remote"
-                    disabled
-                    className="accent-primary"
-                  />
-                  {t("doctor.remoteDoctor")}
-                  <span className="text-xs">(coming soon)</span>
-                </label>
-              </div>
+              {startError && (
+                <div className="mb-3 text-sm text-destructive">{startError}</div>
+              )}
               {doctor.error && (
-                <div className="mb-3 text-sm text-destructive">
-                  {doctor.error}
-                  {doctor.error.includes("NOT_PAIRED") && (
-                    <p className="mt-1 text-muted-foreground">
-                      {t("doctor.notPairedHint", {
-                        host: agentSource === "local"
-                          ? "localhost"
-                          : sshHosts.find((h) => h.id === agentSource)?.label || agentSource,
-                      })}
-                    </p>
-                  )}
+                <div className="mb-3 text-sm text-destructive">{doctor.error}</div>
+              )}
+              {startupHint && (
+                <div className="mb-3 text-sm text-muted-foreground animate-pulse">
+                  {startupHint}
                 </div>
               )}
-              <Button onClick={handleStartDiagnosis} disabled={diagnosing || !canStartDiagnosis}>
+              <Button onClick={() => { void handleStartDiagnosis(); }} disabled={diagnosing}>
                 {diagnosing ? t("doctor.connecting") : t("doctor.startDiagnosis")}
               </Button>
             </>
@@ -958,14 +1018,15 @@ export function Doctor({ sshHosts }: DoctorProps) {
             </>
           ) : (
             <>
+              {startupHint && (
+                <div className="mb-3 text-sm text-muted-foreground animate-pulse">
+                  {startupHint}
+                </div>
+              )}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="text-xs">
-                    {agentSource === "remote"
-                      ? t("doctor.remoteDoctor")
-                      : agentSource === "local"
-                        ? t("instance.local")
-                        : sshHosts.find((h) => h.id === agentSource)?.label || agentSource}
+                    {t("doctor.engineZeroclaw")}
                   </Badge>
                   <Badge variant="outline" className="text-xs flex items-center gap-1.5">
                     <span className={`inline-block w-1.5 h-1.5 rounded-full ${doctor.bridgeConnected ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
@@ -1068,6 +1129,135 @@ export function Doctor({ sshHosts }: DoctorProps) {
           </pre>
         </DialogContent>
       </Dialog>
+
+      {/* Sessions */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold mb-4">{t("doctor.sessions")}</h3>
+        <SessionAnalysisPanel />
+      </div>
+
+      {/* Backups */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">{t("doctor.backups")}</h3>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={backingUp}
+            onClick={() => {
+              setBackingUp(true);
+              setBackupMessage("");
+              ua.backupBeforeUpgrade()
+                .then((info) => {
+                  setBackupMessage(t("home.backupCreated", { name: info.name }));
+                  refreshBackups();
+                })
+                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.backupFailed", { error: String(e) })); })
+                .finally(() => setBackingUp(false));
+            }}
+          >
+            {backingUp ? t("home.creating") : t("home.createBackup")}
+          </Button>
+        </div>
+        {backupMessage && (
+          <p className="text-sm text-muted-foreground mb-2">{backupMessage}</p>
+        )}
+        {backups === null ? (
+          <div className="space-y-2">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : backups.length === 0 ? (
+          <p className="text-muted-foreground text-sm">{t("doctor.noBackups")}</p>
+        ) : (
+          <div className="space-y-2">
+            {backups.map((backup) => (
+              <Card key={backup.name}>
+                <CardContent className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-sm">{backup.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatTime(backup.createdAt)} — {formatBytes(backup.sizeBytes)}
+                    </div>
+                    {ua.isRemote && backup.path && (
+                      <div className="text-xs text-muted-foreground mt-0.5 font-mono">{backup.path}</div>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5">
+                    {!ua.isRemote && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => ua.openUrl(backup.path)}
+                      >
+                        {t("home.show")}
+                      </Button>
+                    )}
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button size="sm" variant="outline">
+                          {t("home.restore")}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t("home.restoreTitle")}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t("home.restoreDescription", { name: backup.name })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t("config.cancel")}</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => {
+                              ua.restoreFromBackup(backup.name)
+                                .then((msg) => setBackupMessage(msg))
+                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.restoreFailed", { error: String(e) })); });
+                            }}
+                          >
+                            {t("home.restore")}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button size="sm" variant="destructive">
+                          {t("home.delete")}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t("home.deleteBackupTitle")}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t("home.deleteBackupDescription", { name: backup.name })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t("config.cancel")}</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={() => {
+                              ua.deleteBackup(backup.name)
+                                .then(() => {
+                                  setBackupMessage(t("home.deletedBackup", { name: backup.name }));
+                                  refreshBackups();
+                                })
+                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.deleteBackupFailed", { error: String(e) })); });
+                            }}
+                          >
+                            {t("home.delete")}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

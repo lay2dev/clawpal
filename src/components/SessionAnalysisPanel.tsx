@@ -104,7 +104,7 @@ export function SessionAnalysisPanel() {
       refreshData();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ua.instanceId, ua.isRemote, ua.isConnected]);
+  }, [ua.instanceId, ua.instanceToken, ua.isRemote, ua.isConnected]);
 
   return (
     <>

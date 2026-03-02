@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
+import { withGuidance } from "@/lib/guidance";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -66,8 +67,18 @@ export function UpgradeDialog({
     setError("");
     try {
       const info = isRemote
-        ? await api.remoteBackupBeforeUpgrade(instanceId)
-        : await api.backupBeforeUpgrade();
+        ? await withGuidance(
+          () => api.remoteBackupBeforeUpgrade(instanceId),
+          "remoteBackupBeforeUpgrade",
+          instanceId,
+          "remote_ssh",
+        )
+        : await withGuidance(
+          () => api.backupBeforeUpgrade(),
+          "backupBeforeUpgrade",
+          "local",
+          "local",
+        );
       setBackupName(info.name);
       setLoading(false);
       setStep("upgrading");
@@ -84,8 +95,18 @@ export function UpgradeDialog({
     setOutput("");
     try {
       const result = isRemote
-        ? await api.remoteRunOpenclawUpgrade(instanceId)
-        : await api.runOpenclawUpgrade();
+        ? await withGuidance(
+          () => api.remoteRunOpenclawUpgrade(instanceId),
+          "remoteRunOpenclawUpgrade",
+          instanceId,
+          "remote_ssh",
+        )
+        : await withGuidance(
+          () => api.runOpenclawUpgrade(),
+          "runOpenclawUpgrade",
+          "local",
+          "local",
+        );
       setOutput(stripAnsi(result));
       setStep("done");
     } catch (e) {

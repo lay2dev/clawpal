@@ -264,16 +264,16 @@ mod tests {
 
     #[test]
     fn dedup_prepend_preserves_order_and_deduplicates() {
-        let extra = vec![
-            PathBuf::from("/extra/a"),
-            PathBuf::from("/extra/b"),
-        ];
+        let extra = vec![PathBuf::from("/extra/a"), PathBuf::from("/extra/b")];
         let current = "/existing/x:/extra/a:/existing/y";
         let result = dedup_prepend_path(&extra, current);
         let result_str = result.to_string_lossy();
 
         let parts: Vec<&str> = result_str.split(':').collect();
-        assert_eq!(parts, vec!["/extra/a", "/extra/b", "/existing/x", "/existing/y"]);
+        assert_eq!(
+            parts,
+            vec!["/extra/a", "/extra/b", "/existing/x", "/existing/y"]
+        );
     }
 
     #[test]

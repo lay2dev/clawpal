@@ -1,0 +1,4 @@
+[workspace]
+members = ["clawpal-core", "clawpal-cli", "src-tauri"]
+resolver = "2"
+

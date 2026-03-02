@@ -1,81 +1,86 @@
-use crate::commands::{
-    apply_config_patch, fix_issues, get_system_status, get_status_light, list_history, list_recipes,
-    list_model_profiles, upsert_model_profile, delete_model_profile, test_model_profile,
-    get_cached_model_catalog, refresh_model_catalog, resolve_provider_auth,
-    check_openclaw_update, extract_model_profiles_from_config,
-    list_agents_overview, create_agent, delete_agent, setup_agent_identity, list_session_files,
-    clear_all_sessions, analyze_sessions, delete_sessions_by_ids, preview_session,
-    preview_rollback, rollback, run_doctor_command,
-    resolve_api_keys, read_raw_config, open_url, chat_via_openclaw,
-    backup_before_upgrade, list_backups, restore_from_backup, delete_backup,
-    list_channels_minimal,
-    list_discord_guild_channels,
-    refresh_discord_guild_channels,
-    restart_gateway,
-    manage_rescue_bot,
-    diagnose_primary_via_rescue,
-    repair_primary_via_rescue,
-    set_global_model,
-    set_agent_model,
-    list_bindings,
-    list_ssh_hosts, list_ssh_config_hosts, upsert_ssh_host, delete_ssh_host,
-    ssh_connect, ssh_connect_with_passphrase, ssh_disconnect, ssh_status,
-    ssh_exec, sftp_read_file, sftp_write_file, sftp_list_dir, sftp_remove_file,
-    remote_read_raw_config, remote_get_system_status, remote_get_status_extra, get_status_extra,
-    remote_list_agents_overview, remote_list_channels_minimal, remote_list_bindings,
-    remote_restart_gateway, remote_manage_rescue_bot, remote_apply_config_patch,
-    remote_diagnose_primary_via_rescue,
-    remote_repair_primary_via_rescue,
-    remote_setup_agent_identity,
-    remote_run_doctor, remote_fix_issues, remote_list_history, remote_preview_rollback, remote_rollback,
-    remote_list_discord_guild_channels, remote_write_raw_config,
-    remote_analyze_sessions, remote_delete_sessions_by_ids,
-    remote_list_session_files, remote_clear_all_sessions, remote_preview_session,
-    remote_list_model_profiles, remote_upsert_model_profile, remote_delete_model_profile, remote_resolve_api_keys, remote_test_model_profile,
-    remote_extract_model_profiles_from_config, remote_refresh_model_catalog,
-    remote_chat_via_openclaw, remote_check_openclaw_update,
-    run_openclaw_upgrade, remote_run_openclaw_upgrade,
-    remote_backup_before_upgrade, remote_list_backups, remote_restore_from_backup, remote_delete_backup,
-    list_cron_jobs, get_cron_runs, trigger_cron_job, delete_cron_job,
-    remote_list_cron_jobs, remote_get_cron_runs, remote_trigger_cron_job, remote_delete_cron_job,
-    get_watchdog_status, deploy_watchdog, start_watchdog, stop_watchdog, uninstall_watchdog,
-    remote_get_watchdog_status, remote_deploy_watchdog, remote_start_watchdog, remote_stop_watchdog, remote_uninstall_watchdog,
-    read_app_log, read_error_log, read_gateway_log, read_gateway_error_log,
-    log_app_event,
-    remote_read_app_log, remote_read_error_log, remote_read_gateway_log, remote_read_gateway_error_log,
-};
-use crate::bridge_client::BridgeClient;
-use crate::doctor_commands::{
-    doctor_port_forward, doctor_read_remote_credentials, doctor_auto_pair,
-    doctor_connect, doctor_disconnect,
-    doctor_start_diagnosis, doctor_send_message,
-    doctor_approve_invoke, doctor_reject_invoke, collect_doctor_context,
-    collect_doctor_context_remote, doctor_bridge_connect, doctor_bridge_disconnect, doctor_bridge_node_id,
-};
+use crate::agent_fallback::explain_operation_error;
 use crate::cli_runner::{
-    queue_command, remove_queued_command, list_queued_commands,
-    discard_queued_commands, queued_commands_count,
-    preview_queued_commands, apply_queued_commands, CommandQueue,
-    remote_queue_command, remote_remove_queued_command, remote_list_queued_commands,
-    remote_discard_queued_commands, remote_queued_commands_count,
-    remote_preview_queued_commands, remote_apply_queued_commands, RemoteCommandQueues,
-    CliCache,
+    apply_queued_commands, discard_queued_commands, list_queued_commands, preview_queued_commands,
+    queue_command, queued_commands_count, remote_apply_queued_commands,
+    remote_discard_queued_commands, remote_list_queued_commands, remote_preview_queued_commands,
+    remote_queue_command, remote_queued_commands_count, remote_remove_queued_command,
+    remove_queued_command, CliCache, CommandQueue, RemoteCommandQueues,
 };
+use crate::commands::{
+    analyze_sessions, apply_config_patch, backup_before_upgrade, chat_via_openclaw,
+    check_openclaw_update, clear_all_sessions, connect_docker_instance, connect_local_instance,
+    connect_ssh_instance, create_agent, delete_agent, delete_backup, delete_cron_job,
+    delete_local_instance_home, delete_model_profile, delete_registered_instance,
+    delete_sessions_by_ids, delete_ssh_host, deploy_watchdog, diagnose_primary_via_rescue,
+    discover_local_instances, ensure_access_profile, extract_model_profiles_from_config,
+    fix_issues, get_app_preferences, get_cached_model_catalog, get_cron_runs, get_status_extra,
+    get_status_light, get_system_status, get_watchdog_status, get_zeroclaw_runtime_target,
+    get_zeroclaw_usage_stats, list_agents_overview, list_backups, list_bindings,
+    list_channels_minimal, list_cron_jobs, list_discord_guild_channels, list_history,
+    list_model_profiles, list_recipes, list_registered_instances, list_session_files,
+    list_ssh_config_hosts, list_ssh_hosts, local_openclaw_config_exists, log_app_event,
+    manage_rescue_bot, migrate_legacy_instances, open_url, precheck_auth, precheck_instance,
+    precheck_registry, precheck_transport, preview_rollback, preview_session, read_app_log,
+    read_error_log, read_gateway_error_log, read_gateway_log, read_raw_config,
+    record_install_experience, refresh_discord_guild_channels, refresh_model_catalog,
+    remote_analyze_sessions, remote_apply_config_patch, remote_backup_before_upgrade,
+    remote_chat_via_openclaw, remote_check_openclaw_update, remote_clear_all_sessions,
+    remote_delete_backup, remote_delete_cron_job, remote_delete_model_profile,
+    remote_delete_sessions_by_ids, remote_deploy_watchdog, remote_diagnose_primary_via_rescue,
+    remote_extract_model_profiles_from_config, remote_fix_issues, remote_get_cron_runs,
+    remote_get_status_extra, remote_get_system_status, remote_get_watchdog_status,
+    remote_list_agents_overview, remote_list_backups, remote_list_bindings,
+    remote_list_channels_minimal, remote_list_cron_jobs, remote_list_discord_guild_channels,
+    remote_list_history, remote_list_model_profiles, remote_list_session_files,
+    remote_manage_rescue_bot, remote_preview_rollback, remote_preview_session, remote_read_app_log,
+    remote_read_error_log, remote_read_gateway_error_log, remote_read_gateway_log,
+    remote_read_raw_config, remote_refresh_model_catalog, remote_repair_primary_via_rescue,
+    remote_resolve_api_keys, remote_restart_gateway, remote_restore_from_backup, remote_rollback,
+    remote_run_doctor, remote_run_openclaw_upgrade, remote_setup_agent_identity,
+    remote_start_watchdog, remote_stop_watchdog, remote_sync_profiles_to_local_auth,
+    remote_test_model_profile, remote_trigger_cron_job, remote_uninstall_watchdog,
+    remote_upsert_model_profile, remote_write_raw_config, repair_primary_via_rescue,
+    resolve_api_keys, resolve_provider_auth, restart_gateway, restore_from_backup, rollback,
+    run_doctor_command, run_openclaw_upgrade, set_active_clawpal_data_dir,
+    set_active_openclaw_home, set_agent_model, set_global_model, set_zeroclaw_model_preference,
+    setup_agent_identity, sftp_list_dir, sftp_read_file, sftp_remove_file, sftp_write_file,
+    ssh_connect, ssh_connect_with_passphrase, ssh_disconnect, ssh_exec, ssh_status, start_watchdog,
+    stop_watchdog, test_model_profile, trigger_cron_job, uninstall_watchdog, upsert_model_profile,
+    upsert_ssh_host,
+};
+use crate::doctor_commands::{
+    collect_doctor_context, collect_doctor_context_remote, doctor_approve_invoke, doctor_connect,
+    doctor_disconnect, doctor_reject_invoke, doctor_send_message, doctor_start_diagnosis,
+};
+use crate::install::commands::{
+    install_create_session, install_decide_target, install_get_session, install_list_methods,
+    install_orchestrator_next, install_run_step,
+};
+use crate::install::session_store::InstallSessionStore;
+use crate::install_commands::{install_send_message, install_start_session};
 use crate::node_client::NodeClient;
 use crate::ssh::SshConnectionPool;
 
+pub mod access_discovery;
+pub mod agent_fallback;
 pub mod bridge_client;
 pub mod cli_runner;
 pub mod commands;
 pub mod config_io;
 pub mod doctor;
 pub mod doctor_commands;
+pub mod doctor_runtime_bridge;
 pub mod history;
+pub mod install;
+pub mod install_commands;
+pub mod json_util;
 pub mod logging;
 pub mod models;
 pub mod node_client;
-pub mod recipe;
 pub mod path_fix;
+pub mod prompt_templates;
+pub mod recipe;
+pub mod runtime;
 pub mod ssh;
 
 pub fn run() {
@@ -84,14 +89,37 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(SshConnectionPool::new())
         .manage(NodeClient::new())
-        .manage(BridgeClient::new())
         .manage(CommandQueue::new())
         .manage(RemoteCommandQueues::new())
         .manage(CliCache::new())
+        .manage(InstallSessionStore::new())
         .invoke_handler(tauri::generate_handler![
+            install_create_session,
+            install_decide_target,
+            install_get_session,
+            install_list_methods,
+            install_orchestrator_next,
+            install_run_step,
+            set_active_openclaw_home,
+            set_active_clawpal_data_dir,
+            explain_operation_error,
+            local_openclaw_config_exists,
+            delete_local_instance_home,
+            list_registered_instances,
+            delete_registered_instance,
+            connect_docker_instance,
+            connect_local_instance,
+            connect_ssh_instance,
+            discover_local_instances,
+            migrate_legacy_instances,
+            ensure_access_profile,
+            record_install_experience,
             get_system_status,
             get_status_light,
             get_status_extra,
+            get_app_preferences,
+            get_zeroclaw_usage_stats,
+            get_zeroclaw_runtime_target,
             list_recipes,
             list_model_profiles,
             get_cached_model_catalog,
@@ -134,6 +162,7 @@ pub fn run() {
             repair_primary_via_rescue,
             set_global_model,
             set_agent_model,
+            set_zeroclaw_model_preference,
             list_bindings,
             list_ssh_hosts,
             list_ssh_config_hosts,
@@ -178,6 +207,7 @@ pub fn run() {
             remote_resolve_api_keys,
             remote_test_model_profile,
             remote_extract_model_profiles_from_config,
+            remote_sync_profiles_to_local_auth,
             remote_refresh_model_catalog,
             remote_chat_via_openclaw,
             remote_check_openclaw_update,
@@ -228,9 +258,6 @@ pub fn run() {
             remote_queued_commands_count,
             remote_preview_queued_commands,
             remote_apply_queued_commands,
-            doctor_port_forward,
-            doctor_read_remote_credentials,
-            doctor_auto_pair,
             doctor_connect,
             doctor_disconnect,
             doctor_start_diagnosis,
@@ -239,9 +266,12 @@ pub fn run() {
             doctor_reject_invoke,
             collect_doctor_context,
             collect_doctor_context_remote,
-            doctor_bridge_connect,
-            doctor_bridge_disconnect,
-            doctor_bridge_node_id,
+            install_start_session,
+            install_send_message,
+            precheck_registry,
+            precheck_instance,
+            precheck_transport,
+            precheck_auth,
         ])
         .setup(|_app| {
             // Run PATH fix in background so it doesn't block window creation.

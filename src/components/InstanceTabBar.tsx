@@ -1,163 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+import { XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
-import type { SshConfigHostSuggestion, SshHost } from "@/lib/types";
 
 interface InstanceTabBarProps {
-  hosts: SshHost[];
-  activeId: string; // "local" or host.id
+  openTabs: Array<{ id: string; label: string; type: "local" | "docker" | "ssh" }>;
+  activeId: string | null;
+  startActive: boolean;
   connectionStatus: Record<string, "connected" | "disconnected" | "error">;
+  appVersion?: string;
+  onSelectStart: () => void;
   onSelect: (id: string) => void;
-  onHostsChange: () => void;
+  onClose: (id: string) => void;
 }
 
-const emptyHost: Omit<SshHost, "id"> = {
-  label: "",
-  host: "",
-  port: 22,
-  username: "root",
-  authMethod: "ssh_config",
-  keyPath: undefined,
-  password: undefined,
-};
-
 export function InstanceTabBar({
-  hosts,
+  openTabs,
   activeId,
+  startActive,
   connectionStatus,
+  appVersion,
+  onSelectStart,
   onSelect,
-  onHostsChange,
+  onClose,
 }: InstanceTabBarProps) {
   const { t } = useTranslation();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingHost, setEditingHost] = useState<SshHost | null>(null);
-  const [form, setForm] = useState<Omit<SshHost, "id">>(emptyHost);
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string>("");
-  const [keyGuideOpen, setKeyGuideOpen] = useState(false);
-  const [sshConfigHosts, setSshConfigHosts] = useState<SshConfigHostSuggestion[]>([]);
-  const [selectedConfigAlias, setSelectedConfigAlias] = useState<string | undefined>(undefined);
-  const duplicateDisplayNames = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const host of hosts) {
-      const key = (host.label || host.host).trim().toLowerCase();
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    return counts;
-  }, [hosts]);
-  const hasDuplicateInputName = useMemo(() => {
-    const pending = (form.label.trim() || form.host.trim()).toLowerCase();
-    if (!pending) return false;
-    return hosts.some(
-      (h) =>
-        h.id !== editingHost?.id &&
-        ((h.label || h.host).trim().toLowerCase() === pending),
-    );
-  }, [editingHost?.id, form.host, form.label, hosts]);
-
-  useEffect(() => {
-    api
-      .listSshConfigHosts()
-      .then(setSshConfigHosts)
-      .catch((e) => console.error("Failed to load SSH config hosts:", e));
-  }, []);
-
-  const openAddDialog = () => {
-    setEditingHost(null);
-    setForm({ ...emptyHost });
-    setFormError("");
-    setSelectedConfigAlias(undefined);
-    setDialogOpen(true);
-  };
-
-  const openEditDialog = (host: SshHost) => {
-    setEditingHost(host);
-    setForm({
-      label: host.label,
-      host: host.host,
-      port: host.port,
-      username: host.username,
-      authMethod: host.authMethod,
-      keyPath: host.keyPath,
-      password: host.password,
-    });
-    setFormError("");
-    setSelectedConfigAlias(undefined);
-    setDialogOpen(true);
-  };
-
-  const applySshConfigPreset = (hostAlias: string) => {
-    const preset = sshConfigHosts.find((h) => h.hostAlias === hostAlias);
-    if (!preset) return;
-    setForm((f) => ({
-      ...f,
-      label: f.label || hostAlias,
-      host: preset.hostAlias,
-      port: preset.port ?? f.port,
-      username: preset.user ?? f.username,
-      authMethod: "ssh_config",
-    }));
-  };
-
-  const handleSave = () => {
-    if (hasDuplicateInputName) {
-      setFormError(t('instance.duplicateLabelError'));
-      return;
-    }
-    const host: SshHost = {
-      id: editingHost?.id ?? crypto.randomUUID(),
-      ...form,
-    };
-    setFormError("");
-    setSaving(true);
-    api
-      .upsertSshHost(host)
-      .then(() => {
-        onHostsChange();
-        setDialogOpen(false);
-      })
-      .catch((e) => console.error("Failed to save SSH host:", e))
-      .finally(() => setSaving(false));
-  };
-
-  const handleDelete = (hostId: string) => {
-    api
-      .deleteSshHost(hostId)
-      .then(() => {
-        onHostsChange();
-        if (activeId === hostId) onSelect("local");
-      })
-      .catch((e) => console.error("Failed to delete SSH host:", e));
-  };
 
   const statusDot = (status: "connected" | "disconnected" | "error" | undefined) => {
     const color =
@@ -169,303 +35,59 @@ export function InstanceTabBar({
     return <span className={cn("inline-block w-2 h-2 rounded-full shrink-0 transition-colors duration-300", color)} />;
   };
 
-  const hostDisplayName = (host: SshHost) => {
-    const base = (host.label || host.host).trim();
-    const duplicate = (duplicateDisplayNames.get(base.toLowerCase()) || 0) > 1;
-    if (!duplicate) return base;
-    const userPrefix = host.username ? `${host.username}@` : "";
-    return `${base} (${userPrefix}${host.host}:${host.port})`;
-  };
-
   return (
-    <>
-      <div className="flex items-center gap-1 px-3 py-2 bg-sidebar border-b border-sidebar-border overflow-x-auto shrink-0">
-        {/* Local tab */}
+    <div className="flex items-center gap-2 px-3 py-2 bg-sidebar border-b border-sidebar-border shrink-0">
+      {/* Start tab - fixed, not closeable */}
+      <div className="flex items-center pr-3 mr-1 border-r border-sidebar-border/80 shrink-0">
         <button
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-200 cursor-pointer",
-            activeId === "local"
-              ? "bg-card shadow-sm font-semibold text-primary border-b-2 border-b-primary"
-              : "text-muted-foreground hover:text-foreground"
+            startActive
+              ? "bg-primary/10 text-primary font-semibold border border-primary/20"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent"
           )}
-          onClick={() => onSelect("local")}
+          onClick={onSelectStart}
         >
-          {statusDot("connected")}
-          {t('instance.local')}
+          <span aria-hidden>🧭</span>
+          {t("instance.start")}
         </button>
+      </div>
 
-        {/* Remote tabs */}
-        {hosts.map((host) => (
-          <div
-            key={host.id}
-            className="relative group flex items-center"
-          >
+      {/* Instance tabs */}
+      <div className="flex items-center gap-1 overflow-x-auto min-w-0 flex-1">
+        {openTabs.map((tab) => (
+          <div key={tab.id} className="relative group">
             <button
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-200 cursor-pointer",
-                activeId === host.id
+                "flex items-center gap-1.5 px-3 py-1.5 pr-7 rounded-lg text-sm whitespace-nowrap transition-all duration-200 cursor-pointer",
+                !startActive && activeId === tab.id
                   ? "bg-card shadow-sm font-semibold text-primary border-b-2 border-b-primary"
                   : "text-muted-foreground hover:text-foreground"
               )}
-              onClick={() => onSelect(host.id)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                openEditDialog(host);
+              onClick={() => onSelect(tab.id)}
+            >
+              {statusDot(tab.type === "local" || tab.type === "docker" ? "connected" : connectionStatus[tab.id])}
+              {tab.label}
+            </button>
+            <button
+              className={cn(
+                "absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-all cursor-pointer",
+                "opacity-0 group-hover:opacity-100"
+              )}
+              title={t("instance.close")}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose(tab.id);
               }}
             >
-              {statusDot(connectionStatus[host.id])}
-              {hostDisplayName(host)}
+              <XIcon className="size-3" />
             </button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <button
-                  className="absolute -top-0.5 -right-0.5 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full bg-muted-foreground/20 hover:bg-destructive hover:text-white text-[10px] leading-none"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                  }}
-                >
-                  &times;
-                </button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>{t('instance.deleteTitle')}</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {t('instance.deleteDescription', { label: hostDisplayName(host) })}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>{t('instance.cancel')}</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() => handleDelete(host.id)}
-                  >
-                    {t('instance.deleteConfirm')}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
           </div>
         ))}
-
-        {/* Add button */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 shrink-0 text-xs"
-          onClick={openAddDialog}
-        >
-          {t('instance.addSsh')}
-        </Button>
       </div>
-
-      {/* Add/Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editingHost ? t('instance.editRemote') : t('instance.addRemote')}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="ssh-label">{t('instance.label')}</Label>
-              <Input
-                id="ssh-label"
-                value={form.label}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, label: e.target.value }));
-                  if (formError) setFormError("");
-                }}
-                placeholder={t('instance.labelPlaceholder')}
-              />
-              {hasDuplicateInputName && (
-                <p className="text-xs text-destructive">
-                  {t('instance.duplicateLabelError')}
-                </p>
-              )}
-            </div>
-            {sshConfigHosts.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>{t('instance.sshConfigPreset')}</Label>
-                <Select
-                  value={selectedConfigAlias}
-                  onValueChange={(val) => {
-                    setSelectedConfigAlias(val);
-                    applySshConfigPreset(val);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('instance.sshConfigPresetPlaceholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sshConfigHosts.map((h) => (
-                      <SelectItem key={h.hostAlias} value={h.hostAlias}>
-                        {h.hostAlias}
-                        {h.hostName ? ` (${h.user ? `${h.user}@` : ""}${h.hostName}${h.port ? `:${h.port}` : ""})` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {t('instance.sshConfigPresetHint')}
-                </p>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <Label htmlFor="ssh-host">{t('instance.host')}</Label>
-              <Input
-                id="ssh-host"
-                value={form.host}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, host: e.target.value }));
-                  if (formError) setFormError("");
-                }}
-                placeholder="192.168.1.100"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ssh-port">{t('instance.port')}</Label>
-              <Input
-                id="ssh-port"
-                type="number"
-                value={form.port}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, port: parseInt(e.target.value, 10) || 22 }))
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ssh-username">{t('instance.username')}</Label>
-              <Input
-                id="ssh-username"
-                value={form.username}
-                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t('instance.authMethod')}</Label>
-              <Select
-                value={form.authMethod}
-                onValueChange={(val) =>
-                  setForm((f) => ({
-                    ...f,
-                    authMethod: val as SshHost["authMethod"],
-                    keyPath: val === "key" ? (f.authMethod === "key" ? f.keyPath : "") : undefined,
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ssh_config">{t('instance.authSshConfig')}</SelectItem>
-                  <SelectItem value="key">{t('instance.authKey')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <button
-                type="button"
-                className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 mt-1"
-                onClick={() => setKeyGuideOpen(true)}
-              >
-                {t('instance.keyGuideLink')}
-              </button>
-            </div>
-            {form.authMethod === "key" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="ssh-keypath">{t('instance.keyPath')}</Label>
-                <Input
-                  id="ssh-keypath"
-                  value={form.keyPath || ""}
-                  onChange={(e) => setForm((f) => ({ ...f, keyPath: e.target.value }))}
-                  placeholder="~/.ssh/id_rsa"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                />
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            {formError && (
-              <p className="text-xs text-destructive mr-auto">
-                {formError}
-              </p>
-            )}
-            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
-              {t('instance.cancel')}
-            </Button>
-            <Button onClick={handleSave} disabled={saving || !form.host}>
-              {saving ? t('instance.saving') : editingHost ? t('instance.update') : t('instance.add')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* SSH Key Setup Guide Dialog */}
-      <Dialog open={keyGuideOpen} onOpenChange={setKeyGuideOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('instance.keyGuideTitle')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-5 text-sm">
-            {/* Step 1 */}
-            <div className="space-y-1.5">
-              <p className="font-medium">{t('instance.keyGuideStep1Title')}</p>
-              <CopyBlock text="ssh-keygen -t ed25519" />
-              <p className="text-xs text-muted-foreground">{t('instance.keyGuideStep1Hint')}</p>
-            </div>
-            {/* Step 2 */}
-            <div className="space-y-1.5">
-              <p className="font-medium">{t('instance.keyGuideStep2Title')}</p>
-              <CopyBlock text={`ssh-copy-id ${form.username || "root"}@${form.host || "your-host"} -p ${form.port || 22}`} />
-              <p className="text-xs text-muted-foreground">{t('instance.keyGuideStep2Hint')}</p>
-            </div>
-            {/* Step 3 */}
-            <div className="space-y-1.5">
-              <p className="font-medium">{t('instance.keyGuideStep3Title')}</p>
-              <ul className="list-disc list-inside text-muted-foreground text-xs space-y-0.5">
-                <li>{t('instance.keyGuideStep3Auth')}</li>
-                <li>{t('instance.keyGuideStep3Path')}</li>
-              </ul>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setKeyGuideOpen(false)}>
-              {t('instance.keyGuideClose')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-function CopyBlock({ text }: { text: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-  return (
-    <div className="flex items-center gap-2 bg-muted rounded px-3 py-1.5 font-mono text-xs">
-      <code className="flex-1 break-all">{text}</code>
-      <button
-        type="button"
-        className="shrink-0 text-muted-foreground hover:text-foreground text-xs"
-        onClick={handleCopy}
-      >
-        {copied ? t('instance.keyGuideCopied') : t('instance.keyGuideCopy')}
-      </button>
+      <div className="shrink-0 pl-2 text-xs text-muted-foreground/80">
+        {appVersion ? `v${appVersion}` : ""}
+      </div>
     </div>
   );
 }

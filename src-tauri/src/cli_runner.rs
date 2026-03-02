@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
+use clawpal_core::openclaw::OpenclawCli;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -9,13 +9,52 @@ use uuid::Uuid;
 use crate::models::resolve_paths;
 use crate::ssh::SshConnectionPool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
+static ACTIVE_OPENCLAW_HOME_OVERRIDE: LazyLock<Mutex<Option<String>>> =
+    LazyLock::new(|| Mutex::new(None));
+static ACTIVE_CLAWPAL_DATA_OVERRIDE: LazyLock<Mutex<Option<String>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+pub fn set_active_openclaw_home_override(path: Option<String>) -> Result<(), String> {
+    let mut guard = ACTIVE_OPENCLAW_HOME_OVERRIDE
+        .lock()
+        .map_err(|_| "active openclaw home lock poisoned".to_string())?;
+    let next = path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|raw| shellexpand::tilde(raw).to_string());
+    *guard = next;
+    Ok(())
 }
+
+pub fn get_active_openclaw_home_override() -> Option<String> {
+    ACTIVE_OPENCLAW_HOME_OVERRIDE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+}
+
+pub fn set_active_clawpal_data_override(path: Option<String>) -> Result<(), String> {
+    let mut guard = ACTIVE_CLAWPAL_DATA_OVERRIDE
+        .lock()
+        .map_err(|_| "active clawpal data lock poisoned".to_string())?;
+    let next = path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|raw| shellexpand::tilde(raw).to_string());
+    *guard = next;
+    Ok(())
+}
+
+pub fn get_active_clawpal_data_override() -> Option<String> {
+    ACTIVE_CLAWPAL_DATA_OVERRIDE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+}
+
+pub type CliOutput = clawpal_core::openclaw::CliOutput;
 
 pub fn run_openclaw(args: &[&str]) -> Result<CliOutput, String> {
     run_openclaw_with_env(args, None)
@@ -25,31 +64,18 @@ pub fn run_openclaw_with_env(
     args: &[&str],
     env: Option<&HashMap<String, String>>,
 ) -> Result<CliOutput, String> {
-    let mut cmd = Command::new(crate::commands::resolve_openclaw_bin());
-    cmd.args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
+    let mut merged_env = HashMap::new();
     if let Some(env_vars) = env {
-        for (k, v) in env_vars {
-            cmd.env(k, v);
+        merged_env.extend(env_vars.clone());
+    }
+    if let Some(path) = get_active_openclaw_home_override() {
+        if !merged_env.contains_key("OPENCLAW_HOME") {
+            merged_env.insert("OPENCLAW_HOME".to_string(), path);
         }
     }
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run openclaw: {e}"))?;
-
-    let exit_code = output.status.code().unwrap_or(-1);
-    Ok(CliOutput {
-        stdout: String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr)
-            .trim_end()
-            .to_string(),
-        exit_code,
-    })
+    let cli = OpenclawCli::new();
+    cli.run_with_env(args, Some(&merged_env))
+        .map_err(|e| e.to_string())
 }
 
 pub async fn run_openclaw_remote(
@@ -66,19 +92,7 @@ pub async fn run_openclaw_remote_with_env(
     args: &[&str],
     env: Option<&HashMap<String, String>>,
 ) -> Result<CliOutput, String> {
-    let mut cmd_str = String::new();
-
-    if let Some(env_vars) = env {
-        for (k, v) in env_vars {
-            cmd_str.push_str(&format!("{}='{}' ", k, v.replace('\'', "'\\''")));
-        }
-    }
-
-    cmd_str.push_str("openclaw");
-    for arg in args {
-        cmd_str.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
-    }
-
+    let cmd_str = build_remote_openclaw_command(args, env);
     let result = pool.exec_login(host_id, &cmd_str).await?;
     Ok(CliOutput {
         stdout: result.stdout,
@@ -87,52 +101,49 @@ pub async fn run_openclaw_remote_with_env(
     })
 }
 
-pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
-    if output.exit_code != 0 {
-        let details = if !output.stderr.is_empty() {
-            &output.stderr
-        } else {
-            &output.stdout
-        };
-        return Err(format!(
-            "openclaw command failed ({}): {}",
-            output.exit_code, details
-        ));
+fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, String>>) -> String {
+    let mut cmd_str = String::new();
+
+    if let Some(env_vars) = env {
+        for (k, v) in env_vars {
+            cmd_str.push_str(&format!("export {}='{}'; ", k, v.replace('\'', "'\\''")));
+        }
     }
 
-    let raw = &output.stdout;
-    // CLI may emit non-JSON noise (e.g. Doctor warnings with brackets) before
-    // the actual JSON payload. Find the outermost JSON object/array by locating
-    // the last `}` or `]` (whichever comes later), then walking backwards to
-    // find its matching opener with correct nesting.
-    let last_brace = raw.rfind('}');
-    let last_bracket = raw.rfind(']');
-    let end = match (last_brace, last_bracket) {
-        (Some(a), Some(b)) => Some(a.max(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    };
-    let start = match end {
-        Some(e) => {
-            let closer = raw.as_bytes()[e];
-            let opener = if closer == b']' { b'[' } else { b'{' };
-            let mut depth = 0i32;
-            let mut pos = None;
-            for i in (0..=e).rev() {
-                let ch = raw.as_bytes()[i];
-                if ch == closer { depth += 1; }
-                else if ch == opener { depth -= 1; }
-                if depth == 0 { pos = Some(i); break; }
-            }
-            pos
-        }
-        None => None,
-    };
-    let start = start.ok_or_else(|| format!("No JSON found in output: {raw}"))?;
-    let end = end.unwrap();
-    let json_str = &raw[start..=end];
-    serde_json::from_str(json_str).map_err(|e| format!("Failed to parse JSON: {e}"))
+    cmd_str.push_str(
+        "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN=\"$(command -v openclaw)\"; \
+         else echo \"openclaw command not found (PATH=$PATH SHELL=$SHELL)\" >&2; exit 127; fi; \
+         \"$OPENCLAW_BIN\"",
+    );
+    for arg in args {
+        cmd_str.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
+    }
+    cmd_str
+}
+
+pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
+    clawpal_core::openclaw::parse_json_output(output).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_remote_openclaw_command_reports_diagnostic_context_when_missing() {
+        let cmd = build_remote_openclaw_command(&["agents", "list", "--json"], None);
+        assert!(cmd.contains("command -v openclaw"));
+        assert!(cmd.contains("openclaw command not found (PATH=$PATH SHELL=$SHELL)"));
+    }
+
+    #[test]
+    fn build_remote_openclaw_command_escapes_args_and_env() {
+        let mut env = HashMap::new();
+        env.insert("OPENCLAW_HOME".to_string(), "/tmp/a'b".to_string());
+        let cmd = build_remote_openclaw_command(&["config", "get", "a'b"], Some(&env));
+        assert!(cmd.contains("export OPENCLAW_HOME='/tmp/a'\\''b';"));
+        assert!(cmd.contains(" 'a'\\''b'"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,17 +244,13 @@ pub fn list_queued_commands(
 }
 
 #[tauri::command]
-pub fn discard_queued_commands(
-    queue: tauri::State<CommandQueue>,
-) -> Result<bool, String> {
+pub fn discard_queued_commands(queue: tauri::State<CommandQueue>) -> Result<bool, String> {
     queue.clear();
     Ok(true)
 }
 
 #[tauri::command]
-pub fn queued_commands_count(
-    queue: tauri::State<CommandQueue>,
-) -> Result<usize, String> {
+pub fn queued_commands_count(queue: tauri::State<CommandQueue>) -> Result<usize, String> {
     Ok(queue.len())
 }
 
@@ -288,16 +295,21 @@ pub async fn preview_queued_commands(
         if let Ok(entries) = std::fs::read_dir(&paths.base_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
-                if name == "openclaw.json" { continue; }
+                if name == "openclaw.json" {
+                    continue;
+                }
                 let target = preview_dir.join(&name);
                 #[cfg(unix)]
-                { let _ = std::os::unix::fs::symlink(entry.path(), &target); }
+                {
+                    let _ = std::os::unix::fs::symlink(entry.path(), &target);
+                }
             }
         }
 
-        // Copy config file (the one we want to modify in-place)
+        // Seed config file for sandbox preview. Source config may not exist yet
+        // (fresh docker-local state), so write the already-loaded content.
         let preview_config = preview_dir.join("openclaw.json");
-        std::fs::copy(&paths.config_path, &preview_config).map_err(|e| e.to_string())?;
+        crate::config_io::write_text(&preview_config, &config_before)?;
 
         let mut env = HashMap::new();
         env.insert(
@@ -308,7 +320,10 @@ pub async fn preview_queued_commands(
         // Execute each command in sandbox
         let mut errors = Vec::new();
         for cmd in &commands {
-            if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+            if matches!(
+                cmd.command.first().map(|s| s.as_str()),
+                Some("__config_write__") | Some("__rollback__")
+            ) {
                 // Internal command: write config content directly
                 if let Some(content) = cmd.command.get(1) {
                     if let Err(e) = std::fs::write(&preview_config, content) {
@@ -339,7 +354,9 @@ pub async fn preview_queued_commands(
         // Always read result config from sandbox (commands may have partially succeeded)
         // Replace sandbox paths with real paths so the diff doesn't show sandbox artifacts.
         let sandbox_prefix = sandbox_root.to_string_lossy().to_string();
-        let real_home = paths.openclaw_dir.parent()
+        let real_home = paths
+            .openclaw_dir
+            .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let config_after_raw = crate::config_io::read_text(&preview_config)
@@ -351,7 +368,8 @@ pub async fn preview_queued_commands(
         fn sort_value(v: &Value) -> Value {
             match v {
                 Value::Object(map) => {
-                    let sorted: serde_json::Map<String, Value> = map.iter()
+                    let sorted: serde_json::Map<String, Value> = map
+                        .iter()
                         .collect::<std::collections::BTreeMap<_, _>>()
                         .into_iter()
                         .map(|(k, v)| (k.clone(), sort_value(v)))
@@ -364,8 +382,9 @@ pub async fn preview_queued_commands(
         }
         let normalize_json = |s: &str| -> String {
             match serde_json::from_str::<Value>(s) {
-                Ok(v) => serde_json::to_string_pretty(&sort_value(&v))
-                    .unwrap_or_else(|_| s.to_string()),
+                Ok(v) => {
+                    serde_json::to_string_pretty(&sort_value(&v)).unwrap_or_else(|_| s.to_string())
+                }
                 Err(_) => s.to_string(),
             }
         };
@@ -381,7 +400,9 @@ pub async fn preview_queued_commands(
             config_after,
             errors,
         })
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +439,8 @@ pub async fn apply_queued_commands(
         // Save snapshot before applying (for rollback)
         let config_before = crate::config_io::read_text(&paths.config_path)?;
         // Build a descriptive label from command labels
-        let mut summary = commands.iter()
+        let mut summary = commands
+            .iter()
             .map(|c| c.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
@@ -428,7 +450,8 @@ pub async fn apply_queued_commands(
             summary.push_str("...");
         }
         // Detect if this is a rollback operation
-        let is_rollback = commands.iter()
+        let is_rollback = commands
+            .iter()
             .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
         let source = if is_rollback { "rollback" } else { "clawpal" };
         let can_rollback = !is_rollback;
@@ -445,7 +468,10 @@ pub async fn apply_queued_commands(
         // Execute each command for real
         let mut applied_count = 0;
         for cmd in &commands {
-            if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+            if matches!(
+                cmd.command.first().map(|s| s.as_str()),
+                Some("__config_write__") | Some("__rollback__")
+            ) {
                 // Internal command: write config content directly
                 if let Some(content) = cmd.command.get(1) {
                     if let Err(e) = crate::config_io::write_text(&paths.config_path, content) {
@@ -455,7 +481,12 @@ pub async fn apply_queued_commands(
                             ok: false,
                             applied_count,
                             total_count,
-                            error: Some(format!("Step {} failed ({}): {}", applied_count + 1, cmd.label, e)),
+                            error: Some(format!(
+                                "Step {} failed ({}): {}",
+                                applied_count + 1,
+                                cmd.label,
+                                e
+                            )),
                             rolled_back: true,
                         });
                     }
@@ -529,7 +560,9 @@ pub async fn apply_queued_commands(
             error: None,
             rolled_back: false,
         })
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -669,29 +702,45 @@ pub async fn remote_preview_queued_commands(
     }
 
     // Read current config via SSH
-    let config_before = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await?;
+    let config_before = pool
+        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
+        .await?;
 
     // Set up sandbox on remote: symlink all entries from real .openclaw/ into sandbox,
     // but copy openclaw.json so commands modify the copy, not the original.
-    pool.exec(&host_id, concat!(
-        "rm -rf ~/.clawpal/preview && ",
-        "mkdir -p ~/.clawpal/preview/.openclaw && ",
-        "for f in ~/.openclaw/*; do ",
-        "  name=$(basename \"$f\"); ",
-        "  [ \"$name\" = \"openclaw.json\" ] && continue; ",
-        "  ln -s \"$f\" ~/.clawpal/preview/.openclaw/\"$name\"; ",
-        "done && ",
-        "cp ~/.openclaw/openclaw.json ~/.clawpal/preview/.openclaw/openclaw.json",
-    )).await?;
+    pool.exec(
+        &host_id,
+        concat!(
+            "rm -rf ~/.clawpal/preview && ",
+            "mkdir -p ~/.clawpal/preview/.openclaw && ",
+            "for f in ~/.openclaw/*; do ",
+            "  name=$(basename \"$f\"); ",
+            "  [ \"$name\" = \"openclaw.json\" ] && continue; ",
+            "  ln -s \"$f\" ~/.clawpal/preview/.openclaw/\"$name\"; ",
+            "done && ",
+            "cp ~/.openclaw/openclaw.json ~/.clawpal/preview/.openclaw/openclaw.json",
+        ),
+    )
+    .await?;
 
     // Execute each command in sandbox with OPENCLAW_HOME override
     // OPENCLAW_HOME should point to the parent of .openclaw/ (CLI adds .openclaw/ itself)
     let mut errors = Vec::new();
     for cmd in &commands {
         // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+        if matches!(
+            cmd.command.first().map(|s| s.as_str()),
+            Some("__config_write__") | Some("__rollback__")
+        ) {
             if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool.sftp_write(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json", content).await {
+                if let Err(e) = pool
+                    .sftp_write(
+                        &host_id,
+                        "~/.clawpal/preview/.openclaw/openclaw.json",
+                        content,
+                    )
+                    .await
+                {
                     errors.push(format!("{}: {}", cmd.label, e));
                     break;
                 }
@@ -725,12 +774,15 @@ pub async fn remote_preview_queued_commands(
     }
 
     let config_after = if errors.is_empty() {
-        let raw = pool.sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
+        let raw = pool
+            .sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
             .await?;
         // Replace sandbox paths with real paths in preview output.
         // The sandbox is at ~/.clawpal/preview, real OPENCLAW_HOME is ~.
         // Resolve ~ on remote to get absolute sandbox prefix.
-        let resolved_home = pool.exec(&host_id, "echo $HOME").await
+        let resolved_home = pool
+            .exec(&host_id, "echo $HOME")
+            .await
             .map(|r| r.stdout.trim().to_string())
             .unwrap_or_default();
         if !resolved_home.is_empty() {
@@ -753,7 +805,8 @@ pub async fn remote_preview_queued_commands(
                 fn sort_value(v: &Value) -> Value {
                     match v {
                         Value::Object(map) => {
-                            let sorted: serde_json::Map<String, Value> = map.iter()
+                            let sorted: serde_json::Map<String, Value> = map
+                                .iter()
                                 .collect::<std::collections::BTreeMap<_, _>>()
                                 .into_iter()
                                 .map(|(k, v)| (k.clone(), sort_value(v)))
@@ -764,8 +817,7 @@ pub async fn remote_preview_queued_commands(
                         other => other.clone(),
                     }
                 }
-                serde_json::to_string_pretty(&sort_value(&v))
-                    .unwrap_or_else(|_| s.to_string())
+                serde_json::to_string_pretty(&sort_value(&v)).unwrap_or_else(|_| s.to_string())
             }
             Err(_) => s.to_string(),
         }
@@ -800,7 +852,8 @@ pub async fn remote_apply_queued_commands(
         .sftp_read(&host_id, "~/.openclaw/openclaw.json")
         .await?;
     let ts = chrono::Utc::now().timestamp();
-    let mut summary: String = commands.iter()
+    let mut summary: String = commands
+        .iter()
         .map(|c| c.label.as_str())
         .collect::<Vec<_>>()
         .join(", ");
@@ -809,18 +862,20 @@ pub async fn remote_apply_queued_commands(
         summary.push_str("...");
     }
     // Sanitize summary for safe filename
-    let safe_summary: String = summary.chars().map(|c| match c {
-        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '-',
-        _ => c,
-    }).collect();
-    let is_rollback = commands.iter()
+    let safe_summary: String = summary
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '-',
+            _ => c,
+        })
+        .collect();
+    let is_rollback = commands
+        .iter()
         .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
     let source = if is_rollback { "rollback" } else { "clawpal" };
     let snapshot_filename = format!("{ts}-{source}-{safe_summary}.json");
     let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_filename}");
-    let _ = pool
-        .exec(&host_id, "mkdir -p ~/.clawpal/snapshots")
-        .await;
+    let _ = pool.exec(&host_id, "mkdir -p ~/.clawpal/snapshots").await;
     let _ = pool
         .sftp_write(&host_id, &snapshot_path, &config_before)
         .await;
@@ -829,16 +884,29 @@ pub async fn remote_apply_queued_commands(
     let mut applied_count = 0;
     for cmd in &commands {
         // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(cmd.command.first().map(|s| s.as_str()), Some("__config_write__") | Some("__rollback__")) {
+        if matches!(
+            cmd.command.first().map(|s| s.as_str()),
+            Some("__config_write__") | Some("__rollback__")
+        ) {
             if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool.sftp_write(&host_id, "~/.openclaw/openclaw.json", content).await {
-                    let _ = pool.sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before).await;
+                if let Err(e) = pool
+                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", content)
+                    .await
+                {
+                    let _ = pool
+                        .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
+                        .await;
                     queues.clear(&host_id);
                     return Ok(ApplyQueueResult {
                         ok: false,
                         applied_count,
                         total_count,
-                        error: Some(format!("Step {} failed ({}): {}", applied_count + 1, cmd.label, e)),
+                        error: Some(format!(
+                            "Step {} failed ({}): {}",
+                            applied_count + 1,
+                            cmd.label,
+                            e
+                        )),
                         rolled_back: true,
                     });
                 }
@@ -898,9 +966,7 @@ pub async fn remote_apply_queued_commands(
     }
 
     queues.clear(&host_id);
-    let _ = pool
-        .exec_login(&host_id, "openclaw gateway restart")
-        .await;
+    let _ = pool.exec_login(&host_id, "openclaw gateway restart").await;
 
     Ok(ApplyQueueResult {
         ok: true,

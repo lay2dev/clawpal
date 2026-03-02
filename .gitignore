@@ -1,7 +1,15 @@
 node_modules/
 dist/
+target/
 src-tauri/target/
 .worktrees/
 bun.lockb
 bun.lock
 bun.dlock
+.claude/
+.tmp/
+tmp/
+*.db
+*.sqlite
+*.sqlite3
+*.log

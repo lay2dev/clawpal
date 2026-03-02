@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import i18n from "../i18n";
 import { api } from "./api";
-import type { DoctorChatMessage, DoctorInvoke, GatewayCredentials } from "./types";
+import { doctorStartPromptTemplate, renderPromptTemplate } from "./prompt-templates";
+import type { DoctorChatMessage, DoctorInvoke } from "./types";
 
 let msgCounter = 0;
 function nextMsgId(): string {
@@ -15,6 +16,52 @@ function extractApprovalPattern(invoke: DoctorInvoke): string {
   return `${invoke.command}:${prefix}`;
 }
 
+function normalizeInvokeArgs(invoke: DoctorInvoke): string {
+  const raw = (invoke.args?.args as string) ?? "";
+  return raw.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function hasAnyPrefix(value: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => value === prefix || value.startsWith(`${prefix} `));
+}
+
+function isDoctorAutoSafeInvoke(invoke: DoctorInvoke, domain: "doctor" | "install"): boolean {
+  if (domain !== "doctor") return false;
+  const args = normalizeInvokeArgs(invoke);
+  if (invoke.command === "clawpal") {
+    // Doctor domain file operations should be frictionless.
+    return hasAnyPrefix(args, [
+      "doctor probe-openclaw",
+      "doctor fix-openclaw-path",
+      "doctor file read",
+      "doctor file write",
+      "doctor config-read",
+      "doctor config-upsert",
+      "doctor config-delete",
+      "doctor sessions-read",
+      "doctor sessions-upsert",
+      "doctor sessions-delete",
+    ]);
+  }
+  if (invoke.command === "openclaw") {
+    // Allow diagnostics and config self-heal commands without manual approval.
+    return hasAnyPrefix(args, [
+      "--version",
+      "doctor",
+      "gateway status",
+      "health",
+      "config get",
+      "config set",
+      "config delete",
+      "config unset",
+      "agents list",
+      "memory status",
+      "security audit",
+    ]);
+  }
+  return false;
+}
+
 export function useDoctorAgent() {
   const [connected, setConnected] = useState(false);
   const [bridgeConnected, setBridgeConnected] = useState(false);
@@ -22,7 +69,7 @@ export function useDoctorAgent() {
   const [pendingInvokes, setPendingInvokes] = useState<Map<string, DoctorInvoke>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [target, setTarget] = useState("local");
+  const [target, setTargetState] = useState("local");
   const [approvedPatterns, setApprovedPatterns] = useState<Set<string>>(new Set());
   const [fullAuto, setFullAuto] = useState(false);
 
@@ -37,11 +84,10 @@ export function useDoctorAgent() {
   const agentIdRef = useRef("main");
   // Locked at diagnosis start — immune to tab switching during diagnosis
   const targetRef = useRef("local");
+  const instanceScopeRef = useRef("local");
+  const domainRef = useRef<"doctor" | "install">("doctor");
   // Last connection params for reconnect
-  const lastUrlRef = useRef("");
-  const lastCredsRef = useRef<GatewayCredentials | undefined>(undefined);
-  // Bridge node ID registered on the gateway — used in agent prompt
-  const bridgeNodeIdRef = useRef("");
+  const wasConnectedRef = useRef(false);
 
   // Gate: only process invokes after startDiagnosis has been called.
   // Prevents stale invokes (replayed by the gateway on node reconnect)
@@ -55,21 +101,38 @@ export function useDoctorAgent() {
   useEffect(() => { fullAutoRef.current = fullAuto; }, [fullAuto]);
   const autoApproveRef = useRef<(invokeId: string) => Promise<void>>(null!);
 
+  const setTarget = useCallback((next: string) => {
+    const resolved = (next || "local").trim() || "local";
+    targetRef.current = resolved;
+    setTargetState(resolved);
+  }, []);
+
 
   useEffect(() => {
-    const unlisten = [
-      listen("doctor:connected", () => {
+    let disposed = false;
+    const unlistenFns: Array<() => void> = [];
+    const bind = async <T,>(event: string, handler: Parameters<typeof listen<T>>[1]) => {
+      const off = await listen<T>(event, handler);
+      if (disposed) {
+        off();
+        return;
+      }
+      unlistenFns.push(off);
+    };
+
+    void Promise.all([
+      bind("doctor:connected", () => {
         setConnected(true);
         setError(null);
       }),
-      listen<{ reason: string }>("doctor:disconnected", (e) => {
+      bind<{ reason: string }>("doctor:disconnected", (e) => {
         setConnected(false);
         setLoading(false);
         if (e.payload.reason && e.payload.reason !== "server closed") {
           setError(e.payload.reason);
         }
       }),
-      listen<{ text: string }>("doctor:chat-delta", (e) => {
+      bind<{ text: string }>("doctor:chat-delta", (e) => {
         if (!sessionActiveRef.current) return;
         const text = e.payload.text;
         // Skip empty deltas — the gateway sends them between tool calls
@@ -89,7 +152,7 @@ export function useDoctorAgent() {
           return [...prev, { id: nextMsgId(), role: "assistant", content: text }];
         });
       }),
-      listen<{ text: string }>("doctor:chat-final", (e) => {
+      bind<{ text: string }>("doctor:chat-final", (e) => {
         if (!sessionActiveRef.current) return;
         const text = e.payload.text || streamingRef.current;
         streamingRef.current = "";
@@ -110,13 +173,14 @@ export function useDoctorAgent() {
           return [...prev, { id: nextMsgId(), role: "assistant", content: text }];
         });
       }),
-      listen<DoctorInvoke>("doctor:invoke", (e) => {
+      bind<DoctorInvoke>("doctor:invoke", (e) => {
         // Ignore invokes arriving before diagnosis starts. Stale invokes
         // (replayed by gateway during reconnect) are rejected on the Rust side
         // after handshake completes — see bridge_client.rs connect().
         if (!sessionActiveRef.current) return;
 
         const invoke = e.payload;
+        const isSafeAuto = isDoctorAutoSafeInvoke(invoke, domainRef.current);
 
         // Deduplicate: gateway may send the same invoke twice
         setPendingInvokes((prev) => {
@@ -129,12 +193,24 @@ export function useDoctorAgent() {
           if (prev.some((m) => m.invoke?.id === invoke.id)) return prev; // already shown
           return [
             ...prev,
-            { id: nextMsgId(), role: "tool-call", content: invoke.command, invoke, status: isFullAuto ? "auto" : "pending" },
+            {
+              id: nextMsgId(),
+              role: "tool-call",
+              content: invoke.command,
+              invoke,
+              status: (isFullAuto || isSafeAuto) ? "auto" : "pending",
+            },
           ];
         });
 
         // Full-auto mode: approve everything immediately
         if (isFullAuto) {
+          autoApproveRef.current(invoke.id);
+          return;
+        }
+
+        // Explicit safe-list for doctor self-heal commands.
+        if (isSafeAuto) {
           autoApproveRef.current(invoke.id);
           return;
         }
@@ -148,7 +224,7 @@ export function useDoctorAgent() {
           // else: show in chat, wait for user to click Allow
         }
       }),
-      listen<{ id: string; result: unknown }>("doctor:invoke-result", (e) => {
+      bind<{ id: string; result: unknown }>("doctor:invoke-result", (e) => {
         const { id, result } = e.payload;
         setPendingInvokes((prev) => {
           if (!prev.has(id)) return prev; // already handled
@@ -159,34 +235,58 @@ export function useDoctorAgent() {
         // Deduplicate: only append result if we haven't already
         setMessages((prev) => {
           if (prev.some((m) => m.role === "tool-result" && m.invokeId === id)) return prev;
-          return [
-            ...prev,
-            { id: nextMsgId(), role: "tool-result" as const, content: JSON.stringify(result, null, 2), invokeResult: result, invokeId: id },
-          ];
+          const resultMsg = { id: nextMsgId(), role: "tool-result" as const, content: JSON.stringify(result, null, 2), invokeResult: result, invokeId: id };
+          const callIdx = prev.findIndex((m) => m.role === "tool-call" && m.invoke?.id === id);
+          if (callIdx === -1) {
+            return [...prev, resultMsg];
+          }
+          const next = [...prev];
+          next.splice(callIdx + 1, 0, resultMsg);
+          return next;
         });
         // Reset streaming for next assistant message
         streamingRef.current = "";
       }),
-      listen("doctor:bridge-connected", () => {
+      bind("doctor:bridge-connected", () => {
         setBridgeConnected(true);
       }),
-      listen<{ reason: string }>("doctor:bridge-disconnected", () => {
+      bind<{ reason: string }>("doctor:bridge-disconnected", () => {
         setBridgeConnected(false);
       }),
-      listen<{ message: string }>("doctor:error", (e) => {
-        setError(e.payload.message);
+      bind<{ message: string; code?: string }>("doctor:error", (e) => {
+        const code = e.payload.code?.trim();
+        const message = e.payload.message || "Unknown runtime error";
+        setError(code ? `[${code}] ${message}` : message);
         setLoading(false);
       }),
-    ];
+    ]).catch((err) => {
+      if (!disposed) {
+        setError(`Doctor listener setup failed: ${String(err)}`);
+      }
+    });
 
     return () => {
-      unlisten.forEach((p) => p.then((f) => f()));
+      disposed = true;
+      unlistenFns.forEach((off) => {
+        try {
+          off();
+        } catch {
+          // ignore listener teardown failures
+        }
+      });
     };
   }, []);
 
   const autoApprove = useCallback(async (invokeId: string) => {
     try {
-      await api.doctorApproveInvoke(invokeId, targetRef.current, sessionKeyRef.current, agentIdRef.current);
+      await api.doctorApproveInvoke(
+        invokeId,
+        targetRef.current,
+        instanceScopeRef.current,
+        sessionKeyRef.current,
+        agentIdRef.current,
+        domainRef.current,
+      );
       setMessages((prev) =>
         prev.map((m) => {
           if (m.invoke?.id === invokeId && m.role === "tool-call") {
@@ -203,33 +303,12 @@ export function useDoctorAgent() {
   }, []);
   autoApproveRef.current = autoApprove;
 
-  const connect = useCallback(async (url: string, credentials?: GatewayCredentials, autoPairHostId?: string) => {
+  const connect = useCallback(async () => {
     setError(null);
-    lastUrlRef.current = url;
-    lastCredsRef.current = credentials;
     try {
-      // Connect operator first (essential — for agent method + chat events)
-      await api.doctorConnect(url, credentials);
-
-      // Then connect as node (same URL, different role — for receiving tool calls)
-      try {
-        await api.doctorBridgeConnect(url, credentials);
-        bridgeNodeIdRef.current = await api.doctorBridgeNodeId();
-      } catch (bridgeErr) {
-        // Auto-fix NOT_PAIRED for bridge connection
-        if (autoPairHostId && String(bridgeErr).includes("NOT_PAIRED")) {
-          const approved = await api.doctorAutoPair(autoPairHostId);
-          if (approved > 0) {
-            await api.doctorBridgeConnect(url, credentials);
-            bridgeNodeIdRef.current = await api.doctorBridgeNodeId();
-          } else {
-            throw bridgeErr;
-          }
-        } else {
-          console.warn("Node connection failed (operator-only mode):", bridgeErr);
-          setError(`Node registration failed: ${bridgeErr}`);
-        }
-      }
+      await api.doctorConnect();
+      setBridgeConnected(true);
+      wasConnectedRef.current = true;
     } catch (err) {
       const msg = `Connection failed: ${err}`;
       setError(msg);
@@ -238,19 +317,14 @@ export function useDoctorAgent() {
   }, []);
 
   const reconnect = useCallback(async () => {
-    if (!lastUrlRef.current) {
+    if (!wasConnectedRef.current) {
       setError("No previous connection to reconnect to");
       return;
     }
     setError(null);
     try {
-      await api.doctorConnect(lastUrlRef.current, lastCredsRef.current);
-      try {
-        await api.doctorBridgeConnect(lastUrlRef.current, lastCredsRef.current);
-      } catch (bridgeErr) {
-        console.warn("Node reconnection failed:", bridgeErr);
-        setError(`Node registration failed: ${bridgeErr}`);
-      }
+      await api.doctorConnect();
+      setBridgeConnected(true);
     } catch (err) {
       setError(`Reconnect failed: ${err}`);
     }
@@ -258,7 +332,7 @@ export function useDoctorAgent() {
 
   const disconnect = useCallback(async () => {
     try {
-      await api.doctorDisconnect(); // Tauri command now closes both
+      await api.doctorDisconnect();
     } catch (err) {
       setError(`Disconnect failed: ${err}`);
     }
@@ -267,57 +341,70 @@ export function useDoctorAgent() {
     setLoading(false);
   }, []);
 
-  const startDiagnosis = useCallback(async (context: string, agentId = "main") => {
+  const startDiagnosis = useCallback(
+    async (
+      context: string,
+      agentId = "main",
+      instanceScope?: string,
+      instanceTransport: "local" | "docker_local" | "remote_ssh" = "local",
+      systemPrompt?: string,
+      domain: "doctor" | "install" = "doctor",
+    ) => {
     agentIdRef.current = agentId;
-    targetRef.current = target;
+    const scope = (instanceScope ?? targetRef.current ?? "local").trim() || "local";
+    const executionTarget = instanceTransport === "remote_ssh" ? scope : "local";
+    targetRef.current = executionTarget;
+    instanceScopeRef.current = scope;
+    setTargetState(executionTarget);
+    domainRef.current = domain;
     setLoading(true);
     setMessages([]);
     setPendingInvokes(new Map());
     streamingRef.current = "";
     streamEndedRef.current = false;
     // Fresh session key per diagnosis — no inherited stale state
-    sessionKeyRef.current = `agent:${agentId}:clawpal-doctor:${target}:${crypto.randomUUID()}`;
+    sessionKeyRef.current = `agent:${agentId}:clawpal-doctor:${instanceScopeRef.current}:${crypto.randomUUID()}`;
     sessionActiveRef.current = true;
     try {
-      const isRemote = target !== "local";
-      const lang = i18n.language?.startsWith("zh") ? "Chinese (简体中文)" : "English";
-      const nodeId = bridgeNodeIdRef.current;
-      const executionModel = [
-        "EXECUTION MODEL (critical — read carefully):",
-        "Architecture: You (agent) → ClawPal (node) → target machine.",
-        `ClawPal is registered as a node on this gateway with node name/id: "${nodeId}".`,
-        `To run commands on the target, use the nodes tool: nodes(action="run", node="${nodeId}", command=["your", "command", "here"])`,
-        `IMPORTANT: You MUST specify node="${nodeId}" — this routes the command through ClawPal to the target machine. Without it, commands may run on the wrong machine.`,
-        "BATCH COMMANDS: Each tool call requires a network round-trip and user approval. To minimize round-trips, chain related commands in a SINGLE call using && or ;. Example: command=[\"sh\",\"-c\",\"uname -a && cat /etc/os-release && openclaw --version\"] — this runs all three commands in one call instead of three separate calls.",
-        "Every result includes an 'executedOn' field — check it to confirm where the command ran.",
-        "If executedOn says 'connection lost', tell the user to reconnect in the Instance tab.",
-        "You CAN run commands on the target. Do NOT claim you cannot. Do NOT ask the user to run commands manually.",
-        "Do NOT use ssh, scp, or any remote access tool. Do NOT suggest node pairing.",
-        "gatewayProcessRunning: false on the target does NOT mean you cannot run commands — your connection goes through ClawPal, not the target's gateway.",
-        isRemote ? "Do NOT mention the host platform (macOS). Focus only on the target machine." : "",
-      ].filter(Boolean).join("\n");
-      const prompt = [
-        `You are ClawPal's diagnostic agent. Respond in ${lang}.`,
-        executionModel,
-        isRemote
-          ? `The target is a REMOTE machine (host ID: ${target}). All commands MUST go through the ClawPal node.`
-          : "The target is the local machine running the OpenClaw gateway.",
-        `\nSystem context from the target:\n${context}\n`,
-        "Start diagnosing immediately. Use tool calls right away — do NOT repeat or summarize the context back to the user.",
-      ].join("\n");
-      await api.doctorStartDiagnosis(prompt, sessionKeyRef.current, agentId);
+      const scope = instanceScopeRef.current;
+      let prompt: string;
+      if (systemPrompt) {
+        prompt = systemPrompt;
+      } else {
+        const lang = i18n.language?.startsWith("zh") ? "Chinese (简体中文)" : "English";
+        const transportLine =
+          instanceTransport === "docker_local"
+            ? `Current target transport is docker_local (instance: ${scope}).`
+            : instanceTransport === "remote_ssh"
+              ? `Current target transport is remote_ssh (instance: ${scope}).`
+              : "Current target transport is local.";
+        prompt = renderPromptTemplate(doctorStartPromptTemplate(), {
+          "{{language}}": lang,
+          "{{transport_line}}": transportLine,
+          "{{context}}": context,
+        });
+      }
+      if (domain === "install") {
+        await api.installStartSession(prompt, sessionKeyRef.current, agentId, scope);
+      } else {
+        await api.doctorStartDiagnosis(prompt, sessionKeyRef.current, agentId, scope);
+      }
     } catch (err) {
       setError(`Start diagnosis failed: ${err}`);
       setLoading(false);
     }
-  }, [target]);
+  }, []);
 
   const sendMessage = useCallback(async (message: string) => {
     setLoading(true);
     streamingRef.current = "";
     setMessages((prev) => [...prev, { id: nextMsgId(), role: "user", content: message }]);
     try {
-      await api.doctorSendMessage(message, sessionKeyRef.current, agentIdRef.current);
+      if (domainRef.current === "install") {
+        await api.installSendMessage(message, sessionKeyRef.current, agentIdRef.current, instanceScopeRef.current);
+      } else {
+        await api.doctorSendMessage(message, sessionKeyRef.current, agentIdRef.current, instanceScopeRef.current);
+      }
     } catch (err) {
       setError(`Send message failed: ${err}`);
       setLoading(false);
@@ -338,8 +425,20 @@ export function useDoctorAgent() {
       })
     );
     try {
-      await api.doctorApproveInvoke(invokeId, targetRef.current, sessionKeyRef.current, agentIdRef.current);
+      await api.doctorApproveInvoke(
+        invokeId,
+        targetRef.current,
+        instanceScopeRef.current,
+        sessionKeyRef.current,
+        agentIdRef.current,
+        domainRef.current,
+      );
     } catch (err) {
+      const text = String(err);
+      if (text.includes("No pending invoke with id")) {
+        // Already auto-approved/consumed; treat as idempotent success.
+        return;
+      }
       setError(`Approve failed: ${err}`);
     }
   }, []);

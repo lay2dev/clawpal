@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { explainAndBuildGuidanceError } from "./guidance";
 import type { ModelProfile } from "./types";
 import { profileToModelValue } from "./model-value";
 
@@ -7,15 +8,37 @@ export interface ActionContext {
   isRemote: boolean;
 }
 
+async function callWithLobsterGuidance<T>(
+  method: string,
+  ctx: ActionContext | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    throw await explainAndBuildGuidanceError({
+      method,
+      instanceId: ctx?.instanceId || "local",
+      transport: ctx?.isRemote ? "remote_ssh" : "local",
+      rawError: error,
+      emitEvent: true,
+    });
+  }
+}
+
 /** Resolve a profile ID to a "provider/model" string by loading profiles from local or remote. */
 async function resolveProfileToModelValue(
   profileId: string | undefined,
   ctx?: ActionContext,
 ): Promise<string | undefined> {
   if (!profileId || profileId === "__default__") return undefined;
-  const profiles: ModelProfile[] = ctx?.isRemote
-    ? await api.remoteListModelProfiles(ctx.instanceId)
-    : await api.listModelProfiles();
+  const profiles: ModelProfile[] = await callWithLobsterGuidance(
+    "resolveProfileToModelValue",
+    ctx,
+    () => (ctx?.isRemote
+      ? api.remoteListModelProfiles(ctx.instanceId)
+      : api.listModelProfiles()),
+  );
   const profile = profiles.find((p) => p.id === profileId);
   if (!profile) return profileId; // fallback: use raw string
   return profileToModelValue(profile);
@@ -68,9 +91,13 @@ const registry: Record<string, ActionDef> = {
         workspace = args.agentId as string;
       } else {
         // Read default workspace from config
-        const rawConfig = ctx?.isRemote
-          ? await api.remoteReadRawConfig(ctx.instanceId)
-          : await api.readRawConfig();
+        const rawConfig = await callWithLobsterGuidance(
+          "readRawConfig",
+          ctx,
+          () => (ctx?.isRemote
+            ? api.remoteReadRawConfig(ctx.instanceId)
+            : api.readRawConfig()),
+        );
         try {
           const cfg = JSON.parse(rawConfig);
           workspace = cfg?.agents?.defaults?.workspace ?? cfg?.agents?.default?.workspace;
@@ -78,9 +105,13 @@ const registry: Record<string, ActionDef> = {
         if (!workspace) {
           // Fallback: use workspace of first existing agent
           try {
-            const agents = ctx?.isRemote
-              ? await api.remoteListAgentsOverview(ctx.instanceId)
-              : await api.listAgentsOverview();
+            const agents = await callWithLobsterGuidance(
+              "listAgentsOverview",
+              ctx,
+              () => (ctx?.isRemote
+                ? api.remoteListAgentsOverview(ctx.instanceId)
+                : api.listAgentsOverview()),
+            );
             workspace = agents.find((a) => a.workspace)?.workspace;
           } catch { /* ignore */ }
         }
@@ -114,9 +145,13 @@ const registry: Record<string, ActionDef> = {
       const channelType = args.channelType as string;
       const peerId = args.peerId as string;
       // Read current bindings, add new binding, set full array
-      const bindings: unknown[] = ctx?.isRemote
-        ? await api.remoteListBindings(ctx.instanceId)
-        : await api.listBindings();
+      const bindings: unknown[] = await callWithLobsterGuidance(
+        "listBindings",
+        ctx,
+        () => (ctx?.isRemote
+          ? api.remoteListBindings(ctx.instanceId)
+          : api.listBindings()),
+      );
       // Remove existing binding for same channel+peer
       const filtered = (bindings as Array<Record<string, unknown>>).filter((b) => {
         const m = b.match as Record<string, unknown> | undefined;

@@ -5,6 +5,85 @@ use crate::config_io::read_openclaw_config;
 use crate::models::OpenClawPaths;
 use regex::Regex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoctorEngine {
+    ZeroClaw,
+}
+
+impl DoctorEngine {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ZeroClaw => "zeroclaw",
+        }
+    }
+}
+
+pub fn parse_engine(input: Option<String>) -> Result<DoctorEngine, String> {
+    let raw = input.unwrap_or_else(|| "zeroclaw".to_string());
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "zeroclaw" | "" => Ok(DoctorEngine::ZeroClaw),
+        other => Err(format!("Unsupported doctor engine: {other}")),
+    }
+}
+
+pub fn classify_engine_error(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+
+    // AUTH_EXPIRED: 401/403, invalid key, quota exceeded
+    if lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid_api_key")
+        || (lower.contains("403") && (lower.contains("forbidden") || lower.contains("quota")))
+        || (lower.contains("401") && !lower.contains("model:"))
+    {
+        return "AUTH_EXPIRED";
+    }
+
+    // REGISTRY_CORRUPT: registry parse/json errors
+    if (lower.contains("registry") || lower.contains("instances.json"))
+        && (lower.contains("parse")
+            || lower.contains("invalid json")
+            || lower.contains("deserialize"))
+    {
+        return "REGISTRY_CORRUPT";
+    }
+
+    // INSTANCE_ORPHANED: container not found
+    if lower.contains("no such container")
+        || (lower.contains("container")
+            && lower.contains("not found")
+            && !lower.contains("openclaw"))
+    {
+        return "INSTANCE_ORPHANED";
+    }
+
+    // Existing checks below (unchanged)
+    if lower.contains("api key not set")
+        || lower.contains("no compatible api key")
+        || lower.contains("no auth profiles configured")
+    {
+        return "CONFIG_MISSING";
+    }
+    if lower.contains("not_found_error") || (lower.contains("model:") && lower.contains("404")) {
+        return "MODEL_UNAVAILABLE";
+    }
+    if lower.contains("no such file")
+        || (lower.contains("not found")
+            && (lower.contains("file")
+                || lower.contains("directory")
+                || lower.contains("binary")
+                || lower.contains("command")
+                || lower.contains("executable")
+                || lower.contains("zeroclaw")
+                || lower.contains("openclaw")))
+        || lower.contains("failed to start")
+        || lower.contains("permission denied")
+    {
+        return "RUNTIME_UNREACHABLE";
+    }
+    "ENGINE_ERROR"
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DoctorIssue {
     pub id: String,
@@ -33,7 +112,10 @@ pub fn apply_auto_fixes(paths: &OpenClawPaths, issue_ids: &[String]) -> Vec<Stri
     if issue_ids.iter().any(|id| id == "field.agents") && current.get("agents").is_none() {
         let mut agents = serde_json::Map::new();
         let mut defaults = serde_json::Map::new();
-        defaults.insert("model".into(), Value::String("anthropic/claude-sonnet-4-5".into()));
+        defaults.insert(
+            "model".into(),
+            Value::String("anthropic/claude-sonnet-4-5".into()),
+        );
         agents.insert("defaults".into(), Value::Object(defaults));
         if let Value::Object(map) = &mut current {
             map.insert("agents".into(), Value::Object(agents));
@@ -43,7 +125,9 @@ pub fn apply_auto_fixes(paths: &OpenClawPaths, issue_ids: &[String]) -> Vec<Stri
 
     if issue_ids.iter().any(|id| id == "json.syntax") {
         if current.is_null() {
-            if let Ok(safe) = json5::from_str::<Value>("{\"agents\":{\"defaults\":{\"model\":\"anthropic/claude-sonnet-4-5\"}}}") {
+            if let Ok(safe) = json5::from_str::<Value>(
+                "{\"agents\":{\"defaults\":{\"model\":\"anthropic/claude-sonnet-4-5\"}}}",
+            ) {
                 current = safe;
                 fixed.push("json.syntax".into());
             }
@@ -56,7 +140,10 @@ pub fn apply_auto_fixes(paths: &OpenClawPaths, issue_ids: &[String]) -> Vec<Stri
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
-        gateway.insert("port".into(), Value::Number(serde_json::Number::from(18789_u64)));
+        gateway.insert(
+            "port".into(),
+            Value::Number(serde_json::Number::from(18789_u64)),
+        );
         if let Value::Object(map) = &mut current {
             map.insert("gateway".into(), Value::Object(gateway));
         }
@@ -144,5 +231,72 @@ pub fn run_doctor(paths: &OpenClawPaths) -> DoctorReport {
         ok: score >= 80,
         score: score.max(0) as u8,
         issues,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_auth_expired_401() {
+        assert_eq!(
+            classify_engine_error("HTTP 401 unauthorized"),
+            "AUTH_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn classify_auth_expired_403() {
+        assert_eq!(
+            classify_engine_error("403 forbidden: quota exceeded"),
+            "AUTH_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn classify_auth_expired_invalid_key() {
+        assert_eq!(
+            classify_engine_error("invalid api key provided"),
+            "AUTH_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn classify_registry_corrupt() {
+        assert_eq!(
+            classify_engine_error("registry parse error: invalid json at line 5"),
+            "REGISTRY_CORRUPT"
+        );
+    }
+
+    #[test]
+    fn classify_instance_orphaned_container() {
+        assert_eq!(
+            classify_engine_error("Error: no such container: abc123"),
+            "INSTANCE_ORPHANED"
+        );
+    }
+
+    #[test]
+    fn classify_instance_orphaned_not_found() {
+        assert_eq!(
+            classify_engine_error("container def456 not found"),
+            "INSTANCE_ORPHANED"
+        );
+    }
+
+    // Ensure existing patterns still work
+    #[test]
+    fn classify_config_missing_still_works() {
+        assert_eq!(classify_engine_error("api key not set"), "CONFIG_MISSING");
+    }
+
+    #[test]
+    fn classify_model_unavailable_still_works() {
+        assert_eq!(
+            classify_engine_error("not_found_error for resource"),
+            "MODEL_UNAVAILABLE"
+        );
     }
 }

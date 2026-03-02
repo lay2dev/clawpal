@@ -33,6 +33,7 @@ import {
 
 const DOW_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DOW_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const WATCHDOG_LATE_GRACE_MS = 5 * 60 * 1000;
 
 function cronToHuman(expr: string, t: TFunction, lang: string): string {
   const parts = expr.trim().split(/\s+/);
@@ -93,6 +94,16 @@ function fmtDur(ms: number, t: TFunction): string {
   if (ms < 1000) return `${ms}ms`;
   const s = Math.round(ms / 1000);
   return s < 60 ? t("cron.durSecs", { count: s }) : t("cron.durMins", { m: Math.floor(s / 60), s: s % 60 });
+}
+
+function watchdogJobLikelyLate(job: { lastScheduledAt?: string; lastRunAt?: string | null } | undefined): boolean {
+  if (!job?.lastScheduledAt) return false;
+  const scheduledAt = Date.parse(job.lastScheduledAt);
+  if (!Number.isFinite(scheduledAt)) return false;
+  const runAt = job.lastRunAt ? Date.parse(job.lastRunAt) : Number.NaN;
+  const missedThisSchedule = !Number.isFinite(runAt) || runAt + 1000 < scheduledAt;
+  const overdue = Date.now() - scheduledAt > WATCHDOG_LATE_GRACE_MS;
+  return missedThisSchedule && overdue;
 }
 
 
@@ -264,7 +275,9 @@ export function Cron() {
             const st = job.state || {};
             const expanded = expandedJob === jobId;
             const jobName = job.name || jobId;
-            const wdStatus = watchdog?.jobs?.[jobId]?.status;
+            const wdJob = watchdog?.jobs?.[jobId];
+            const wdStatus = wdJob?.status;
+            const likelyLate = watchdogJobLikelyLate(wdJob);
 
             return (
               <div key={jobId} className={cn("rounded-lg border bg-card text-card-foreground px-3 transition-colors", expanded && "ring-1 ring-ring")}>
@@ -276,8 +289,9 @@ export function Cron() {
                     {/* Status dot */}
                     <span className={cn("w-2 h-2 rounded-full shrink-0",
                       job.enabled === false ? "bg-muted-foreground/40"
-                        : wdStatus === "escalated" ? "bg-red-400"
+                        : likelyLate ? "bg-red-400"
                         : wdStatus === "retrying" || wdStatus === "pending" ? "bg-yellow-500"
+                        : st.lastStatus === "error" ? "bg-yellow-500"
                         : "bg-emerald-500"
                     )} />
 
