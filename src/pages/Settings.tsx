@@ -172,6 +172,7 @@ export function Settings({
   globalMode = false,
   section = "all",
   onOpenDoctor,
+  onNavigateToProfiles,
 }: {
   onDataChange?: () => void;
   hasAppUpdate?: boolean;
@@ -179,6 +180,7 @@ export function Settings({
   globalMode?: boolean;
   section?: "all" | "profiles" | "preferences";
   onOpenDoctor?: () => void;
+  onNavigateToProfiles?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const ua = useApi();
@@ -758,7 +760,17 @@ export function Settings({
                   )}
                   {zeroclawModelCandidates.length === 0 && !zeroclawSaving && (
                     <p className="text-xs text-muted-foreground basis-full mt-1">
-                      {t("settings.zeroclawNoProfiles")}
+                      {onNavigateToProfiles ? (
+                        <button
+                          type="button"
+                          className="underline hover:text-foreground transition-colors"
+                          onClick={onNavigateToProfiles}
+                        >
+                          {t("settings.zeroclawNoProfilesLink")}
+                        </button>
+                      ) : (
+                        t("settings.zeroclawNoProfiles")
+                      )}
                     </p>
                   )}
                   <div className="ml-auto text-right text-xs text-muted-foreground min-w-[240px]">
