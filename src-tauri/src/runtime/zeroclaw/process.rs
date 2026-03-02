@@ -843,7 +843,7 @@ pub fn run_zeroclaw_message(
     ];
     // Per-session model override takes priority over global preference.
     let preferred_model =
-        crate::commands::preferences::lookup_session_model_override(session_scope)
+        crate::commands::preferences::lookup_session_model_override(instance_id)
             .or_else(|| crate::commands::load_zeroclaw_model_preference());
     let provider_order = provider_order_for_runtime(&env_pairs, preferred_model.as_deref());
     if provider_order.is_empty() {
@@ -865,7 +865,7 @@ pub fn run_zeroclaw_message(
         let session_usage =
             parse_usage_from_text(&stdout).or_else(|| parse_usage_from_text(&stderr));
         if let Some((prompt, completion, _total)) = session_usage {
-            record_session_usage(session_scope, prompt, completion);
+            record_session_usage(instance_id, prompt, completion);
         }
         if session_usage.is_none() {
             if let Ok(mut stats) = usage_store().lock() {
@@ -878,7 +878,7 @@ pub fn run_zeroclaw_message(
                     stats.total_tokens = stats.total_tokens.saturating_add(total);
                     stats.last_updated_ms = now_ms();
                     // Record per-session usage from traces as well.
-                    record_session_usage(session_scope, prompt, completion);
+                    record_session_usage(instance_id, prompt, completion);
                 }
             }
         }
