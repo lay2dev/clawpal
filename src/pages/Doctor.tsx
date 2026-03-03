@@ -378,18 +378,21 @@ export function Doctor({
   };
 
   const exportLogs = () => {
-    if (!logsContent) return;
+    const content = logsContent || logsError || t("doctor.noLogs");
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `${logsSource}-${logsTab}-${timestamp}.log`;
-    const blob = new Blob([logsContent], { type: "text/plain" });
+    const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
+    a.style.display = "none";
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 0);
   };
 
   const refreshRescueStatus = async (isCancelled?: () => boolean) => {
@@ -1319,7 +1322,7 @@ export function Doctor({
               variant="outline"
               size="sm"
               onClick={exportLogs}
-              disabled={!logsContent}
+              disabled={logsLoading}
             >
               <DownloadIcon className="h-3.5 w-3.5 mr-1.5" />
               {t("doctor.exportLogs")}
