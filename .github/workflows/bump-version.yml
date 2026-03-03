@@ -1,0 +1,90 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: 'Custom version (only used when bump_type is "custom", e.g. 1.0.0-beta.1)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Determine new version
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.bump_type }}" = "custom" ]; then
+            NEW="${{ inputs.custom_version }}"
+            if [ -z "$NEW" ]; then
+              echo "::error::custom_version is required when bump_type is 'custom'"
+              exit 1
+            fi
+            # Basic semver validation (allows pre-release and build metadata)
+            if ! echo "$NEW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+              echo "::error::Invalid version format: $NEW (expected semver, e.g. 1.2.3 or 1.0.0-beta.1)"
+              exit 1
+            fi
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT%%-*}"
+            case "${{ inputs.bump_type }}" in
+              major) NEW="$((MAJOR + 1)).0.0" ;;
+              minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+              patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            esac
+          fi
+
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "### Version bump: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update package.json
+        run: |
+          npm version "${{ steps.version.outputs.new }}" --no-git-tag-version
+
+      - name: Update src-tauri/Cargo.toml
+        run: |
+          sed -i "0,/^version = \".*\"/s//version = \"${{ steps.version.outputs.new }}\"/" src-tauri/Cargo.toml
+
+      - name: Update Cargo.lock
+        run: |
+          cd src-tauri && cargo update -p clawpal --precise "${{ steps.version.outputs.new }}" 2>/dev/null || true
+          cd .. && cargo generate-lockfile 2>/dev/null || true
+
+      - name: Commit, tag, and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
+
+          NEW="${{ steps.version.outputs.new }}"
+          git commit -m "chore: bump version to ${NEW}"
+          git tag "v${NEW}"
+          git push origin HEAD --follow-tags
