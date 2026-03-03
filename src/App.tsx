@@ -72,6 +72,7 @@ const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor
 const OPEN_TABS_STORAGE_KEY = "clawpal_open_tabs";
 const WATCHDOG_LATE_GRACE_MS = 5 * 60 * 1000;
 const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
+const CHAT_PANEL_WIDTH = 380;
 
 interface ToastItem {
   id: number;
@@ -205,6 +206,7 @@ export function App() {
   const [lastInstanceRoute, setLastInstanceRoute] = useState<Route>("home");
   const [startSection, setStartSection] = useState<"overview" | "profiles" | "settings">("overview");
   const [inStart, setInStart] = useState(true);
+  const chatPanelRightOffset = chatOpen && !inStart ? `${CHAT_PANEL_WIDTH + 20}px` : "1.25rem";
 
   // Workspace tabs — persisted to localStorage
   const [openTabIds, setOpenTabIds] = useState<string[]>(() => {
@@ -1752,7 +1754,10 @@ export function App() {
     )}
 
     {showZeroclawDoctorFab && (
-      <div className="fixed bottom-5 right-5 z-[60] flex flex-col items-end gap-2">
+      <div
+        className="fixed bottom-5 z-[60] flex flex-col items-end gap-2"
+        style={{ right: chatPanelRightOffset }}
+      >
         {agentGuidanceOpen && (
           <GuidanceCard
             guidance={agentGuidance}

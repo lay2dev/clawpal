@@ -245,9 +245,15 @@ pub async fn remote_test_model_profile(
     }
 
     let api_key = resolve_remote_profile_api_key(&pool, &host_id, &profile).await?;
-    if api_key.trim().is_empty() {
+    if api_key.trim().is_empty() && !provider_supports_optional_api_key(&profile.provider) {
+        let provider = profile.provider.trim().to_ascii_lowercase();
+        let hint = if provider == "anthropic" {
+            " For Claude setup-token, also try exporting ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN on the remote host."
+        } else {
+            ""
+        };
         return Err(
-            "No API key resolved for this remote profile. Set apiKey directly, configure auth_ref in remote auth store (auth-profiles.json/auth.json), or export auth_ref on remote shell.".into(),
+            format!("No API key resolved for this remote profile. Set apiKey directly, configure auth_ref in remote auth store (auth-profiles.json/auth.json), or export auth_ref on remote shell.{hint}"),
         );
     }
 
@@ -679,11 +685,21 @@ pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult
 }
 
 #[tauri::command]
-pub fn upsert_model_profile(mut profile: ModelProfile) -> Result<ModelProfile, String> {
-    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    profile =
-        clawpal_core::profile::upsert_profile(&openclaw, profile).map_err(|e| e.to_string())?;
-    Ok(profile)
+pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, String> {
+    let paths = resolve_paths();
+    let path = model_profiles_path(&paths);
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
+    let (saved, next_json) = clawpal_core::profile::upsert_profile_in_storage_json(
+        &content, profile,
+    )
+    .map_err(|e| e.to_string())?;
+    crate::config_io::write_text(&path, &next_json)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -704,20 +720,33 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
     }
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
+    let global_base = local_global_openclaw_base_dir();
 
     // 1. Check openclaw config auth profiles
     if let Some(auth_ref) = resolve_auth_ref_for_provider(&cfg, provider_trimmed) {
-        return Ok(ProviderAuthSuggestion {
-            auth_ref: Some(auth_ref),
-            has_key: true,
-            source: "openclaw auth profile".into(),
-        });
+        let probe_profile = ModelProfile {
+            id: "provider-auth-probe".into(),
+            name: "provider-auth-probe".into(),
+            provider: provider_trimmed.to_string(),
+            model: "probe".into(),
+            auth_ref: auth_ref.clone(),
+            api_key: None,
+            base_url: None,
+            description: None,
+            enabled: true,
+        };
+        let key = resolve_profile_api_key(&probe_profile, &global_base);
+        if !key.trim().is_empty() {
+            return Ok(ProviderAuthSuggestion {
+                auth_ref: Some(auth_ref),
+                has_key: true,
+                source: "openclaw auth profile".into(),
+            });
+        }
     }
 
     // 2. Check env vars
-    let provider_upper = provider_trimmed.to_uppercase().replace('-', "_");
-    for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-        let env_name = format!("{provider_upper}{suffix}");
+    for env_name in provider_env_var_candidates(provider_trimmed) {
         if std::env::var(&env_name)
             .map(|v| !v.trim().is_empty())
             .unwrap_or(false)
@@ -732,7 +761,6 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
 
     // 3. Check existing model profiles for this provider
     let profiles = load_model_profiles(&paths);
-    let global_base = local_global_openclaw_base_dir();
     for p in &profiles {
         if p.provider.eq_ignore_ascii_case(provider_trimmed) {
             let key = resolve_profile_api_key(p, &global_base);
@@ -790,9 +818,15 @@ pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
 
     let global_base = local_global_openclaw_base_dir();
     let api_key = resolve_profile_api_key(&profile, &global_base);
-    if api_key.trim().is_empty() {
+    if api_key.trim().is_empty() && !provider_supports_optional_api_key(&profile.provider) {
+        let provider = profile.provider.trim().to_ascii_lowercase();
+        let hint = if provider == "anthropic" {
+            " For Claude setup-token, also try exporting ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN."
+        } else {
+            ""
+        };
         return Err(
-            "No API key resolved for this profile. Set apiKey directly, configure auth_ref in auth store (auth-profiles.json/auth.json), or export auth_ref on local shell.".into(),
+            format!("No API key resolved for this profile. Set apiKey directly, configure auth_ref in auth store (auth-profiles.json/auth.json), or export auth_ref on local shell.{hint}"),
         );
     }
 

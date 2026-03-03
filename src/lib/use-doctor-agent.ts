@@ -584,8 +584,10 @@ export function useDoctorAgent() {
       const restored = restoreDoctorMessagesFromCache(context);
       const restoredMessages = restored?.messages ?? [];
       const restoredSessionId = restored?.openclawSessionId;
-      setMessages(restoredMessages);
-      persistDoctorMessages(restoredMessages);
+      if (restoredMessages.length > 0) {
+        setMessages(restoredMessages);
+        persistDoctorMessages(restoredMessages);
+      }
       openclawSessionIdRef.current = restoredSessionId;
       if (restored?.sessionKey) {
         sessionKeyRef.current = restored.sessionKey;
@@ -794,8 +796,57 @@ export function useDoctorAgent() {
     }
   }, []);
 
+  const restoreFromCache = useCallback((params?: {
+    agentId?: string;
+    instanceScope?: string;
+    domain?: "doctor" | "install";
+    engine?: DoctorEngineMode;
+  }): boolean => {
+    const nextAgentId = (params?.agentId ?? agentIdRef.current ?? "main").trim() || "main";
+    const nextScope = (params?.instanceScope ?? instanceScopeRef.current ?? "local").trim() || "local";
+    const nextDomain = params?.domain ?? domainRef.current;
+    const nextEngine = params?.engine ?? engineRef.current;
+
+    agentIdRef.current = nextAgentId;
+    instanceScopeRef.current = nextScope;
+    domainRef.current = nextDomain;
+    engineRef.current = nextEngine;
+
+    const context: DoctorSessionContext = {
+      instanceScope: nextScope,
+      agentId: nextAgentId,
+      domain: nextDomain,
+      engine: nextEngine,
+    };
+    const restored = restoreDoctorMessagesFromCache(context);
+    const restoredMessages = restored?.messages ?? [];
+    if (restoredMessages.length === 0) {
+      return false;
+    }
+
+    setMessages(restoredMessages);
+    setPendingInvokes(new Map());
+    setLoading(false);
+    setError(null);
+    // Restoring cached diagnosis means there was a live session in this scope.
+    // Keep the UI in connected mode after tab switches/remounts.
+    setConnected(true);
+    setBridgeConnected(nextEngine === "zeroclaw");
+    wasConnectedRef.current = true;
+    streamingRef.current = "";
+    streamEndedRef.current = false;
+    sessionActiveRef.current = false;
+    openclawSessionIdRef.current = restored?.openclawSessionId ?? undefined;
+    if (restored?.sessionKey) {
+      sessionKeyRef.current = restored.sessionKey;
+    }
+    persistDoctorMessages(restoredMessages);
+    return true;
+  }, [persistDoctorMessages, restoreDoctorMessagesFromCache]);
+
   const reset = useCallback(() => {
     sessionActiveRef.current = false;
+    wasConnectedRef.current = false;
     setMessages([]);
     setPendingInvokes(new Map());
     setLoading(false);
@@ -827,6 +878,7 @@ export function useDoctorAgent() {
     sendMessage,
     approveInvoke,
     rejectInvoke,
+    restoreFromCache,
     reset,
   };
 }

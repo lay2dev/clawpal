@@ -65,6 +65,16 @@ const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const ENABLE_PROFILE_TEST_BUTTON = true;
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
+const PROVIDER_FALLBACK_OPTIONS = [
+  "openai",
+  "openai-codex",
+  "anthropic",
+  "openrouter",
+  "ollama",
+  "lmstudio",
+  "localai",
+  "vllm",
+];
 
 function emptyForm(): ProfileForm {
   return {
@@ -76,6 +86,19 @@ function emptyForm(): ProfileForm {
     baseUrl: "",
     enabled: true,
   };
+}
+
+function providerSupportsOptionalApiKey(provider: string): boolean {
+  const lower = provider.trim().toLowerCase();
+  return [
+    "ollama",
+    "lmstudio",
+    "lm-studio",
+    "localai",
+    "vllm",
+    "llamacpp",
+    "llama.cpp",
+  ].includes(lower);
 }
 
 function AutocompleteField({
@@ -185,6 +208,7 @@ export function Settings({
   const [zeroclawTarget, setZeroclawTarget] = useState<ZeroclawRuntimeTarget | null>(null);
   const [zeroclawTargetLoading, setZeroclawTargetLoading] = useState(true);
   const [showZeroclawDoctorUi, setShowZeroclawDoctorUi] = useState(false);
+  const [showRescueBotUi, setShowRescueBotUi] = useState(false);
   const zeroclawPrefsLoadedRef = useRef(false);
   const zeroclawLastSavedRef = useRef("");
 
@@ -296,6 +320,7 @@ export function Settings({
 
         const nextShowZeroclawUi = Boolean(prefs.showZeroclawDoctorUi);
         setShowZeroclawDoctorUi(nextShowZeroclawUi);
+        setShowRescueBotUi(Boolean(prefs.showRescueBotUi));
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
@@ -419,6 +444,22 @@ export function Settings({
     return found?.models || [];
   }, [catalog, form.provider]);
 
+  const providerCandidates = useMemo(() => {
+    const set = new Set<string>();
+    for (const provider of PROVIDER_FALLBACK_OPTIONS) {
+      if (provider.trim()) set.add(provider);
+    }
+    for (const item of catalog) {
+      const provider = item.provider.trim();
+      if (provider) set.add(provider);
+    }
+    for (const profile of profiles || []) {
+      const provider = profile.provider.trim();
+      if (provider) set.add(provider);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [catalog, profiles]);
+
   const zeroclawModelCandidates = useMemo(() => {
     const fromProfiles = (profiles || [])
       .filter((profile) => profile.enabled)
@@ -433,7 +474,8 @@ export function Settings({
       setMessage(t('settings.providerModelRequired'));
       return;
     }
-    if (!ua.isRemote && !form.apiKey && !form.id && !authSuggestion?.hasKey) {
+    const apiKeyOptional = form.useCustomUrl || providerSupportsOptionalApiKey(form.provider);
+    if (!ua.isRemote && !form.apiKey && !form.id && !authSuggestion?.hasKey && !apiKeyOptional) {
       setMessage(t('settings.apiKeyRequired'));
       return;
     }
@@ -584,6 +626,19 @@ export function Settings({
         setShowZeroclawDoctorUi((current) => !current);
         const errorText = e instanceof Error ? e.message : String(e);
         toast.error(t("settings.zeroclawDoctorUiSaveFailed", { error: errorText }));
+      });
+  }, [t, ua]);
+
+  const handleRescueBotUiToggle = useCallback((nextChecked: boolean) => {
+    setShowRescueBotUi(nextChecked);
+    ua.setRescueBotUiPreference(nextChecked)
+      .then((prefs) => {
+        setShowRescueBotUi(Boolean(prefs.showRescueBotUi));
+      })
+      .catch((e) => {
+        setShowRescueBotUi((current) => !current);
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.rescueBotUiSaveFailed", { error: errorText }));
       });
   }, [t, ua]);
 
@@ -926,6 +981,18 @@ export function Settings({
                       <p className="text-xs text-muted-foreground">
                         {t("settings.alphaEnableZeroclawUiHint")}
                       </p>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <Label className="text-sm font-medium">{t("settings.alphaEnableRescueBotUi")}</Label>
+                        <Checkbox
+                          checked={showRescueBotUi}
+                          onCheckedChange={(checked) => handleRescueBotUiToggle(checked === true)}
+                          aria-label={t("settings.alphaEnableRescueBotUi")}
+                          className="h-5 w-5"
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t("settings.alphaEnableRescueBotUiHint")}
+                      </p>
                     </div>
                   </details>
                 </CardContent>
@@ -955,9 +1022,9 @@ export function Settings({
                   setForm((p) => ({ ...p, provider: val, model: "" }))
                 }
                 onFocus={ensureCatalog}
-                options={catalog.map((c) => ({
-                  value: c.provider,
-                  label: c.provider,
+                options={providerCandidates.map((provider) => ({
+                  value: provider,
+                  label: provider,
                 }))}
                 placeholder="e.g. openai"
               />
@@ -983,7 +1050,11 @@ export function Settings({
               <Label>{t('settings.apiKey')}</Label>
               <Input
                 type="password"
-                placeholder={form.id ? t('settings.apiKeyUnchanged') : authSuggestion?.hasKey ? t('settings.apiKeyOptional') : t('settings.apiKeyPlaceholder')}
+                placeholder={form.id
+                  ? t('settings.apiKeyUnchanged')
+                  : (authSuggestion?.hasKey || form.useCustomUrl || providerSupportsOptionalApiKey(form.provider))
+                    ? t('settings.apiKeyOptional')
+                    : t('settings.apiKeyPlaceholder')}
                 value={form.apiKey}
                 onChange={(e) =>
                   setForm((p) => ({ ...p, apiKey: e.target.value }))

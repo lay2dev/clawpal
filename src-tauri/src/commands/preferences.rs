@@ -13,6 +13,8 @@ pub struct AppPreferences {
     pub zeroclaw_model: Option<String>,
     #[serde(default)]
     pub show_zeroclaw_doctor_ui: bool,
+    #[serde(default)]
+    pub show_rescue_bot_ui: bool,
 }
 
 fn app_preferences_path(paths: &OpenClawPaths) -> std::path::PathBuf {
@@ -65,6 +67,15 @@ pub fn set_zeroclaw_doctor_ui_preference(show_ui: bool) -> Result<AppPreferences
     let paths = resolve_paths();
     let mut prefs = load_app_preferences_from_paths(&paths);
     prefs.show_zeroclaw_doctor_ui = show_ui;
+    save_app_preferences_from_paths(&paths, &prefs)?;
+    Ok(prefs)
+}
+
+#[tauri::command]
+pub fn set_rescue_bot_ui_preference(show_ui: bool) -> Result<AppPreferences, String> {
+    let paths = resolve_paths();
+    let mut prefs = load_app_preferences_from_paths(&paths);
+    prefs.show_rescue_bot_ui = show_ui;
     save_app_preferences_from_paths(&paths, &prefs)?;
     Ok(prefs)
 }

@@ -169,12 +169,14 @@ export function Doctor({
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState("");
   const [showZeroclawDiagnosis, setShowZeroclawDiagnosis] = useState(false);
+  const [showRescueBotUi, setShowRescueBotUi] = useState(false);
   const [zeroclawDoctorUiLoaded, setZeroclawDoctorUiLoaded] = useState(false);
   const logsContentRef = useRef<HTMLPreElement>(null);
   const [rescueState, setRescueState] = useState<RescueUiState>(createInitialRescueUiState);
   const [primaryState, setPrimaryState] = useState<PrimaryRecoveryState>(createInitialPrimaryRecoveryState);
   const [activeDiagnosisEngine, setActiveDiagnosisEngine] = useState<"openclaw" | "zeroclaw" | null>(null);
   const lastAutoLaunchKeyRef = useRef<string | null>(null);
+  const lastDoctorTargetKeyRef = useRef<string | null>(null);
   const agentSourceLabel = showZeroclawDiagnosis
     ? t("doctor.engineZeroclaw")
     : t("installChat.letAiHelp");
@@ -227,14 +229,48 @@ export function Doctor({
   // - local/docker: execute on local machine
   // - remote ssh: execute on selected remote host
   useEffect(() => {
-    doctor.reset();
-    doctor.disconnect();
-    setActiveDiagnosisEngine(null);
-    setRescueState(createInitialRescueUiState());
-    setPrimaryState(createInitialPrimaryRecoveryState());
+    const restoreScope = isRemote
+      ? instanceId
+      : isDocker
+        ? instanceId
+        : "local";
+    const targetKey = `${isRemote ? "remote" : isDocker ? "docker" : "local"}:${restoreScope}`;
+    if (
+      lastDoctorTargetKeyRef.current
+      && lastDoctorTargetKeyRef.current !== targetKey
+    ) {
+      doctor.reset();
+      void doctor.disconnect();
+      setActiveDiagnosisEngine(null);
+      setRescueState(createInitialRescueUiState());
+      setPrimaryState(createInitialPrimaryRecoveryState());
+    }
+    lastDoctorTargetKeyRef.current = targetKey;
+
     doctor.setTarget(isRemote ? instanceId : "local");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doctor.setTarget, instanceId, isRemote]);
+    const restored = doctor.restoreFromCache({
+      agentId: "main",
+      instanceScope: restoreScope,
+      domain: "doctor",
+      engine: "zeroclaw",
+    });
+    if (!restored) {
+      doctor.restoreFromCache({
+        agentId: "main",
+        instanceScope: restoreScope,
+        domain: "doctor",
+        engine: "openclaw",
+      });
+    }
+  }, [
+    doctor.disconnect,
+    doctor.reset,
+    doctor.restoreFromCache,
+    doctor.setTarget,
+    instanceId,
+    isDocker,
+    isRemote,
+  ]);
 
   // Fetch runtime target model for TokenBadge / ModelSwitcher.
   useEffect(() => {
@@ -725,13 +761,13 @@ export function Doctor({
 
   useEffect(() => {
     let cancelled = false;
-    if (!showZeroclawDiagnosis) return;
+    if (!showRescueBotUi) return;
     void refreshRescueStatus(() => cancelled);
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId, isRemote, isConnected, showZeroclawDiagnosis]);
+  }, [instanceId, isRemote, isConnected, showRescueBotUi]);
 
   useEffect(() => {
     if (!active || !launchGuidance || !zeroclawDoctorUiLoaded) return;
@@ -779,11 +815,13 @@ export function Doctor({
         .then((prefs) => {
           if (!cancelled) {
             setShowZeroclawDiagnosis(Boolean(prefs.showZeroclawDoctorUi));
+            setShowRescueBotUi(Boolean(prefs.showRescueBotUi));
           }
         })
         .catch(() => {
           if (!cancelled) {
             setShowZeroclawDiagnosis(false);
+            setShowRescueBotUi(false);
           }
         })
         .finally(() => {
@@ -809,8 +847,7 @@ export function Doctor({
     ua.listBackups().then(setBackups).catch((e) => console.error("Failed to load backups:", e));
   }, [ua]);
   useEffect(refreshBackups, [refreshBackups]);
-  // Rescue Bot is an alpha feature, shown only when alpha mode is enabled.
-  const showLegacyRecoveryCards = showZeroclawDiagnosis;
+  const showRescueBotCards = showRescueBotUi;
   const isWsl2 = instanceId.startsWith("wsl2:");
   const displayedDoctorTarget = isRemote || isDocker || isWsl2 ? instanceId : "local";
   const instanceTypeLabel = isRemote
@@ -1018,7 +1055,7 @@ export function Doctor({
           </CardContent>
         </Card>
 
-        {showLegacyRecoveryCards && (
+        {showRescueBotCards && (
           <Card className="mb-4 gap-2 py-4">
             <CardHeader className="pb-0">
               <CardTitle className="text-base">{t("doctor.rescueBotTitle")}</CardTitle>

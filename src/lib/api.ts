@@ -16,6 +16,8 @@ export const api = {
     invoke("set_zeroclaw_model_preference", { model }),
   setZeroclawDoctorUiPreference: (showUi: boolean): Promise<AppPreferences> =>
     invoke("set_zeroclaw_doctor_ui_preference", { showUi }),
+  setRescueBotUiPreference: (showUi: boolean): Promise<AppPreferences> =>
+    invoke("set_rescue_bot_ui_preference", { showUi }),
   explainOperationError: (
     instanceId: string,
     operation: string,

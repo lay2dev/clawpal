@@ -3228,12 +3228,23 @@ fn truncate_error_text(input: &str, max_chars: usize) -> String {
 
 const MAX_ERROR_SNIPPET_CHARS: usize = 280;
 
+pub(crate) fn provider_supports_optional_api_key(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "ollama" | "lmstudio" | "lm-studio" | "localai" | "vllm" | "llamacpp" | "llama.cpp"
+    )
+}
+
 fn default_base_url_for_provider(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "openai" | "openai-codex" | "github-copilot" | "copilot" => {
             Some("https://api.openai.com/v1")
         }
         "openrouter" => Some("https://openrouter.ai/api/v1"),
+        "ollama" => Some("http://127.0.0.1:11434/v1"),
+        "lmstudio" | "lm-studio" => Some("http://127.0.0.1:1234/v1"),
+        "localai" => Some("http://127.0.0.1:8080/v1"),
+        "vllm" => Some("http://127.0.0.1:8000/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "deepseek" => Some("https://api.deepseek.com/v1"),
         "xai" | "grok" => Some("https://api.x.ai/v1"),
@@ -3252,6 +3263,7 @@ fn run_provider_probe(
 ) -> Result<(), String> {
     let provider_trimmed = provider.trim().to_string();
     let mut model_trimmed = model.trim().to_string();
+    let lower = provider_trimmed.to_ascii_lowercase();
     if provider_trimmed.is_empty() || model_trimmed.is_empty() {
         return Err("provider and model are required".into());
     }
@@ -3265,7 +3277,7 @@ fn run_provider_probe(
             return Err("model is empty after provider prefix normalization".into());
         }
     }
-    if api_key.trim().is_empty() {
+    if api_key.trim().is_empty() && !provider_supports_optional_api_key(&provider_trimmed) {
         return Err("API key is not configured for this profile".into());
     }
 
@@ -3286,36 +3298,56 @@ fn run_provider_probe(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
-    let lower = provider_trimmed.to_ascii_lowercase();
     let auth_kind = infer_auth_kind(&provider_trimmed, api_key.trim(), InternalAuthKind::ApiKey);
     let looks_like_claude_model = model_trimmed.to_ascii_lowercase().contains("claude");
     let use_anthropic_probe_for_openai_codex =
         lower == "openai-codex" && looks_like_claude_model;
     let response = if lower == "anthropic" || use_anthropic_probe_for_openai_codex {
+        let normalized_model = model_trimmed
+            .rsplit('/')
+            .next()
+            .unwrap_or(model_trimmed.as_str())
+            .to_string();
         let url = format!("{}/messages", resolved_base);
-        let mut req = client
-            .post(&url)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json");
-        req = match auth_kind {
-            InternalAuthKind::Authorization => {
-                req.header("Authorization", format!("Bearer {}", api_key.trim()))
-            }
-            InternalAuthKind::ApiKey => req.header("x-api-key", api_key.trim()),
-        };
-        req.json(&serde_json::json!({
-            "model": model_trimmed,
+        let payload = serde_json::json!({
+            "model": normalized_model,
             "max_tokens": 1,
             "stream": true,
             "messages": [{"role": "user", "content": "ping"}]
-        }))
-        .send()
-        .map_err(|e| format!("Provider request failed: {e}"))?
+        });
+        let build_request = |use_bearer: bool| -> Result<reqwest::blocking::Response, String> {
+            let mut req = client
+                .post(&url)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json");
+            req = if use_bearer {
+                req.header("Authorization", format!("Bearer {}", api_key.trim()))
+            } else {
+                req.header("x-api-key", api_key.trim())
+            };
+            req.json(&payload)
+                .send()
+                .map_err(|e| format!("Provider request failed: {e}"))
+        };
+        let mut response = match auth_kind {
+            InternalAuthKind::Authorization => build_request(true)?,
+            InternalAuthKind::ApiKey => build_request(false)?,
+        };
+        if !response.status().is_success()
+            && (response.status().as_u16() == 401 || response.status().as_u16() == 403)
+        {
+            let fallback_use_bearer = matches!(auth_kind, InternalAuthKind::ApiKey);
+            if let Ok(fallback_response) = build_request(fallback_use_bearer) {
+                if fallback_response.status().is_success() {
+                    return Ok(());
+                }
+            }
+        }
+        response
     } else {
         let url = format!("{}/chat/completions", resolved_base);
         let mut req = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key.trim()))
             .header("content-type", "application/json")
             .json(&serde_json::json!({
                 "model": model_trimmed,
@@ -3323,6 +3355,9 @@ fn run_provider_probe(
                 "max_tokens": 1,
                 "stream": true
             }));
+        if !api_key.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
+        }
         if lower == "openrouter" {
             req = req
                 .header("HTTP-Referer", "https://clawpal.zhixian.io")
@@ -3341,6 +3376,15 @@ fn run_provider_probe(
         .text()
         .unwrap_or_else(|e| format!("(could not read response body: {e})"));
     let snippet = truncate_error_text(body.trim(), MAX_ERROR_SNIPPET_CHARS);
+    let snippet_lower = snippet.to_ascii_lowercase();
+    if lower == "anthropic"
+        && snippet_lower.contains("oauth authentication is currently not supported")
+    {
+        return Err(
+            "Anthropic provider does not accept Claude setup-token OAuth tokens. Use an Anthropic API key (sk-ant-...) for provider=anthropic."
+                .to_string(),
+        );
+    }
     if snippet.is_empty() {
         Err(format!("Provider rejected credentials (HTTP {status})"))
     } else {
@@ -3380,37 +3424,83 @@ fn infer_auth_kind(provider: &str, secret: &str, fallback: InternalAuthKind) -> 
     fallback
 }
 
+pub(crate) fn provider_env_var_candidates(provider: &str) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    let mut push_unique = |name: &str| {
+        if !name.is_empty() && !out.iter().any(|existing| existing == name) {
+            out.push(name.to_string());
+        }
+    };
+
+    let normalized = provider.trim().to_ascii_lowercase();
+    let provider_env = normalized.to_uppercase().replace('-', "_");
+    if !provider_env.is_empty() {
+        push_unique(&format!("{provider_env}_API_KEY"));
+        push_unique(&format!("{provider_env}_KEY"));
+        push_unique(&format!("{provider_env}_TOKEN"));
+    }
+
+    if normalized == "anthropic" {
+        push_unique("ANTHROPIC_OAUTH_TOKEN");
+        push_unique("ANTHROPIC_AUTH_TOKEN");
+    }
+
+    out
+}
+
 fn resolve_profile_credential_with_priority(
     profile: &ModelProfile,
     base_dir: &Path,
 ) -> Option<(InternalProviderCredential, u8)> {
-    // 1. Try auth_ref as env var name directly (e.g. "OPENAI_API_KEY")
+    // 1. Try auth_ref candidates:
+    //    - explicit profile auth_ref
+    //    - provider:default fallback (if auth_ref missing)
+    //    First as env var name, then as key in auth store.
     let auth_ref = profile.auth_ref.trim();
+    let mut auth_ref_candidates = Vec::<String>::new();
     if !auth_ref.is_empty() {
-        if let Ok(val) = std::env::var(auth_ref) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                let kind = infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
-                return Some((
-                    InternalProviderCredential {
-                        secret: trimmed.to_string(),
-                        kind,
-                    },
-                    40,
-                ));
-            }
+        auth_ref_candidates.push(auth_ref.to_string());
+    }
+    let provider_fallback = profile.provider.trim().to_ascii_lowercase();
+    if !provider_fallback.is_empty() {
+        let fallback_ref = format!("{provider_fallback}:default");
+        if !auth_ref_candidates
+            .iter()
+            .any(|candidate| candidate == &fallback_ref)
+        {
+            auth_ref_candidates.push(fallback_ref);
         }
     }
 
-    // 2. Look up auth_ref in agent-level auth store files
-    //    Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
-    if !auth_ref.is_empty() {
-        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, auth_ref) {
+    for candidate in &auth_ref_candidates {
+        if !is_valid_env_var_name(candidate) {
+            continue;
+        }
+        if let Ok(val) = std::env::var(candidate) {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let kind = infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
+            return Some((
+                InternalProviderCredential {
+                    secret: trimmed.to_string(),
+                    kind,
+                },
+                40,
+            ));
+        }
+    }
+
+    for candidate in &auth_ref_candidates {
+        // Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
+        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, candidate)
+        {
             return Some((credential, 30));
         }
     }
 
-    // 3. Direct api_key field (legacy/manual ClawPal input)
+    // 2. Direct api_key field (legacy/manual ClawPal input)
     if let Some(ref key) = profile.api_key {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
@@ -3425,28 +3515,24 @@ fn resolve_profile_credential_with_priority(
         }
     }
 
-    // 4. Try common env var naming conventions based on provider
-    let provider = profile.provider.trim().to_uppercase().replace('-', "_");
-    if !provider.is_empty() {
-        for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-            let env_name = format!("{provider}{suffix}");
-            if let Ok(val) = std::env::var(&env_name) {
-                let trimmed = val.trim();
-                if !trimmed.is_empty() {
-                    let fallback_kind = if suffix == "_TOKEN" {
-                        InternalAuthKind::Authorization
-                    } else {
-                        InternalAuthKind::ApiKey
-                    };
-                    let kind = infer_auth_kind(&profile.provider, trimmed, fallback_kind);
-                    return Some((
-                        InternalProviderCredential {
-                            secret: trimmed.to_string(),
-                            kind,
-                        },
-                        10,
-                    ));
-                }
+    // 3. Provider-based env var conventions.
+    for env_name in provider_env_var_candidates(&profile.provider) {
+        if let Ok(val) = std::env::var(&env_name) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let fallback_kind = if env_name.ends_with("_TOKEN") {
+                    InternalAuthKind::Authorization
+                } else {
+                    InternalAuthKind::ApiKey
+                };
+                let kind = infer_auth_kind(&profile.provider, trimmed, fallback_kind);
+                return Some((
+                    InternalProviderCredential {
+                        secret: trimmed.to_string(),
+                        kind,
+                    },
+                    10,
+                ));
             }
         }
     }
@@ -6412,13 +6498,9 @@ async fn resolve_remote_profile_api_key(
     }
 
     // Try provider-based env conventions as fallback
-    let provider_env = profile.provider.trim().to_uppercase().replace('-', "_");
-    if !provider_env.is_empty() {
-        for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-            let env_name = format!("{provider_env}{suffix}");
-            if let Some(key) = read_remote_env_var(pool, host_id, &env_name).await? {
-                return Ok(key);
-            }
+    for env_name in provider_env_var_candidates(&profile.provider) {
+        if let Some(key) = read_remote_env_var(pool, host_id, &env_name).await? {
+            return Ok(key);
         }
     }
 
