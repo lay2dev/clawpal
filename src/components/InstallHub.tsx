@@ -739,6 +739,7 @@ export function InstallHub({
         });
       }
       setDiagnosticHostId(targetHostId);
+      setMode("failed");
       setRunError(guidanceError ? t("doctor.failed") : errorText);
       setRunErrorHasGuidance(guidanceError);
       void refreshDiagnostics(targetHostId);
@@ -780,6 +781,7 @@ export function InstallHub({
     } catch (e) {
       const errorText = e instanceof Error ? e.message : String(e);
       const guidanceError = hasGuidanceEmitted(e) || isAlreadyExplainedGuidanceError(errorText);
+      setMode("failed");
       setRunError(guidanceError ? t("doctor.failed") : errorText);
       setRunErrorHasGuidance(guidanceError);
       void refreshDiagnostics(null);
@@ -836,6 +838,7 @@ export function InstallHub({
     } catch (e) {
       const errorText = e instanceof Error ? e.message : String(e);
       const guidanceError = hasGuidanceEmitted(e) || isAlreadyExplainedGuidanceError(errorText);
+      setMode("failed");
       setRunError(guidanceError ? t("doctor.failed") : errorText);
       setRunErrorHasGuidance(guidanceError);
       void refreshDiagnostics(null);
