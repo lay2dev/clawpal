@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { FileTextIcon, DownloadIcon } from "lucide-react";
@@ -11,7 +11,9 @@ import type {
   RescuePrimaryDiagnosisResult,
   RescuePrimaryIssue,
   RescuePrimaryRepairResult,
+  ModelProfile,
 } from "@/lib/types";
+import { profileToModelValue } from "@/lib/model-value";
 import {
   Card,
   CardHeader,
@@ -142,6 +144,7 @@ export function Doctor({
   const doctor = useDoctorAgent();
   const [runtimeModel, setRuntimeModel] = useState<string | undefined>(undefined);
   const [sessionModelOverride, setSessionModelOverride] = useState<string | undefined>(undefined);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
   const [remoteConnState, setRemoteConnState] = useState<"checking" | "connected" | "disconnected">("checking");
 
   const [diagnosing, setDiagnosing] = useState(false);
@@ -242,6 +245,19 @@ export function Doctor({
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    ua.listModelProfiles()
+      .then((profiles) => {
+        if (cancelled) return;
+        setModelProfiles(profiles.filter((profile) => profile.enabled));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [ua]);
+
   // Use instanceId as the stable session key for model override / usage tracking.
   // This matches the backend which looks up overrides by instance_id.
   const doctorSessionId = instanceId || "local";
@@ -256,6 +272,23 @@ export function Doctor({
 
   // Effective model: session override takes priority over global runtime model.
   const effectiveModel = sessionModelOverride ?? runtimeModel;
+  const availableModels = useMemo(() => {
+    const uniqueModels = new Map<string, string>();
+    for (const profile of modelProfiles) {
+      const model = profileToModelValue(profile);
+      if (!model) continue;
+      const normalized = model.trim();
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (!uniqueModels.has(key)) uniqueModels.set(key, normalized);
+    }
+    if (runtimeModel && runtimeModel.trim()) {
+      const normalized = runtimeModel.trim();
+      const key = normalized.toLowerCase();
+      if (!uniqueModels.has(key)) uniqueModels.set(key, normalized);
+    }
+    return Array.from(uniqueModels.values()).sort((a, b) => a.localeCompare(b));
+  }, [modelProfiles, runtimeModel]);
 
   const handleStartDiagnosis = async (
     extraContext?: string,
@@ -897,7 +930,12 @@ export function Doctor({
                         {doctor.bridgeConnected ? t("doctor.bridgeConnected") : t("doctor.bridgeDisconnected")}
                       </Badge>
                       <TokenBadge sessionId={doctorSessionId} model={effectiveModel} />
-                      <ModelSwitcher sessionId={doctorSessionId} defaultModel={runtimeModel} onModelChange={setSessionModelOverride} />
+                      <ModelSwitcher
+                        sessionId={doctorSessionId}
+                        defaultModel={runtimeModel}
+                        availableModels={availableModels}
+                        onModelChange={setSessionModelOverride}
+                      />
                     </div>
                     <div className="flex items-center gap-2">
                       <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
