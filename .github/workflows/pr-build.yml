@@ -124,7 +124,11 @@ jobs:
 
   comment:
     needs: build
-    if: always() && github.event_name == 'pull_request'
+    # Skip comment for fork PRs — their GITHUB_TOKEN is read-only
+    if: >-
+      always()
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     steps:
       - name: Post or update PR comment with download links
@@ -161,8 +165,8 @@ jobs:
             body += `> 🔨 Built from \`${sha}\` · [View workflow run](${runUrl})\n`;
             body += `> ⚠️ **Unsigned development builds** — for testing only\n`;
 
-            // Find existing comment with our marker
-            const { data: comments } = await github.rest.issues.listComments({
+            // Paginate all comments to reliably find the marker (default page is only 30)
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
