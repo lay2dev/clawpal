@@ -584,10 +584,11 @@ export function useDoctorAgent() {
       const restored = restoreDoctorMessagesFromCache(context);
       const restoredMessages = restored?.messages ?? [];
       const restoredSessionId = restored?.openclawSessionId;
-      if (restoredMessages.length > 0) {
-        setMessages(restoredMessages);
-        persistDoctorMessages(restoredMessages);
-      }
+      // Always replace message state with the target-engine cache snapshot.
+      // This prevents stale messages from another engine from lingering when
+      // there is no cache for the current engine/scope.
+      setMessages(restoredMessages);
+      persistDoctorMessages(restoredMessages);
       openclawSessionIdRef.current = restoredSessionId ?? undefined;
       if (restored?.sessionKey) {
         sessionKeyRef.current = restored.sessionKey;
