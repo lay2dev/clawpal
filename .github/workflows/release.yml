@@ -207,6 +207,20 @@ jobs:
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
 
+      - name: Disable Apple app signing for macOS prerelease
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.release_flags.outputs.is_prerelease == 'true' }}
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = "src-tauri/tauri.conf.json";
+          const conf = JSON.parse(fs.readFileSync(path, "utf8"));
+          if (conf.bundle && conf.bundle.macOS) {
+            delete conf.bundle.macOS.signingIdentity;
+          }
+          fs.writeFileSync(path, JSON.stringify(conf, null, 2));
+          NODE
+
       - name: Build Tauri app (signed/notarized)
         if: steps.release_flags.outputs.is_prerelease != 'true'
         uses: tauri-apps/tauri-action@v0
