@@ -89,6 +89,10 @@ function sanitizeDoctorCacheMessages(rawMessages: unknown): DoctorChatMessage[] 
   });
 }
 
+function normalizeDoctorMessages(messages: DoctorChatMessage[]): DoctorChatMessage[] {
+  return messages.slice(-DOCTOR_CHAT_CACHE_MAX_MESSAGES);
+}
+
 function loadDoctorSessionCache(context: DoctorSessionContext): DoctorSessionCache | null {
   const key = buildDoctorCacheKey(context);
   try {
@@ -257,6 +261,27 @@ export function useDoctorAgent() {
     setTargetState(resolved);
   }, []);
 
+  const buildDoctorContext = useCallback((): DoctorSessionContext => ({
+    instanceScope: (instanceScopeRef.current || "local").trim() || "local",
+    agentId: (agentIdRef.current || "main").trim() || "main",
+    domain: domainRef.current,
+    engine: engineRef.current,
+  }), []);
+
+  const persistDoctorMessages = useCallback((nextMessages: DoctorChatMessage[]) => {
+    const context = buildDoctorContext();
+    if (!context.instanceScope || !context.agentId || !context.engine) return;
+    saveDoctorSessionCache(context, {
+      messages: normalizeDoctorMessages(nextMessages),
+      openclawSessionId: openclawSessionIdRef.current,
+      sessionKey: sessionKeyRef.current,
+    });
+  }, [buildDoctorContext]);
+
+  const restoreDoctorMessagesFromCache = useCallback((context: DoctorSessionContext): DoctorSessionCache | null => {
+    return loadDoctorSessionCache(context);
+  }, []);
+
 
   useEffect(() => {
     let disposed = false;
@@ -296,10 +321,11 @@ export function useDoctorAgent() {
         streamingRef.current = text;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (!isNewTurn && last?.role === "assistant" && !last.invoke) {
-            return [...prev.slice(0, -1), { ...last, content: text }];
-          }
-          return [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+          const next = (!isNewTurn && last?.role === "assistant" && !last.invoke)
+            ? [...prev.slice(0, -1), { ...last, content: text }]
+            : [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+          persistDoctorMessages(next);
+          return next;
         });
       }),
       bind<{ text: string }>("doctor:chat-final", (e) => {
@@ -317,10 +343,11 @@ export function useDoctorAgent() {
         setLoading(false);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (!isNewTurn && last?.role === "assistant" && !last.invoke) {
-            return [...prev.slice(0, -1), { ...last, content: text }];
-          }
-          return [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+          const next = (!isNewTurn && last?.role === "assistant" && !last.invoke)
+            ? [...prev.slice(0, -1), { ...last, content: text }]
+            : [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+          persistDoctorMessages(next);
+          return next;
         });
       }),
       bind<{ items: DiagnosisReportItem[] }>("doctor:diagnosis-report", (e) => {
@@ -337,15 +364,16 @@ export function useDoctorAgent() {
               break;
             }
           }
-          if (lastAssistantIdx !== -1) {
+        if (lastAssistantIdx !== -1) {
             const updated = [...prev];
             updated[lastAssistantIdx] = {
               ...updated[lastAssistantIdx],
               diagnosisReport: { items },
             };
+            persistDoctorMessages(updated);
             return updated;
           }
-          return [
+          const next = [
             ...prev,
             {
               id: nextMsgId(),
@@ -354,6 +382,8 @@ export function useDoctorAgent() {
               diagnosisReport: { items },
             },
           ];
+          persistDoctorMessages(next);
+          return next;
         });
       }),
       bind<DoctorInvoke>("doctor:invoke", (e) => {
@@ -374,7 +404,7 @@ export function useDoctorAgent() {
         const isFullAuto = fullAutoRef.current;
         setMessages((prev) => {
           if (prev.some((m) => m.invoke?.id === invoke.id)) return prev; // already shown
-          return [
+          const next = [
             ...prev,
             {
               id: nextMsgId(),
@@ -384,6 +414,8 @@ export function useDoctorAgent() {
               status: (isFullAuto || isSafeAuto) ? "auto" : "pending",
             },
           ];
+          persistDoctorMessages(next);
+          return next;
         });
 
         // Full-auto mode: approve everything immediately
@@ -421,10 +453,13 @@ export function useDoctorAgent() {
           const resultMsg = { id: nextMsgId(), role: "tool-result" as const, content: JSON.stringify(result, null, 2), invokeResult: result, invokeId: id };
           const callIdx = prev.findIndex((m) => m.role === "tool-call" && m.invoke?.id === id);
           if (callIdx === -1) {
-            return [...prev, resultMsg];
+            const next = [...prev, resultMsg];
+            persistDoctorMessages(next);
+            return next;
           }
           const next = [...prev];
           next.splice(callIdx + 1, 0, resultMsg);
+          persistDoctorMessages(next);
           return next;
         });
         // Reset streaming for next assistant message
@@ -526,7 +561,7 @@ export function useDoctorAgent() {
 
   const startDiagnosis = useCallback(
     async (
-      context: string,
+      launchContext: string,
       agentId = "main",
       instanceScope?: string,
       instanceTransport: "local" | "docker_local" | "remote_ssh" = "local",
@@ -545,13 +580,24 @@ export function useDoctorAgent() {
       engineRef.current = domain === "install" ? "zeroclaw" : engine;
       setLoading(true);
       setError(null);
-      setMessages([]);
+      const context = buildDoctorContext();
+      const restored = restoreDoctorMessagesFromCache(context);
+      const restoredMessages = restored?.messages ?? [];
+      const restoredSessionId = restored?.openclawSessionId;
+      setMessages(restoredMessages);
+      persistDoctorMessages(restoredMessages);
+      openclawSessionIdRef.current = restoredSessionId;
+      if (restored?.sessionKey) {
+        sessionKeyRef.current = restored.sessionKey;
+      } else {
+        sessionKeyRef.current = `agent:${agentId}:clawpal-doctor:${instanceScopeRef.current}:${crypto.randomUUID()}`;
+      }
+      if (!restored || restored.openclawSessionId === null) {
+        openclawSessionIdRef.current = undefined;
+      }
       setPendingInvokes(new Map());
       streamingRef.current = "";
       streamEndedRef.current = false;
-      // Fresh session key per diagnosis — no inherited stale state
-      sessionKeyRef.current = `agent:${agentId}:clawpal-doctor:${instanceScopeRef.current}:${crypto.randomUUID()}`;
-      openclawSessionIdRef.current = undefined;
       sessionActiveRef.current = engineRef.current === "zeroclaw";
       try {
         const scope = instanceScopeRef.current;
@@ -569,7 +615,7 @@ export function useDoctorAgent() {
           prompt = renderPromptTemplate(doctorStartPromptTemplate(), {
             "{{language}}": lang,
             "{{transport_line}}": transportLine,
-            "{{context}}": context,
+            "{{context}}": launchContext,
           });
         }
         if (domain === "install") {
@@ -600,11 +646,15 @@ export function useDoctorAgent() {
             if (!assistantText) {
               throw new Error("No text returned from openclaw diagnosis");
             }
-            setMessages((prev) => [...prev, {
-              id: chatMessageId,
-              role: "assistant",
-              content: assistantText,
-            }]);
+            setMessages((prev) => {
+              const next = [...prev, {
+                id: chatMessageId,
+                role: "assistant",
+                content: assistantText,
+              }];
+              persistDoctorMessages(next);
+              return next;
+            });
             setLoading(false);
           } catch (err) {
             if (
@@ -626,7 +676,12 @@ export function useDoctorAgent() {
   const sendMessage = useCallback(async (message: string) => {
     setLoading(true);
     streamingRef.current = "";
-    setMessages((prev) => [...prev, { id: nextMsgId(), role: "user", content: message }]);
+    const userMessage = { id: nextMsgId(), role: "user", content: message };
+    setMessages((prev) => {
+      const next = [...prev, userMessage];
+      persistDoctorMessages(next);
+      return next;
+    });
     const sessionKeyForRequest = sessionKeyRef.current;
     const engineForRequest = engineRef.current;
     try {
@@ -656,7 +711,11 @@ export function useDoctorAgent() {
         if (!assistantText) {
           throw new Error("No text returned from openclaw diagnosis");
         }
-        setMessages((prev) => [...prev, { id: nextMsgId(), role: "assistant", content: assistantText }]);
+        setMessages((prev) => {
+          const next = [...prev, { id: nextMsgId(), role: "assistant", content: assistantText }];
+          persistDoctorMessages(next);
+          return next;
+        });
         setLoading(false);
       } else {
         await api.doctorSendMessage(message, sessionKeyRef.current, agentIdRef.current, instanceScopeRef.current);
@@ -677,8 +736,8 @@ export function useDoctorAgent() {
     if (domainRef.current === "doctor" && engineRef.current === "openclaw") {
       return;
     }
-    setMessages((prev) =>
-      prev.map((m) => {
+    setMessages((prev) => {
+      const next = prev.map((m) => {
         if (m.invoke?.id === invokeId && m.role === "tool-call") {
           if (m.invoke) {
             const pattern = extractApprovalPattern(m.invoke);
@@ -687,8 +746,10 @@ export function useDoctorAgent() {
           return { ...m, status: "approved" as const };
         }
         return m;
-      })
-    );
+      });
+      persistDoctorMessages(next);
+      return next;
+    });
     try {
       await api.doctorApproveInvoke(
         invokeId,
@@ -717,13 +778,15 @@ export function useDoctorAgent() {
       next.delete(invokeId);
       return next;
     });
-    setMessages((prev) =>
-      prev.map((m) =>
+    setMessages((prev) => {
+      const next = prev.map((m) =>
         m.invoke?.id === invokeId && m.role === "tool-call"
           ? { ...m, status: "rejected" as const }
           : m
-      )
-    );
+      );
+      persistDoctorMessages(next);
+      return next;
+    });
     try {
       await api.doctorRejectInvoke(invokeId, reason);
     } catch (err) {

@@ -18,6 +18,75 @@ interface Message {
   content: string;
 }
 
+const CHAT_SESSION_CACHE_PREFIX = "clawpal_chat_session_messages_v1";
+const CHAT_SESSION_CACHE_MAX_MESSAGES = 180;
+const CHAT_SESSION_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+type ChatSessionCache = {
+  version: number;
+  updatedAt: number;
+  messages: Message[];
+};
+
+const CHAT_SESSION_CACHE_VERSION = 1;
+
+function chatSessionCacheKey(instanceId: string, agent: string) {
+  return `${CHAT_SESSION_CACHE_PREFIX}-${instanceId}-${agent}`;
+}
+
+function trimChatMessages(rawMessages: Message[]): Message[] {
+  if (rawMessages.length <= CHAT_SESSION_CACHE_MAX_MESSAGES) return rawMessages;
+  return rawMessages.slice(-CHAT_SESSION_CACHE_MAX_MESSAGES);
+}
+
+function loadChatSessionMessages(instanceId: string, agent: string): Message[] {
+  try {
+    const raw = localStorage.getItem(chatSessionCacheKey(instanceId, agent));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ChatSessionCache | null;
+    if (!parsed || typeof parsed !== "object") return [];
+    if (parsed.version !== CHAT_SESSION_CACHE_VERSION) return [];
+    if (!Array.isArray(parsed.messages)) return [];
+    if (typeof parsed.updatedAt !== "number" || Date.now() - parsed.updatedAt > CHAT_SESSION_CACHE_TTL_MS) {
+      localStorage.removeItem(chatSessionCacheKey(instanceId, agent));
+      return [];
+    }
+    return parsed.messages.filter(
+      (message) =>
+        message
+        && typeof message === "object"
+        && typeof message.role === "string"
+        && typeof message.content === "string",
+    ) as Message[];
+  } catch (error) {
+    console.warn("Failed to load chat session messages:", error);
+    return [];
+  }
+}
+
+function saveChatSessionMessages(instanceId: string, agent: string, messages: Message[]) {
+  try {
+    const key = chatSessionCacheKey(instanceId, agent);
+    const nextMessages = trimChatMessages(messages);
+    if (nextMessages.length === 0) {
+      localStorage.removeItem(key);
+      return;
+    }
+    const payload: ChatSessionCache = {
+      version: CHAT_SESSION_CACHE_VERSION,
+      updatedAt: Date.now(),
+      messages: nextMessages,
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (error) {
+    console.warn("Failed to persist chat session messages:", error);
+  }
+}
+
+function clearChatSessionMessages(instanceId: string, agent: string) {
+  localStorage.removeItem(chatSessionCacheKey(instanceId, agent));
+}
+
 const SESSION_KEY_PREFIX = "clawpal_chat_session_";
 
 function loadSessionId(instanceId: string, agent: string): string | undefined {
@@ -50,19 +119,34 @@ export function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setMessages([]);
     setAgentId("");
     setSessionId(undefined);
+    setMessages([]);
     ua.listAgents()
       .then((list) => {
         const ids = list.map((a) => a.id);
         setAgents(ids);
-        const first = ids[0] || "";
-        setAgentId(first);
-        if (first) setSessionId(loadSessionId(ua.instanceId, first));
+        const nextAgent = ids.includes(agentId) && agentId ? agentId : (ids[0] || "");
+        setAgentId(nextAgent);
+        if (nextAgent) {
+          setSessionId(loadSessionId(ua.instanceId, nextAgent));
+          setMessages(loadChatSessionMessages(ua.instanceId, nextAgent));
+        } else {
+          setSessionId(undefined);
+          setMessages([]);
+        }
       })
       .catch((e) => console.error("Failed to load agent IDs:", e));
   }, [ua.instanceId, ua]);
+
+  useEffect(() => {
+    if (!agentId) return;
+    if (messages.length > 0) {
+      saveChatSessionMessages(ua.instanceId, agentId, messages);
+    } else {
+      clearChatSessionMessages(ua.instanceId, agentId);
+    }
+  }, [messages, agentId, ua.instanceId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -103,7 +187,11 @@ export function Chat() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 mb-2">
-        <Select value={agentId} onValueChange={(a) => { setAgentId(a); setSessionId(loadSessionId(ua.instanceId, a)); setMessages([]); }}>
+        <Select value={agentId} onValueChange={(a) => {
+          setAgentId(a);
+          setSessionId(loadSessionId(ua.instanceId, a));
+          setMessages(loadChatSessionMessages(ua.instanceId, a));
+        }}>
           <SelectTrigger size="sm" className="w-auto text-xs">
             <SelectValue />
           </SelectTrigger>

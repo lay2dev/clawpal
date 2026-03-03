@@ -81,7 +81,7 @@ export function DoctorChat({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               handleSend();
             }
@@ -95,10 +95,9 @@ export function DoctorChat({
           disabled={!connected || loading || !input.trim()}
           size="sm"
         >
-          {t("chat.send")} <kbd className="ml-1 text-xs opacity-60">{navigator.platform.includes("Mac") ? "⌘↵" : "Ctrl↵"}</kbd>
+          {t("chat.send")}
         </Button>
       </div>
     </div>
   );
 }
-

@@ -63,22 +63,6 @@ type ProfileForm = {
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const ENABLE_PROFILE_TEST_BUTTON = true;
-const ZEROCLAW_SUPPORTED_PROVIDERS = new Set([
-  "openrouter",
-  "openai",
-  "openai-codex",
-  "anthropic",
-  "github-copilot",
-  "copilot",
-  "gemini",
-  "google",
-  "google-vertex",
-  "google-gemini-cli",
-  "google-antigravity",
-  "moonshot",
-  "kimi-code",
-  "kimi-coding",
-]);
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
 
@@ -438,9 +422,7 @@ export function Settings({
   const zeroclawModelCandidates = useMemo(() => {
     const fromProfiles = (profiles || [])
       .filter((profile) => profile.enabled)
-      .filter((profile) =>
-        ZEROCLAW_SUPPORTED_PROVIDERS.has(profile.provider.trim().toLowerCase()),
-      )
+      .filter((profile) => profile.provider.trim())
       .map((profile) => profileToModelValue(profile));
     return Array.from(new Set(fromProfiles)).sort((a, b) => a.localeCompare(b));
   }, [profiles]);

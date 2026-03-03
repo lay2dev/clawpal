@@ -259,6 +259,51 @@ jobs:
             gh release upload ${{ github.ref_name }} $dest --clobber
           }
 
+      - name: Upload zeroclaw sidecar binary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              SIDE_DIR="darwin-aarch64"
+              OUTPUT_NAME="zeroclaw-macos-aarch64"
+              ;;
+            x86_64-apple-darwin)
+              SIDE_DIR="darwin-x64"
+              OUTPUT_NAME="zeroclaw-macos-x64"
+              ;;
+            x86_64-unknown-linux-gnu)
+              SIDE_DIR="linux-x64"
+              OUTPUT_NAME="zeroclaw-linux-x64"
+              ;;
+            x86_64-pc-windows-msvc)
+              SIDE_DIR="windows-x64"
+              OUTPUT_NAME="zeroclaw-windows-x64.exe"
+              ;;
+            *)
+              echo "Unsupported build target: ${{ matrix.target }}"
+              exit 0
+              ;;
+          esac
+
+          SOURCE="src-tauri/resources/zeroclaw/${SIDE_DIR}/$(case "${{ matrix.target }}" in
+            x86_64-pc-windows-msvc) echo zeroclaw.exe;;
+            *) echo zeroclaw;;
+          esac)"
+          if [ ! -f "$SOURCE" ]; then
+            echo "Zeroclaw binary not found for ${SIDE_DIR}: $SOURCE"
+            exit 1
+          fi
+
+          mkdir -p release-artifacts
+          DEST="release-artifacts/$OUTPUT_NAME"
+          cp "$SOURCE" "$DEST"
+          if [ "${{ matrix.platform }}" != "windows-latest" ]; then
+            chmod +x "$DEST"
+          fi
+          gh release upload ${{ github.ref_name }} "$DEST" --clobber
+
       - name: Cleanup Apple signing (macOS only)
         if: ${{ contains(matrix.target, 'apple-darwin') && always() }}
         run: |
