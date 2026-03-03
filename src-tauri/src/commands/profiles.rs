@@ -689,10 +689,9 @@ pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, Strin
     let paths = resolve_paths();
     let path = model_profiles_path(&paths);
     let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
-    let (saved, next_json) = clawpal_core::profile::upsert_profile_in_storage_json(
-        &content, profile,
-    )
-    .map_err(|e| e.to_string())?;
+    let (saved, next_json) =
+        clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
+            .map_err(|e| e.to_string())?;
     crate::config_io::write_text(&path, &next_json)?;
     #[cfg(unix)]
     {

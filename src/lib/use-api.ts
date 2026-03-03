@@ -727,6 +727,10 @@ export function useApi() {
         api.setZeroclawDoctorUiPreference,
         ["getAppPreferences"],
       ),
+      setRescueBotUiPreference: withGlobalInvalidation(
+        api.setRescueBotUiPreference,
+        ["getAppPreferences"],
+      ),
       ensureAccessProfile: api.ensureAccessProfile,
       recordInstallExperience: api.recordInstallExperience,
       openUrl: api.openUrl,

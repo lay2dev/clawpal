@@ -3300,8 +3300,7 @@ fn run_provider_probe(
 
     let auth_kind = infer_auth_kind(&provider_trimmed, api_key.trim(), InternalAuthKind::ApiKey);
     let looks_like_claude_model = model_trimmed.to_ascii_lowercase().contains("claude");
-    let use_anthropic_probe_for_openai_codex =
-        lower == "openai-codex" && looks_like_claude_model;
+    let use_anthropic_probe_for_openai_codex = lower == "openai-codex" && looks_like_claude_model;
     let response = if lower == "anthropic" || use_anthropic_probe_for_openai_codex {
         let normalized_model = model_trimmed
             .rsplit('/')
@@ -3318,8 +3317,8 @@ fn run_provider_probe(
         let build_request = |use_bearer: bool| -> Result<reqwest::blocking::Response, String> {
             let mut req = client
                 .post(&url)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json");
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json");
             req = if use_bearer {
                 req.header("Authorization", format!("Bearer {}", api_key.trim()))
             } else {
@@ -3494,8 +3493,7 @@ fn resolve_profile_credential_with_priority(
 
     for candidate in &auth_ref_candidates {
         // Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
-        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, candidate)
-        {
+        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, candidate) {
             return Some((credential, 30));
         }
     }

@@ -323,7 +323,7 @@ export function useDoctorAgent() {
           const last = prev[prev.length - 1];
           const next = (!isNewTurn && last?.role === "assistant" && !last.invoke)
             ? [...prev.slice(0, -1), { ...last, content: text }]
-            : [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+            : [...prev, { id: nextMsgId(), role: "assistant" as const, content: text }];
           persistDoctorMessages(next);
           return next;
         });
@@ -345,7 +345,7 @@ export function useDoctorAgent() {
           const last = prev[prev.length - 1];
           const next = (!isNewTurn && last?.role === "assistant" && !last.invoke)
             ? [...prev.slice(0, -1), { ...last, content: text }]
-            : [...prev, { id: nextMsgId(), role: "assistant", content: text }];
+            : [...prev, { id: nextMsgId(), role: "assistant" as const, content: text }];
           persistDoctorMessages(next);
           return next;
         });
@@ -364,7 +364,7 @@ export function useDoctorAgent() {
               break;
             }
           }
-        if (lastAssistantIdx !== -1) {
+          if (lastAssistantIdx !== -1) {
             const updated = [...prev];
             updated[lastAssistantIdx] = {
               ...updated[lastAssistantIdx],
@@ -377,7 +377,7 @@ export function useDoctorAgent() {
             ...prev,
             {
               id: nextMsgId(),
-              role: "assistant",
+              role: "assistant" as const,
               content: "",
               diagnosisReport: { items },
             },
@@ -408,7 +408,7 @@ export function useDoctorAgent() {
             ...prev,
             {
               id: nextMsgId(),
-              role: "tool-call",
+              role: "tool-call" as const,
               content: invoke.command,
               invoke,
               status: (isFullAuto || isSafeAuto) ? "auto" : "pending",
@@ -588,7 +588,7 @@ export function useDoctorAgent() {
         setMessages(restoredMessages);
         persistDoctorMessages(restoredMessages);
       }
-      openclawSessionIdRef.current = restoredSessionId;
+      openclawSessionIdRef.current = restoredSessionId ?? undefined;
       if (restored?.sessionKey) {
         sessionKeyRef.current = restored.sessionKey;
       } else {
@@ -651,7 +651,7 @@ export function useDoctorAgent() {
             setMessages((prev) => {
               const next = [...prev, {
                 id: chatMessageId,
-                role: "assistant",
+                role: "assistant" as const,
                 content: assistantText,
               }];
               persistDoctorMessages(next);
@@ -678,7 +678,7 @@ export function useDoctorAgent() {
   const sendMessage = useCallback(async (message: string) => {
     setLoading(true);
     streamingRef.current = "";
-    const userMessage = { id: nextMsgId(), role: "user", content: message };
+    const userMessage = { id: nextMsgId(), role: "user" as const, content: message };
     setMessages((prev) => {
       const next = [...prev, userMessage];
       persistDoctorMessages(next);
@@ -714,7 +714,7 @@ export function useDoctorAgent() {
           throw new Error("No text returned from openclaw diagnosis");
         }
         setMessages((prev) => {
-          const next = [...prev, { id: nextMsgId(), role: "assistant", content: assistantText }];
+          const next = [...prev, { id: nextMsgId(), role: "assistant" as const, content: assistantText }];
           persistDoctorMessages(next);
           return next;
         });
