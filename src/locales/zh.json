@@ -332,6 +332,8 @@
   "doctor.logReadFailed": "日志读取失败：{{error}}",
   "doctor.refreshLogs": "刷新",
   "doctor.exportLogs": "导出",
+  "doctor.exportLogsSuccess": "日志已导出：{{filename}}",
+  "doctor.exportLogsFailed": "导出日志失败：{{error}}",
   "doctor.agentSource": "小龙虾",
   "doctor.guidanceCardTitle": "小龙虾建议",
   "doctor.engineZeroclaw": "小龙虾诊断助手",

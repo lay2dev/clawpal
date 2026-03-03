@@ -332,6 +332,8 @@
   "doctor.logReadFailed": "Failed to load logs: {{error}}",
   "doctor.refreshLogs": "Refresh",
   "doctor.exportLogs": "Export",
+  "doctor.exportLogsSuccess": "Log exported: {{filename}}",
+  "doctor.exportLogsFailed": "Log export failed: {{error}}",
   "doctor.agentSource": "Doctor Claw Assistant",
   "doctor.guidanceCardTitle": "Doctor guidance",
   "doctor.engineZeroclaw": "Doctor Claw Assistant",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { FileTextIcon, DownloadIcon } from "lucide-react";
+import { toast } from "sonner";
 import { buildCacheKey, hasGuidanceEmitted, subscribeToCacheKey, useApi } from "@/lib/use-api";
 import { api } from "@/lib/api";
 import { useInstance } from "@/lib/instance-context";
@@ -378,21 +379,27 @@ export function Doctor({
   };
 
   const exportLogs = () => {
-    const content = logsContent || logsError || t("doctor.noLogs");
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `${logsSource}-${logsTab}-${timestamp}.log`;
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.style.display = "none";
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    window.setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 0);
+    try {
+      const content = logsContent || logsError || t("doctor.noLogs");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `${logsSource}-${logsTab}-${timestamp}.log`;
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 0);
+      toast.success(t("doctor.exportLogsSuccess", { filename }));
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      toast.error(t("doctor.exportLogsFailed", { error: text }));
+    }
   };
 
   const refreshRescueStatus = async (isCancelled?: () => boolean) => {
