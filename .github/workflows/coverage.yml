@@ -1,0 +1,132 @@
+name: Coverage
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run coverage on PR
+        run: |
+          cargo llvm-cov --package clawpal-core --package clawpal-cli --json > pr-coverage.json
+
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          clean: false
+          path: __base
+
+      - name: Run coverage on base
+        working-directory: __base
+        run: |
+          cargo llvm-cov --package clawpal-core --package clawpal-cli --json > base-coverage.json
+
+      - name: Generate comment
+        id: comment
+        run: |
+          python3 - pr-coverage.json __base/base-coverage.json "${{ github.event.pull_request.base.ref }}" "${{ github.head_ref }}" <<'PYEOF'
+          import json, sys, os
+
+          with open(sys.argv[1]) as f:
+              pr_data = json.load(f)
+          with open(sys.argv[2]) as f:
+              base_data = json.load(f)
+
+          base_ref = sys.argv[3]
+          head_ref = sys.argv[4]
+
+          def totals(data):
+              t = data['data'][0]['totals']
+              return {
+                  'lines_pct': round(t['lines']['percent'], 2),
+                  'lines_hit': t['lines']['covered'],
+                  'lines_total': t['lines']['count'],
+                  'funcs_pct': round(t['functions']['percent'], 2),
+                  'funcs_hit': t['functions']['covered'],
+                  'funcs_total': t['functions']['count'],
+                  'regions_pct': round(t['regions']['percent'], 2),
+                  'regions_hit': t['regions']['covered'],
+                  'regions_total': t['regions']['count'],
+              }
+
+          pr = totals(pr_data)
+          base = totals(base_data)
+
+          def delta(a, b):
+              d = a - b
+              if d > 0: return f'+{d:.2f}%'
+              elif d < 0: return f'{d:.2f}%'
+              else: return '±0.00%'
+
+          def icon(d):
+              if d > 0: return '🟢'
+              elif d < 0: return '🔴'
+              else: return '⚪'
+
+          lines_d = pr['lines_pct'] - base['lines_pct']
+          funcs_d = pr['funcs_pct'] - base['funcs_pct']
+          regions_d = pr['regions_pct'] - base['regions_pct']
+
+          body = f"""<!-- pr-coverage-bot -->
+          ## 📊 Test Coverage Report
+
+          | Metric | Base (`{base_ref}`) | PR (`{head_ref}`) | Delta |
+          |--------|---------------------|---------------------|-------|
+          | **Lines** | {base['lines_pct']:.2f}% ({base['lines_hit']}/{base['lines_total']}) | {pr['lines_pct']:.2f}% ({pr['lines_hit']}/{pr['lines_total']}) | {icon(lines_d)} {delta(pr['lines_pct'], base['lines_pct'])} |
+          | **Functions** | {base['funcs_pct']:.2f}% ({base['funcs_hit']}/{base['funcs_total']}) | {pr['funcs_pct']:.2f}% ({pr['funcs_hit']}/{pr['funcs_total']}) | {icon(funcs_d)} {delta(pr['funcs_pct'], base['funcs_pct'])} |
+          | **Regions** | {base['regions_pct']:.2f}% ({base['regions_hit']}/{base['regions_total']}) | {pr['regions_pct']:.2f}% ({pr['regions_hit']}/{pr['regions_total']}) | {icon(regions_d)} {delta(pr['regions_pct'], base['regions_pct'])} |
+
+          _Coverage measured by `cargo llvm-cov` (clawpal-core + clawpal-cli)._"""
+
+          # Dedent
+          import textwrap
+          body = textwrap.dedent(body)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              # Use multiline output
+              f.write('body<<EOF\n')
+              f.write(body + '\n')
+              f.write('EOF\n')
+          PYEOF
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- pr-coverage-bot -->'
+
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.comment.outputs.body }}
+          edit-mode: replace
