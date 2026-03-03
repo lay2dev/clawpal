@@ -77,7 +77,10 @@ fn post_custom_endpoint(url: &str, event: &BugReportEvent) -> Result<(), String>
     if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!("bug report endpoint returned {}", response.status()))
+        Err(format!(
+            "bug report endpoint returned {}",
+            response.status()
+        ))
     }
 }
 
@@ -175,4 +178,3 @@ pub fn send_report(settings: &BugReportSettings, event: &BugReportEvent) -> Resu
         }
     }
 }
-

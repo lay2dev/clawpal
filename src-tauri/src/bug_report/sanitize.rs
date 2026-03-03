@@ -35,9 +35,7 @@ fn unix_home_re() -> &'static Regex {
 
 fn windows_home_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)[A-Z]:\\Users\\[^\\\s]+").expect("valid windows home regex")
-    })
+    RE.get_or_init(|| Regex::new(r"(?i)[A-Z]:\\Users\\[^\\\s]+").expect("valid windows home regex"))
 }
 
 fn ssh_user_host_re() -> &'static Regex {
@@ -74,14 +72,18 @@ fn url_re() -> &'static Regex {
 
 pub fn sanitize_text(raw: &str) -> String {
     let mut out = raw.to_string();
-    out = sk_token_re().replace_all(&out, "<REDACTED_API_KEY>").into_owned();
+    out = sk_token_re()
+        .replace_all(&out, "<REDACTED_API_KEY>")
+        .into_owned();
     out = bearer_token_re()
         .replace_all(&out, "Bearer <REDACTED_TOKEN>")
         .into_owned();
     out = key_value_secret_re()
         .replace_all(&out, "$1=<REDACTED>")
         .into_owned();
-    out = email_re().replace_all(&out, "<REDACTED_EMAIL>").into_owned();
+    out = email_re()
+        .replace_all(&out, "<REDACTED_EMAIL>")
+        .into_owned();
     out = unix_home_re().replace_all(&out, "<HOME>").into_owned();
     out = windows_home_re().replace_all(&out, "<HOME>").into_owned();
     out = ssh_user_host_re()
@@ -95,7 +97,8 @@ pub fn sanitize_text(raw: &str) -> String {
 }
 
 pub fn sanitize_optional_text(raw: Option<&str>) -> Option<String> {
-    raw.map(sanitize_text).filter(|value| !value.trim().is_empty())
+    raw.map(sanitize_text)
+        .filter(|value| !value.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -116,12 +119,16 @@ mod tests {
     fn redacts_key_value_secrets() {
         let input = "token=abc123 api_key = zzz password=passw0rd";
         let output = sanitize_text(input);
-        assert_eq!(output, "token=<REDACTED> api_key=<REDACTED> password=<REDACTED>");
+        assert_eq!(
+            output,
+            "token=<REDACTED> api_key=<REDACTED> password=<REDACTED>"
+        );
     }
 
     #[test]
     fn redacts_email_and_home_paths() {
-        let input = "mail me at dev@example.com, path /Users/alice/.openclaw and C:\\Users\\bob\\AppData";
+        let input =
+            "mail me at dev@example.com, path /Users/alice/.openclaw and C:\\Users\\bob\\AppData";
         let output = sanitize_text(input);
         assert!(!output.contains("dev@example.com"));
         assert!(!output.contains("/Users/alice"));

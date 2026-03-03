@@ -64,7 +64,11 @@ fn os_version_string() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-fn build_event(level: BugReportSeverity, message: &str, stack_trace: Option<&str>) -> BugReportEvent {
+fn build_event(
+    level: BugReportSeverity,
+    message: &str,
+    stack_trace: Option<&str>,
+) -> BugReportEvent {
     let session_id = state()
         .lock()
         .map(|guard| guard.session_id.clone())

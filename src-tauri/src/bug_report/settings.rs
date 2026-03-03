@@ -143,7 +143,9 @@ pub fn save_bug_report_settings(input: BugReportSettings) -> Result<BugReportSet
     }
 
     let mut root = match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::Object(Map::new())),
+        Ok(text) => {
+            serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::Object(Map::new()))
+        }
         Err(_) => Value::Object(Map::new()),
     };
     if !root.is_object() {
@@ -160,4 +162,3 @@ pub fn save_bug_report_settings(input: BugReportSettings) -> Result<BugReportSet
     fs::write(path, content).map_err(|e| e.to_string())?;
     Ok(normalized)
 }
-
