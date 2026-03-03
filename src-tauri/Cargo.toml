@@ -1,6 +1,6 @@
 [package]
 name = "clawpal"
-version = "0.3.3-rc.12"
+version = "0.3.3-rc.13"
 edition = "2021"
 
 [lib]
