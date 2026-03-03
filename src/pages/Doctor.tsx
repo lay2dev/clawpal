@@ -890,6 +890,7 @@ export function Doctor({
       : isWsl2
         ? t("doctor.targetTypeWsl2")
         : t("doctor.targetTypeLocal");
+  const activeSourceLabel = t("doctor.engineZeroclaw");
   const isPureLocal = !isRemote && !isDocker && !isWsl2;
 
   return (
