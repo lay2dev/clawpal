@@ -882,7 +882,7 @@ pub fn remote_clawpal_log_tail_script(lines: usize, filename: &str) -> String {
     script.push_str(
         "clawpal_data_root=\"${CLAWPAL_DATA_DIR:-${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}}\"; ",
     );
-    script.push_str("log_path=\"$clawpal_data_root/logs/");
+    script.push_str("log_path=\"$clawpal_data_root/.clawpal/logs/");
     script.push_str(file);
     script.push_str(".log\"; ");
     script.push_str("for base in ");
