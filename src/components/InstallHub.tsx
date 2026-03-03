@@ -618,7 +618,7 @@ export function InstallHub({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        {t("doctor.appLog")} / {t("doctor.errorLog")} / {t("doctor.gatewayLogs")} 来源：{diagnosticTargetLabel}
+        {t("doctor.appLog")} / {t("doctor.errorLog")} / {t("doctor.gatewayLogs")} {t("doctor.source")} {diagnosticTargetLabel}
       </p>
       {diagnosticsLoading && (
         <p className="text-xs text-muted-foreground animate-pulse">loading…</p>

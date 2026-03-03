@@ -847,7 +847,7 @@ pub fn remote_gateway_log_tail_script(lines: usize, filename: &str) -> String {
     let file = filename.trim_start_matches(".log");
     let mut script = String::new();
     script.push_str(
-        "gateway_data_root=\"${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}\"; ",
+        "gateway_data_root=\"${CLAWPAL_DATA_DIR:-${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}}\"; ",
     );
     script.push_str("log_path=\"$gateway_data_root/logs/");
     script.push_str(file);
@@ -855,11 +855,15 @@ pub fn remote_gateway_log_tail_script(lines: usize, filename: &str) -> String {
     script.push_str("for base in ");
     script.push_str("\"$gateway_data_root\" ");
     script.push_str("\"$gateway_data_root/.openclaw\" ");
+    script.push_str("\"$gateway_data_root/.clawpal\" ");
     script.push_str("\"$OPENCLAW_STATE_DIR\" ");
     script.push_str("\"$OPENCLAW_STATE_DIR/.openclaw\" ");
+    script.push_str("\"$OPENCLAW_STATE_DIR/.clawpal\" ");
     script.push_str("\"$OPENCLAW_HOME\" ");
     script.push_str("\"$OPENCLAW_HOME/.openclaw\" ");
-    script.push_str("\"$HOME/.openclaw\"; ");
+    script.push_str("\"$OPENCLAW_HOME/.clawpal\" ");
+    script.push_str("\"$HOME/.openclaw\" ");
+    script.push_str("\"$HOME/.clawpal\"; ");
     script.push_str("do ");
     script.push_str("candidate=\"$base/logs/");
     script.push_str(file);

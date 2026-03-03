@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { FileTextIcon, DownloadIcon } from "lucide-react";
 import { buildCacheKey, hasGuidanceEmitted, subscribeToCacheKey, useApi } from "@/lib/use-api";
+import { api } from "@/lib/api";
 import { useInstance } from "@/lib/instance-context";
 import { useDoctorAgent } from "@/lib/use-doctor-agent";
 import type {
@@ -162,6 +163,7 @@ export function Doctor({
   const [logsTab, setLogsTab] = useState<"app" | "error">("app");
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState("");
   const [showZeroclawDiagnosis, setShowZeroclawDiagnosis] = useState(false);
   const [zeroclawDoctorUiLoaded, setZeroclawDoctorUiLoaded] = useState(false);
   const logsContentRef = useRef<HTMLPreElement>(null);
@@ -178,6 +180,16 @@ export function Doctor({
       ? t("doctor.engineZeroclaw")
       : t("installChat.letAiHelp")
     : agentSourceLabel;
+  const letAiConnectionState: "checking" | "connected" | "disconnected" =
+    activeDiagnosisEngine === "openclaw"
+      ? (diagnosing || startupStage !== "idle")
+        ? "checking"
+        : doctor.connected
+          ? "connected"
+          : "disconnected"
+      : doctor.connected
+        ? "connected"
+        : "disconnected";
 
   const {
     activating: rescueActivating,
@@ -336,25 +348,32 @@ export function Doctor({
   // Logs helpers
   const fetchLog = (source: "clawpal" | "gateway", which: "app" | "error") => {
     setLogsLoading(true);
+    setLogsError("");
     const fn = source === "clawpal"
-      ? (which === "app" ? ua.readAppLog : ua.readErrorLog)
+      ? (which === "app" ? api.readAppLog : api.readErrorLog)
       : (which === "app" ? ua.readGatewayLog : ua.readGatewayErrorLog);
     fn(200)
       .then((text) => {
-        setLogsContent(text);
+        setLogsContent(text.trim() ? text : t("doctor.noLogs"));
         setTimeout(() => {
           if (logsContentRef.current) {
             logsContentRef.current.scrollTop = logsContentRef.current.scrollHeight;
           }
         }, 50);
       })
-      .catch(() => setLogsContent(""))
+      .catch((error) => {
+        const text = error instanceof Error ? error.message : String(error);
+        setLogsContent("");
+        setLogsError(text || t("doctor.noLogs"));
+      })
       .finally(() => setLogsLoading(false));
   };
 
   const openLogs = (source: "clawpal" | "gateway") => {
     setLogsSource(source);
     setLogsTab("app");
+    setLogsContent("");
+    setLogsError("");
     setLogsOpen(true);
   };
 
@@ -908,7 +927,33 @@ export function Doctor({
 
         <Card className="gap-2 py-4 mb-4">
           <CardHeader className="pb-0">
-            <CardTitle className="text-base">{t("installChat.letAiHelp")}</CardTitle>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <CardTitle className="text-base">{t("installChat.letAiHelp")}</CardTitle>
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <span className="text-xs text-muted-foreground">{t("doctor.targetExecutionLabel")}</span>
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{displayedDoctorTarget}</code>
+                <Badge variant="outline" className="text-[10px]">{instanceTypeLabel}</Badge>
+                <Badge
+                  variant={letAiConnectionState === "disconnected" ? "destructive" : "outline"}
+                  className="text-[10px]"
+                >
+                  {letAiConnectionState === "checking"
+                    ? t("doctor.connecting")
+                    : letAiConnectionState === "connected"
+                      ? t("doctor.connected")
+                      : t("doctor.disconnected")}
+                </Badge>
+                {isPureLocal && (
+                  <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                    {t("doctor.targetExecutionLocalWarning")}
+                  </span>
+                )}
+                <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
+                  <FileTextIcon className="h-3.5 w-3.5 mr-1.5" />
+                  {t("doctor.gatewayLogs")}
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <Button
@@ -1247,7 +1292,7 @@ export function Doctor({
               {logsSource === "clawpal" ? t("doctor.clawpalLogs") : t("doctor.gatewayLogs")}
             </DialogTitle>
           </DialogHeader>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
             <Button
               variant={logsTab === "app" ? "default" : "outline"}
               size="sm"
@@ -1280,6 +1325,11 @@ export function Doctor({
               {t("doctor.exportLogs")}
             </Button>
           </div>
+          {logsError && (
+            <p className="mb-2 text-xs text-destructive">
+              {t("doctor.logReadFailed", { error: logsError })}
+            </p>
+          )}
           <pre
             ref={logsContentRef}
             className="flex-1 min-h-[300px] max-h-[60vh] overflow-auto rounded-md border bg-muted p-3 text-xs font-mono whitespace-pre-wrap break-all"

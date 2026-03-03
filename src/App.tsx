@@ -480,12 +480,12 @@ export function App() {
       if (errors.length === 1) {
         showToast(errors[0].message, "error");
       } else if (errors.length > 1) {
-        showToast(`${errors[0].message}（还有 ${errors.length - 1} 个问题）`, "error");
+        showToast(`${errors[0].message}${t("doctor.remainingIssues", { count: errors.length - 1 })}`, "error");
       }
     }).catch((error) => {
       logDevIgnoredError("precheckRegistry", error);
     });
-  }, [showToast]);
+  }, [showToast, t]);
 
   useEffect(() => {
     const onGuidance = (event: Event) => {
@@ -659,7 +659,7 @@ export function App() {
   }, []);
 
   const ensureAccessForInstance = useCallback((instanceId: string) => {
-    const transport = resolveInstanceTransport(instanceId);
+      const transport = resolveInstanceTransport(instanceId);
     withGuidance(
       () => api.ensureAccessProfile(instanceId, transport),
       "ensureAccessProfile",
@@ -679,12 +679,12 @@ export function App() {
       if (errors.length === 1) {
         showToast(errors[0].message, "error");
       } else if (errors.length > 1) {
-        showToast(`${errors[0].message}（还有 ${errors.length - 1} 个问题）`, "error");
+        showToast(`${errors[0].message}${t("doctor.remainingIssues", { count: errors.length - 1 })}`, "error");
       }
     }).catch((error) => {
       logDevIgnoredError("precheckAuth", error);
     });
-  }, [resolveInstanceTransport, showToast]);
+  }, [resolveInstanceTransport, showToast, t]);
 
   const scheduleEnsureAccessForInstance = useCallback((instanceId: string, delayMs = 1200) => {
     const now = Date.now();
@@ -866,19 +866,22 @@ export function App() {
     remoteAuthSyncAtRef.current[hostId] = now;
     setProfileSyncStatus({
       phase: "syncing",
-      message: "正在同步远程模型认证…",
+      message: t("doctor.profileSyncStarted"),
       instanceId: hostId,
     });
     try {
       const result = await api.remoteSyncProfilesToLocalAuth(hostId);
       invalidateGlobalReadCache(["listModelProfiles", "resolveApiKeys"]);
-      const localProfiles = await api.listModelProfiles().catch((error) => {
+    const localProfiles = await api.listModelProfiles().catch((error) => {
         logDevIgnoredError("syncRemoteAuthAfterConnect listModelProfiles", error);
         return [];
       });
       if (result.resolvedKeys > 0 || result.syncedProfiles > 0) {
         if (localProfiles.length > 0) {
-          const message = `已同步远程认证：profiles ${result.syncedProfiles}，keys ${result.resolvedKeys}`;
+          const message = t("doctor.profileSyncSuccessMessage", {
+            syncedProfiles: result.syncedProfiles,
+            resolvedKeys: result.resolvedKeys,
+          });
           showToast(message, "success");
           setProfileSyncStatus({
             phase: "success",
@@ -886,7 +889,7 @@ export function App() {
             instanceId: hostId,
           });
         } else {
-          const message = "远程同步返回成功，但本地模型列表仍为空（请检查本地 profiles 路径和读取权限）";
+          const message = t("doctor.profileSyncNoLocalProfiles");
           showToast(message, "error");
           setProfileSyncStatus({
             phase: "error",
@@ -895,7 +898,7 @@ export function App() {
           });
         }
       } else if (result.totalRemoteProfiles > 0) {
-        const message = "远程已有 profiles，但未解析到可用 key（请检查 auth_ref/环境变量）";
+        const message = t("doctor.profileSyncNoUsableKeys");
         showToast(message, "error");
         setProfileSyncStatus({
           phase: "error",
@@ -903,7 +906,7 @@ export function App() {
           instanceId: hostId,
         });
       } else {
-        const message = "远程实例未发现可同步的模型配置";
+        const message = t("doctor.profileSyncNoProfiles");
         showToast(message, "error");
         setProfileSyncStatus({
           phase: "error",
@@ -912,7 +915,7 @@ export function App() {
         });
       }
     } catch (e) {
-      const message = `同步远程认证信息失败：${e}`;
+      const message = t("doctor.profileSyncFailed", { error: String(e) });
       showToast(message, "error");
       setProfileSyncStatus({
         phase: "error",
@@ -920,7 +923,7 @@ export function App() {
         instanceId: hostId,
       });
     }
-  }, [showToast]);
+  }, [showToast, t]);
 
 
   const openTab = useCallback((id: string) => {
@@ -971,7 +974,7 @@ export function App() {
       if (blocking.length === 1) {
         showToast(blocking[0].message, "error");
       } else if (blocking.length > 1) {
-        showToast(`${blocking[0].message}（还有 ${blocking.length - 1} 个问题）`, "error");
+        showToast(`${blocking[0].message}${t("doctor.remainingIssues", { count: blocking.length - 1 })}`, "error");
       }
     }).catch((error) => {
       logDevIgnoredError("precheckInstance", error);
@@ -991,7 +994,7 @@ export function App() {
         if (blocking.length === 1) {
           showToast(blocking[0].message, "error");
         } else if (blocking.length > 1) {
-          showToast(`${blocking[0].message}（还有 ${blocking.length - 1} 个问题）`, "error");
+          showToast(`${blocking[0].message}${t("doctor.remainingIssues", { count: blocking.length - 1 })}`, "error");
         } else {
           const warnings = issues.filter((i: PrecheckIssue) => i.severity === "warn");
           if (warnings.length > 0) {
@@ -1542,12 +1545,18 @@ export function App() {
             />
             <span>
               {profileSyncStatus.phase === "idle"
-                ? "模型同步：待命"
+                ? t("doctor.profileSyncIdle")
                 : profileSyncStatus.phase === "syncing"
-                  ? `模型同步中：${profileSyncStatus.instanceId || "当前实例"}`
+                  ? t("doctor.profileSyncSyncing", {
+                    instance: profileSyncStatus.instanceId || t("instance.current"),
+                  })
                   : profileSyncStatus.phase === "success"
-                    ? `模型同步成功：${profileSyncStatus.instanceId || "当前实例"}`
-                    : `模型同步失败：${profileSyncStatus.instanceId || "当前实例"}`}
+                      ? t("doctor.profileSyncSuccessStatus", {
+                        instance: profileSyncStatus.instanceId || t("instance.current"),
+                      })
+                      : t("doctor.profileSyncErrorStatus", {
+                        instance: profileSyncStatus.instanceId || t("instance.current"),
+                      })}
             </span>
           </div>
           {profileSyncStatus.message && (
@@ -1775,9 +1784,9 @@ export function App() {
               try {
                 if (sa.tool === "clawpal" && sa.args?.includes("ssh connect")) {
                   const hostId = agentGuidance.instanceId;
-                  showToast(`正在重连 SSH...`, "success");
+                  showToast(t("doctor.reconnectSsh"), "success");
                   await connectWithPassphraseFallback(hostId);
-                  showToast("SSH 重连成功", "success");
+                  showToast(t("doctor.reconnectSshSuccess"), "success");
                   resolveGuidanceForInstance(hostId);
                 } else {
                   setAgentGuidanceOpen(false);
@@ -1795,7 +1804,10 @@ export function App() {
                   navigateRoute("doctor");
                 }
               } catch (e) {
-                showToast(`${sa.label} 失败: ${e}`, "error");
+                showToast(t("doctor.guidanceActionFailed", {
+                  action: sa.label,
+                  error: String(e),
+                }), "error");
               }
             }}
           />
@@ -1810,7 +1822,7 @@ export function App() {
             setUnreadGuidance(false);
           }}
         >
-          小龙虾
+          {t("doctor.agentSource")}
           {unreadGuidance && !agentGuidanceOpen && (
             <span className="absolute -top-1 -right-1 size-2.5 rounded-full bg-destructive" />
           )}
