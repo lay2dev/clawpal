@@ -217,26 +217,48 @@ pub async fn remote_list_discord_guild_channels(
     // Resolve default agent per guild from account config + bindings (remote)
     {
         // Build account_id -> default agent_id from bindings (account-level, no peer)
-        let mut account_agent_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut account_agent_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         if let Some(bindings) = cfg.get("bindings").and_then(Value::as_array) {
             for b in bindings {
-                let m = match b.get("match") { Some(m) => m, None => continue };
-                if m.get("channel").and_then(Value::as_str) != Some("discord") { continue; }
-                let account_id = match m.get("accountId").and_then(Value::as_str) { Some(s) => s, None => continue };
-                if m.get("peer").and_then(|p| p.get("id")).is_some() { continue; } // skip channel-specific
+                let m = match b.get("match") {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if m.get("channel").and_then(Value::as_str) != Some("discord") {
+                    continue;
+                }
+                let account_id = match m.get("accountId").and_then(Value::as_str) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if m.get("peer").and_then(|p| p.get("id")).is_some() {
+                    continue;
+                } // skip channel-specific
                 if let Some(agent_id) = b.get("agentId").and_then(Value::as_str) {
-                    account_agent_map.entry(account_id.to_string()).or_insert_with(|| agent_id.to_string());
+                    account_agent_map
+                        .entry(account_id.to_string())
+                        .or_insert_with(|| agent_id.to_string());
                 }
             }
         }
         // Build guild_id -> default agent from account->guild mapping
-        let mut guild_default_agent: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        if let Some(accounts) = discord_cfg.and_then(|d| d.get("accounts")).and_then(Value::as_object) {
+        let mut guild_default_agent: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Some(accounts) = discord_cfg
+            .and_then(|d| d.get("accounts"))
+            .and_then(Value::as_object)
+        {
             for (account_id, account_val) in accounts {
-                let agent = account_agent_map.get(account_id).cloned().unwrap_or_else(|| account_id.clone());
+                let agent = account_agent_map
+                    .get(account_id)
+                    .cloned()
+                    .unwrap_or_else(|| account_id.clone());
                 if let Some(guilds) = account_val.get("guilds").and_then(Value::as_object) {
                     for guild_id in guilds.keys() {
-                        guild_default_agent.entry(guild_id.clone()).or_insert(agent.clone());
+                        guild_default_agent
+                            .entry(guild_id.clone())
+                            .or_insert(agent.clone());
                     }
                 }
             }
@@ -563,7 +585,8 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
         // Fallback A: fetch channels from Discord REST for guilds that have no entries yet.
         // Build a guild_id -> token mapping so each guild uses the correct bot token.
         {
-            let mut guild_token_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut guild_token_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
 
             // Map guilds from accounts to their respective tokens
             if let Some(accounts) = discord_cfg
@@ -579,7 +602,9 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
                     if let Some(token) = acct_token {
                         if let Some(guilds) = acct_val.get("guilds").and_then(Value::as_object) {
                             for guild_id in guilds.keys() {
-                                guild_token_map.entry(guild_id.clone()).or_insert_with(|| token.clone());
+                                guild_token_map
+                                    .entry(guild_id.clone())
+                                    .or_insert_with(|| token.clone());
                             }
                         }
                     }
@@ -590,7 +615,9 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
             if let Some(token) = &bot_token {
                 let configured_guild_ids = collect_discord_config_guild_ids(discord_cfg);
                 for guild_id in &configured_guild_ids {
-                    guild_token_map.entry(guild_id.clone()).or_insert_with(|| token.clone());
+                    guild_token_map
+                        .entry(guild_id.clone())
+                        .or_insert_with(|| token.clone());
                 }
             }
 
@@ -710,25 +737,47 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
         // Resolve default agent per guild from account config + bindings
         {
             // Build account_id -> default agent_id from bindings (account-level, no peer)
-            let mut account_agent_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut account_agent_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             if let Some(bindings) = cfg.get("bindings").and_then(Value::as_array) {
                 for b in bindings {
-                    let m = match b.get("match") { Some(m) => m, None => continue };
-                    if m.get("channel").and_then(Value::as_str) != Some("discord") { continue; }
-                    let account_id = match m.get("accountId").and_then(Value::as_str) { Some(s) => s, None => continue };
-                    if m.get("peer").and_then(|p| p.get("id")).is_some() { continue; }
+                    let m = match b.get("match") {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    if m.get("channel").and_then(Value::as_str) != Some("discord") {
+                        continue;
+                    }
+                    let account_id = match m.get("accountId").and_then(Value::as_str) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    if m.get("peer").and_then(|p| p.get("id")).is_some() {
+                        continue;
+                    }
                     if let Some(agent_id) = b.get("agentId").and_then(Value::as_str) {
-                        account_agent_map.entry(account_id.to_string()).or_insert_with(|| agent_id.to_string());
+                        account_agent_map
+                            .entry(account_id.to_string())
+                            .or_insert_with(|| agent_id.to_string());
                     }
                 }
             }
-            let mut guild_default_agent: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-            if let Some(accounts) = discord_cfg.and_then(|d| d.get("accounts")).and_then(Value::as_object) {
+            let mut guild_default_agent: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            if let Some(accounts) = discord_cfg
+                .and_then(|d| d.get("accounts"))
+                .and_then(Value::as_object)
+            {
                 for (account_id, account_val) in accounts {
-                    let agent = account_agent_map.get(account_id).cloned().unwrap_or_else(|| account_id.clone());
+                    let agent = account_agent_map
+                        .get(account_id)
+                        .cloned()
+                        .unwrap_or_else(|| account_id.clone());
                     if let Some(guilds) = account_val.get("guilds").and_then(Value::as_object) {
                         for guild_id in guilds.keys() {
-                            guild_default_agent.entry(guild_id.clone()).or_insert(agent.clone());
+                            guild_default_agent
+                                .entry(guild_id.clone())
+                                .or_insert(agent.clone());
                         }
                     }
                 }
