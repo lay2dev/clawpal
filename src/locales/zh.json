@@ -51,6 +51,7 @@
   "home.active": "活跃",
   "home.idle": "闲置",
   "home.delete": "删除",
+  "home.deleting": "删除中...",
   "home.deleteAgentTitle": "删除 Agent \"{{agentId}}\"？",
   "home.deleteAgentDescription": "这将从配置中移除该 Agent 及其关联的频道绑定。",
   "home.recommendedRecipes": "推荐菜谱",

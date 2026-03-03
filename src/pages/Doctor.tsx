@@ -149,6 +149,7 @@ export function Doctor({
   const [backups, setBackups] = useState<BackupInfo[] | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
+  const [deletingBackupName, setDeletingBackupName] = useState<string | null>(null);
 
   // Full-auto confirmation dialog
   const [fullAutoConfirmOpen, setFullAutoConfirmOpen] = useState(false);
@@ -1252,6 +1253,7 @@ export function Doctor({
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={deletingBackupName != null}
                         onClick={() => ua.openUrl(backup.path)}
                       >
                         {t("home.show")}
@@ -1259,7 +1261,7 @@ export function Doctor({
                     )}
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button size="sm" variant="outline">
+                        <Button size="sm" variant="outline" disabled={deletingBackupName != null}>
                           {t("home.restore")}
                         </Button>
                       </AlertDialogTrigger>
@@ -1286,8 +1288,8 @@ export function Doctor({
                     </AlertDialog>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button size="sm" variant="destructive">
-                          {t("home.delete")}
+                        <Button size="sm" variant="destructive" disabled={deletingBackupName === backup.name}>
+                          {deletingBackupName === backup.name ? t("home.deleting") : t("home.delete")}
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
@@ -1302,12 +1304,15 @@ export function Doctor({
                           <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => {
+                              setDeletingBackupName(backup.name);
                               ua.deleteBackup(backup.name)
                                 .then(() => {
+                                  setBackups((prev) => prev?.filter((b) => b.name !== backup.name) ?? null);
                                   setBackupMessage(t("home.deletedBackup", { name: backup.name }));
                                   refreshBackups();
                                 })
-                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.deleteBackupFailed", { error: String(e) })); });
+                                .catch((e) => { if (!hasGuidanceEmitted(e)) setBackupMessage(t("home.deleteBackupFailed", { error: String(e) })); })
+                                .finally(() => setDeletingBackupName(null));
                             }}
                           >
                             {t("home.delete")}
