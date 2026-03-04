@@ -60,6 +60,7 @@ pub struct SshConnectionPool {
 }
 
 const SSH_OP_MAX_CONCURRENCY_PER_HOST: usize = 2;
+const SSH_TRANSFER_IDLE_DECAY_MS: u64 = 8_000;
 
 impl SshConnectionPool {
     fn format_connection_ids(connections: &HashMap<String, ConnectedHost>) -> String {
@@ -88,6 +89,12 @@ impl SshConnectionPool {
             counter.last_sample_at_ms = now_ms;
             counter.last_sample_upload_bytes = counter.total_upload_bytes;
             counter.last_sample_download_bytes = counter.total_download_bytes;
+            if counter.total_upload_bytes > 0 {
+                counter.upload_bytes_per_sec = counter.total_upload_bytes;
+            }
+            if counter.total_download_bytes > 0 {
+                counter.download_bytes_per_sec = counter.total_download_bytes;
+            }
             return;
         }
         let elapsed = now_ms.saturating_sub(counter.last_sample_at_ms);
@@ -100,8 +107,23 @@ impl SshConnectionPool {
         let download_delta = counter
             .total_download_bytes
             .saturating_sub(counter.last_sample_download_bytes);
-        counter.upload_bytes_per_sec = upload_delta.saturating_mul(1000) / elapsed.max(1);
-        counter.download_bytes_per_sec = download_delta.saturating_mul(1000) / elapsed.max(1);
+        let elapsed = elapsed.max(1);
+        counter.upload_bytes_per_sec = if upload_delta == 0 {
+            0
+        } else {
+            upload_delta
+                .saturating_mul(1000)
+                .saturating_add(elapsed.saturating_sub(1))
+                / elapsed
+        };
+        counter.download_bytes_per_sec = if download_delta == 0 {
+            0
+        } else {
+            download_delta
+                .saturating_mul(1000)
+                .saturating_add(elapsed.saturating_sub(1))
+                / elapsed
+        };
         counter.last_sample_at_ms = now_ms;
         counter.last_sample_upload_bytes = counter.total_upload_bytes;
         counter.last_sample_download_bytes = counter.total_download_bytes;
@@ -130,9 +152,9 @@ impl SshConnectionPool {
         let now_ms = Self::now_ms();
         let mut guard = self.transfer_counters.lock().await;
         let counter = guard.entry(host_id.to_string()).or_default();
-        Self::refresh_counter_speed(counter, now_ms);
-        // Idle decay: hide stale rates shortly after transfer stops.
-        if now_ms.saturating_sub(counter.updated_at_ms) > 1_500 {
+        // Idle decay: keep last observed rate for a short window so sparse
+        // remote calls don't instantly collapse to 0 between samples.
+        if now_ms.saturating_sub(counter.updated_at_ms) > SSH_TRANSFER_IDLE_DECAY_MS {
             counter.upload_bytes_per_sec = 0;
             counter.download_bytes_per_sec = 0;
         }
@@ -668,7 +690,10 @@ fn should_attempt_sftp_exec_fallback(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_login_shell_wrapper, shell_quote, should_attempt_sftp_exec_fallback};
+    use super::{
+        build_login_shell_wrapper, shell_quote, should_attempt_sftp_exec_fallback,
+        HostTransferCounter, SshConnectionPool,
+    };
 
     #[test]
     fn shell_quote_escapes_single_quote() {
@@ -693,5 +718,26 @@ mod tests {
         assert!(!should_attempt_sftp_exec_fallback(
             "open /tmp/missing.json: No such file or directory"
         ));
+    }
+
+    #[test]
+    fn transfer_speed_initial_sample_is_not_zero_for_non_zero_bytes() {
+        let mut counter = HostTransferCounter {
+            total_download_bytes: 24,
+            ..Default::default()
+        };
+        SshConnectionPool::refresh_counter_speed(&mut counter, 1_000);
+        assert_eq!(counter.download_bytes_per_sec, 24);
+    }
+
+    #[test]
+    fn transfer_speed_uses_ceil_division_for_small_deltas() {
+        let mut counter = HostTransferCounter::default();
+        // Initialize sampling anchor.
+        SshConnectionPool::refresh_counter_speed(&mut counter, 1_000);
+        counter.total_download_bytes = 1;
+        // 1 byte over 2000ms should still report 1 B/s instead of flooring to 0.
+        SshConnectionPool::refresh_counter_speed(&mut counter, 3_000);
+        assert_eq!(counter.download_bytes_per_sec, 1);
     }
 }
