@@ -1,8 +1,20 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version without v prefix (e.g. 1.2.3 or 1.2.3-rc.1)"
+        required: true
+        type: string
+      target_commitish:
+        description: "Commit SHA to anchor the draft release/tag"
+        required: true
+        type: string
+      is_prerelease:
+        description: "Whether this should be marked as prerelease"
+        required: true
+        type: boolean
 
 permissions:
   contents: write
@@ -17,18 +29,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.target_commitish }}
 
       - name: Generate changelog
         id: changelog
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Find previous tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
+          TARGET_COMMIT="${{ inputs.target_commitish }}"
+          PREV_TAG=$(git tag --sort=-v:refname | head -1)
 
           if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --oneline --no-merges "${TAG}")
+            COMMITS=$(git log --oneline --no-merges "$TARGET_COMMIT")
           else
-            COMMITS=$(git log --oneline --no-merges "${PREV_TAG}..${TAG}")
+            COMMITS=$(git log --oneline --no-merges "${PREV_TAG}..${TARGET_COMMIT}")
           fi
 
           # Group commits by type
@@ -80,10 +92,14 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
+    environment: ${{ inputs.is_prerelease && 'prerelease' || 'release' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_commitish }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -101,19 +117,30 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Sync project version from tag
-        id: sync_version
+      - name: Resolve release metadata
+        id: release_meta
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
-            echo "::error::Tag name is empty"
+            echo "::error::Version input is empty"
             exit 1
           fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
-            echo "::error::Invalid semver tag: $VERSION"
+            echo "::error::Invalid semver version: $VERSION"
             exit 1
           fi
+
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "### Release tag: $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Target commit: ${{ inputs.target_commitish }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sync project version from dispatch input
+        shell: bash
+        run: |
+          VERSION="${{ steps.release_meta.outputs.version }}"
 
           export VERSION
           node - <<'NODE'
@@ -138,6 +165,89 @@ jobs:
 
           echo "### Synced project version to $VERSION" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Determine if prerelease
+        id: release_flags
+        shell: bash
+        run: |
+          VERSION="${{ steps.release_meta.outputs.version }}"
+          if [ "${{ inputs.is_prerelease }}" = "true" ] || [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect signing materials
+        id: signing
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          has_tauri_signing=true
+          [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] && has_tauri_signing=false
+          [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ] && has_tauri_signing=false
+
+          has_apple_signing=true
+          [ -z "$APPLE_CERTIFICATE" ] && has_apple_signing=false
+          [ -z "$APPLE_CERTIFICATE_PASSWORD" ] && has_apple_signing=false
+          [ -z "$APPLE_SIGNING_IDENTITY" ] && has_apple_signing=false
+          [ -z "$APPLE_API_KEY" ] && has_apple_signing=false
+          [ -z "$APPLE_API_ISSUER" ] && has_apple_signing=false
+          [ -z "$APPLE_API_KEY_CONTENT" ] && has_apple_signing=false
+
+          should_sign=false
+          if [ "$has_tauri_signing" = "true" ] && [ "$has_apple_signing" = "true" ]; then
+            should_sign=true
+          fi
+
+          if [ "$should_sign" = "true" ]; then
+            mode="signed"
+            asset_suffix=""
+          else
+            mode="unsigned"
+            asset_suffix="-unsigned"
+          fi
+
+          echo "has_tauri_signing=$has_tauri_signing" >> "$GITHUB_OUTPUT"
+          echo "has_apple_signing=$has_apple_signing" >> "$GITHUB_OUTPUT"
+          echo "should_sign=$should_sign" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "asset_suffix=$asset_suffix" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize signing mode
+        shell: bash
+        run: |
+          echo "### Signing mode (${{ matrix.label }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: ${{ inputs.is_prerelease && 'prerelease' || 'release' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- has_tauri_signing: ${{ steps.signing.outputs.has_tauri_signing }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- has_apple_signing: ${{ steps.signing.outputs.has_apple_signing }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mode: ${{ steps.signing.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Disable app signing when signing material is missing
+        if: steps.signing.outputs.should_sign != 'true'
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = "src-tauri/tauri.conf.json";
+          const conf = JSON.parse(fs.readFileSync(path, "utf8"));
+
+          if (conf.bundle) {
+            conf.bundle.createUpdaterArtifacts = false;
+            if (conf.bundle.macOS) {
+              conf.bundle.macOS.signingIdentity = "-";
+            }
+          }
+
+          fs.writeFileSync(path, JSON.stringify(conf, null, 2));
+          NODE
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -149,7 +259,7 @@ jobs:
             patchelf
 
       - name: Import Apple certificate (macOS only)
-        if: ${{ contains(matrix.target, 'apple-darwin') && !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -177,7 +287,7 @@ jobs:
           rm "$CERTIFICATE_PATH"
 
       - name: Write Apple API key (macOS only)
-        if: ${{ contains(matrix.target, 'apple-darwin') && !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
@@ -186,16 +296,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Determine if prerelease
-        id: release_flags
-        shell: bash
-        run: |
-          if [[ "${{ github.ref_name }}" == *-alpha* || "${{ github.ref_name }}" == *-beta* || "${{ github.ref_name }}" == *-rc* ]]; then
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Compute build args
         id: build_args
@@ -207,22 +307,8 @@ jobs:
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
 
-      - name: Disable Apple app signing for macOS prerelease
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.release_flags.outputs.is_prerelease == 'true' }}
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const fs = require("fs");
-          const path = "src-tauri/tauri.conf.json";
-          const conf = JSON.parse(fs.readFileSync(path, "utf8"));
-          if (conf.bundle && conf.bundle.macOS) {
-            delete conf.bundle.macOS.signingIdentity;
-          }
-          fs.writeFileSync(path, JSON.stringify(conf, null, 2));
-          NODE
-
       - name: Build Tauri app (signed/notarized)
-        if: steps.release_flags.outputs.is_prerelease != 'true'
+        if: steps.signing.outputs.should_sign == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -235,10 +321,11 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ~/.private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ClawPal ${{ github.ref_name }}
+          tagName: ${{ steps.release_meta.outputs.tag }}
+          releaseCommitish: ${{ inputs.target_commitish }}
+          releaseName: ClawPal ${{ steps.release_meta.outputs.tag }}
           releaseBody: |
-            ## ClawPal ${{ github.ref_name }}
+            ## ClawPal ${{ steps.release_meta.outputs.tag }}
 
             ${{ needs.changelog.outputs.body }}
 
@@ -262,18 +349,17 @@ jobs:
           prerelease: ${{ steps.release_flags.outputs.is_prerelease == 'true' }}
           args: ${{ steps.build_args.outputs.args }}
 
-      - name: Build Tauri app (prerelease)
-        if: steps.release_flags.outputs.is_prerelease == 'true'
+      - name: Build Tauri app (unsigned)
+        if: steps.signing.outputs.should_sign != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ClawPal ${{ github.ref_name }}
+          tagName: ${{ steps.release_meta.outputs.tag }}
+          releaseCommitish: ${{ inputs.target_commitish }}
+          releaseName: ClawPal ${{ steps.release_meta.outputs.tag }} (unsigned)
           releaseBody: |
-            ## ClawPal ${{ github.ref_name }}
+            ## ClawPal ${{ steps.release_meta.outputs.tag }}
 
             ${{ needs.changelog.outputs.body }}
 
@@ -296,6 +382,48 @@ jobs:
           releaseDraft: true
           prerelease: ${{ steps.release_flags.outputs.is_prerelease == 'true' }}
           args: ${{ steps.build_args.outputs.args }}
+
+      - name: Rename release assets as unsigned
+        if: steps.signing.outputs.should_sign != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.release_meta.outputs.tag }}"
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          SUFFIX="${{ steps.signing.outputs.asset_suffix }}"
+
+          FILES=()
+          while IFS= read -r file; do
+            FILES+=("$file")
+          done < <(find "$BUNDLE_DIR" -type f \( \
+            -name "*.dmg" -o \
+            -name "*.deb" -o \
+            -name "*.AppImage" -o \
+            -name "*.msi" -o \
+            -name "*.exe" -o \
+            -name "*.rpm" \
+          \))
+
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No bundle assets found to rename as unsigned"
+            exit 1
+          fi
+
+          mkdir -p unsigned-release-assets
+
+          for src in "${FILES[@]}"; do
+            base="$(basename "$src")"
+            if [[ "$base" == *.* ]]; then
+              unsigned_name="${base%.*}${SUFFIX}.${base##*.}"
+            else
+              unsigned_name="${base}${SUFFIX}"
+            fi
+
+            cp "$src" "unsigned-release-assets/$unsigned_name"
+            gh release upload "$TAG" "unsigned-release-assets/$unsigned_name" --clobber
+            gh release delete-asset "$TAG" "$base" -y || true
+          done
 
       - name: Upload Windows portable exe
         if: matrix.platform == 'windows-latest'
@@ -305,9 +433,9 @@ jobs:
         run: |
           $exe = Get-ChildItem "src-tauri/target/${{ matrix.target }}/release/clawpal.exe" -ErrorAction SilentlyContinue
           if ($exe) {
-            $dest = "ClawPal_portable_x64.exe"
+            $dest = "ClawPal_portable_x64${{ steps.signing.outputs.asset_suffix }}.exe"
             Copy-Item $exe.FullName $dest
-            gh release upload ${{ github.ref_name }} $dest --clobber
+            gh release upload "${{ steps.release_meta.outputs.tag }}" $dest --clobber
           }
 
       - name: Upload zeroclaw sidecar binary
@@ -342,6 +470,15 @@ jobs:
               ;;
           esac
 
+          ASSET_SUFFIX="${{ steps.signing.outputs.asset_suffix }}"
+          if [ -n "$ASSET_SUFFIX" ]; then
+            if [[ "$OUTPUT_NAME" == *.exe ]]; then
+              OUTPUT_NAME="${OUTPUT_NAME%.exe}${ASSET_SUFFIX}.exe"
+            else
+              OUTPUT_NAME="${OUTPUT_NAME}${ASSET_SUFFIX}"
+            fi
+          fi
+
           SOURCE="src-tauri/resources/zeroclaw/${SIDE_DIR}/${SOURCE_BIN}"
           if [ ! -f "$SOURCE" ]; then
             echo "Zeroclaw binary not found for ${SIDE_DIR}: $SOURCE"
@@ -354,7 +491,7 @@ jobs:
           if [ "${{ matrix.platform }}" != "windows-latest" ]; then
             chmod +x "$DEST"
           fi
-          gh release upload ${{ github.ref_name }} "$DEST" --clobber
+          gh release upload "${{ steps.release_meta.outputs.tag }}" "$DEST" --clobber
 
       - name: Cleanup Apple signing (macOS only)
         if: ${{ contains(matrix.target, 'apple-darwin') && always() }}
