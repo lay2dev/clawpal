@@ -3480,9 +3480,7 @@ fn resolve_profile_credential_with_priority(
                 }
             }
         }
-        if let Some(credential) =
-            resolve_credential_from_agent_auth_profiles(base_dir, auth_ref)
-        {
+        if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, auth_ref) {
             return Some((credential, 30));
         }
     }
@@ -3786,7 +3784,11 @@ fn resolve_secret_ref_with_env(
 
 fn resolve_secret_ref_file(path_str: &str) -> Option<String> {
     let path = std::path::Path::new(path_str);
-    if !path.is_absolute() || !path.exists() {
+    if !path.is_absolute() {
+        eprintln!("SecretRef file source: ignoring non-absolute path '{path_str}'");
+        return None;
+    }
+    if !path.exists() {
         return None;
     }
     let content = fs::read_to_string(path).ok()?;
@@ -3804,33 +3806,34 @@ fn local_env_lookup(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn collect_secret_ref_env_names_from_auth_store(data: &Value) -> Vec<String> {
-    let mut names = Vec::new();
-    let check_entry = |entry: &Value, names: &mut Vec<String>| {
-        if let Some(sr) = entry.get("secretRef").and_then(try_parse_secret_ref) {
-            if sr.source == "env" {
-                names.push(sr.id);
-            }
+fn collect_secret_ref_env_names_from_entry(entry: &Value, names: &mut Vec<String>) {
+    if let Some(sr) = entry.get("secretRef").and_then(try_parse_secret_ref) {
+        if sr.source == "env" {
+            names.push(sr.id);
         }
-        for field in ["token", "key", "apiKey", "api_key", "access"] {
-            if let Some(field_val) = entry.get(field) {
-                if let Some(sr) = try_parse_secret_ref(field_val) {
-                    if sr.source == "env" {
-                        names.push(sr.id);
-                    }
+    }
+    for field in ["token", "key", "apiKey", "api_key", "access"] {
+        if let Some(field_val) = entry.get(field) {
+            if let Some(sr) = try_parse_secret_ref(field_val) {
+                if sr.source == "env" {
+                    names.push(sr.id);
                 }
             }
         }
-    };
+    }
+}
+
+fn collect_secret_ref_env_names_from_auth_store(data: &Value) -> Vec<String> {
+    let mut names = Vec::new();
     if let Some(profiles) = data.get("profiles").and_then(Value::as_object) {
         for entry in profiles.values() {
-            check_entry(entry, &mut names);
+            collect_secret_ref_env_names_from_entry(entry, &mut names);
         }
     }
     if let Some(root_obj) = data.as_object() {
         for (key, entry) in root_obj {
             if key != "profiles" && key != "version" {
-                check_entry(entry, &mut names);
+                collect_secret_ref_env_names_from_entry(entry, &mut names);
             }
         }
     }
@@ -3893,11 +3896,8 @@ fn extract_credential_from_auth_entry_with_env(
                         "token" | "access" => InternalAuthKind::Authorization,
                         _ => InternalAuthKind::ApiKey,
                     };
-                    let kind = infer_auth_kind(
-                        provider,
-                        trimmed,
-                        kind_from_type.unwrap_or(fallback_kind),
-                    );
+                    let kind =
+                        infer_auth_kind(provider, trimmed, kind_from_type.unwrap_or(fallback_kind));
                     return Some(InternalProviderCredential {
                         secret: trimmed.to_string(),
                         kind,
@@ -5197,8 +5197,8 @@ mod secret_ref_tests {
                 None
             }
         };
-        let credential =
-            extract_credential_from_auth_entry_with_env(&entry, &env_lookup).expect("should resolve");
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
         assert_eq!(credential.secret, "sk-resolved-kimi");
         assert_eq!(credential.kind, InternalAuthKind::ApiKey);
     }
@@ -5217,8 +5217,8 @@ mod secret_ref_tests {
                 None
             }
         };
-        let credential =
-            extract_credential_from_auth_entry_with_env(&entry, &env_lookup).expect("should resolve");
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
         assert_eq!(credential.secret, "sk-ant-resolved");
         assert_eq!(credential.kind, InternalAuthKind::Authorization);
     }
@@ -5237,8 +5237,8 @@ mod secret_ref_tests {
                 None
             }
         };
-        let credential =
-            extract_credential_from_auth_entry_with_env(&entry, &env_lookup).expect("should resolve");
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
         assert_eq!(credential.secret, "sk-openai-resolved");
         assert_eq!(credential.kind, InternalAuthKind::ApiKey);
     }
@@ -5258,8 +5258,8 @@ mod secret_ref_tests {
                 None
             }
         };
-        let credential =
-            extract_credential_from_auth_entry_with_env(&entry, &env_lookup).expect("should resolve");
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
         assert_eq!(credential.secret, "sk-ref-fresh");
     }
 
@@ -5272,8 +5272,8 @@ mod secret_ref_tests {
             "secretRef": { "source": "env", "id": "MISSING_VAR" }
         });
         let env_lookup = |_: &str| -> Option<String> { None };
-        let credential =
-            extract_credential_from_auth_entry_with_env(&entry, &env_lookup).expect("should resolve");
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
         assert_eq!(credential.secret, "sk-plaintext-fallback");
     }
 
@@ -5296,11 +5296,8 @@ mod secret_ref_tests {
                 None
             }
         };
-        let key = resolve_key_from_auth_store_json_with_env(
-            &store,
-            "anthropic:default",
-            &env_lookup,
-        );
+        let key =
+            resolve_key_from_auth_store_json_with_env(&store, "anthropic:default", &env_lookup);
         assert_eq!(key, Some("sk-ant-from-env".to_string()));
     }
 
@@ -5328,10 +5325,8 @@ mod secret_ref_tests {
 
     #[test]
     fn resolve_secret_ref_file_reads_file_content() {
-        let tmp = std::env::temp_dir().join(format!(
-            "clawpal-secretref-file-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("clawpal-secretref-file-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).expect("create tmp dir");
         let secret_file = tmp.join("api-key.txt");
         fs::write(&secret_file, "  sk-from-file\n").expect("write secret file");
@@ -6786,12 +6781,11 @@ async fn resolve_remote_key_from_agent_auth_profiles(
                         RemoteAuthCache::batch_read_env_vars(pool, host_id, &sr_env_names)
                             .await
                             .unwrap_or_default();
-                    let env_lookup = |name: &str| -> Option<String> {
-                        remote_env.get(name).cloned()
-                    };
-                    if let Some(key) = resolve_key_from_auth_store_json_with_env(
-                        &data, auth_ref, &env_lookup,
-                    ) {
+                    let env_lookup =
+                        |name: &str| -> Option<String> { remote_env.get(name).cloned() };
+                    if let Some(key) =
+                        resolve_key_from_auth_store_json_with_env(&data, auth_ref, &env_lookup)
+                    {
                         return Ok(Some(key));
                     }
                 }
@@ -6957,7 +6951,10 @@ impl RemoteAuthCache {
         let mut seen_env = std::collections::HashSet::<String>::new();
         for profile in profiles {
             let auth_ref = profile.auth_ref.trim();
-            if !auth_ref.is_empty() && is_valid_env_var_name(auth_ref) && seen_env.insert(auth_ref.to_string()) {
+            if !auth_ref.is_empty()
+                && is_valid_env_var_name(auth_ref)
+                && seen_env.insert(auth_ref.to_string())
+            {
                 env_var_names.push(auth_ref.to_string());
             }
             for env_name in provider_env_var_candidates(&profile.provider) {
@@ -7010,7 +7007,9 @@ impl RemoteAuthCache {
         script.push_str("; do eval \"__val=\\${$__v+__SET__}\\${$__v}\"; ");
         script.push_str("case \"$__val\" in __SET__*) printf '%s=%s\\n' \"$__v\" \"${__val#__SET__}\";; esac; done");
 
-        let out = pool.exec_login(host_id, &script).await
+        let out = pool
+            .exec_login(host_id, &script)
+            .await
             .map_err(|e| format!("Failed to batch-read remote env vars: {e}"))?;
 
         let mut map = HashMap::new();
@@ -7042,7 +7041,8 @@ impl RemoteAuthCache {
             };
 
             for agent in entries.into_iter().filter(|entry| entry.is_dir) {
-                let agent_dir = format!("{}/agents/{}/agent", root.trim_end_matches('/'), agent.name);
+                let agent_dir =
+                    format!("{}/agents/{}/agent", root.trim_end_matches('/'), agent.name);
                 for file_name in ["auth-profiles.json", "auth.json"] {
                     let auth_file = format!("{agent_dir}/{file_name}");
                     let text = match pool.sftp_read(host_id, &auth_file).await {
@@ -7106,9 +7106,7 @@ impl RemoteAuthCache {
     }
 
     fn find_in_auth_stores(&self, auth_ref: &str) -> Option<String> {
-        let env_lookup = |name: &str| -> Option<String> {
-            self.env_vars.get(name).cloned()
-        };
+        let env_lookup = |name: &str| -> Option<String> { self.env_vars.get(name).cloned() };
         for data in &self.auth_store_files {
             if let Some(key) =
                 resolve_key_from_auth_store_json_with_env(data, auth_ref, &env_lookup)
