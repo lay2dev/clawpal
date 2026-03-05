@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -27,19 +28,21 @@ pub enum SshIntent {
     HealthCheck,
 }
 
-impl SshIntent {
-    pub fn from_str(raw: &str) -> Option<Self> {
+impl FromStr for SshIntent {
+    type Err = ();
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let normalized = raw.trim().to_ascii_lowercase();
         match normalized.as_str() {
-            "connect" => Some(Self::Connect),
-            "exec" => Some(Self::Exec),
-            "sftp_read" => Some(Self::SftpRead),
-            "sftp_write" => Some(Self::SftpWrite),
-            "sftp_remove" => Some(Self::SftpRemove),
-            "install_step" => Some(Self::InstallStep),
-            "doctor_remote" => Some(Self::DoctorRemote),
-            "health_check" => Some(Self::HealthCheck),
-            _ => None,
+            "connect" => Ok(Self::Connect),
+            "exec" => Ok(Self::Exec),
+            "sftp_read" => Ok(Self::SftpRead),
+            "sftp_write" => Ok(Self::SftpWrite),
+            "sftp_remove" => Ok(Self::SftpRemove),
+            "install_step" => Ok(Self::InstallStep),
+            "doctor_remote" => Ok(Self::DoctorRemote),
+            "health_check" => Ok(Self::HealthCheck),
+            _ => Err(()),
         }
     }
 }

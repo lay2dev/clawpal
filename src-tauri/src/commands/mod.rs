@@ -7469,7 +7469,7 @@ pub async fn diagnose_ssh(
     intent: String,
     app: AppHandle,
 ) -> Result<SshDiagnosticReport, SshCommandError> {
-    let intent = SshIntent::from_str(&intent).ok_or_else(|| {
+    let intent = intent.parse::<SshIntent>().map_err(|_| {
         make_ssh_command_error(
             &app,
             SshStage::ResolveHostConfig,
