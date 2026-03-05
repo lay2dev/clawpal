@@ -801,23 +801,26 @@ export function Settings({
     if (!zeroclawPrefsLoadedRef.current) return;
     const next = zeroclawModel.trim();
     if (next === zeroclawLastSavedRef.current) return;
-    const timer = window.setTimeout(() => {
-      setZeroclawSaving(true);
-      ua.setZeroclawModelPreference(next.length > 0 ? next : null)
-        .then((prefs) => {
-          const persisted = prefs.zeroclawModel || "";
-          zeroclawLastSavedRef.current = persisted.trim();
-          if (persisted !== zeroclawModel) {
-            setZeroclawModel(persisted);
-          }
-        })
-        .catch((e) => {
-          const errorText = e instanceof Error ? e.message : String(e);
-          toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
-        })
-        .finally(() => setZeroclawSaving(false));
-    }, 350);
-    return () => window.clearTimeout(timer);
+    setZeroclawSaving(true);
+    let cancelled = false;
+    ua.setZeroclawModelPreference(next.length > 0 ? next : null)
+      .then((prefs) => {
+        if (cancelled) return;
+        const persisted = prefs.zeroclawModel || "";
+        zeroclawLastSavedRef.current = persisted.trim();
+        if (persisted !== zeroclawModel) {
+          setZeroclawModel(persisted);
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
+      })
+      .finally(() => {
+        if (!cancelled) setZeroclawSaving(false);
+      });
+    return () => { cancelled = true; };
   }, [ua, zeroclawModel, t]);
 
   return (
