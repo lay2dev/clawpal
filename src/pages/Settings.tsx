@@ -5,7 +5,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
-import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
+import { buildCacheKey, hasGuidanceEmitted, subscribeToCacheKey, useApi } from "@/lib/use-api";
 import { isAlreadyExplainedGuidanceError } from "@/lib/guidance";
 import { useTheme } from "@/lib/use-theme";
 import { useFont } from "@/lib/use-font";
@@ -367,9 +367,13 @@ export function Settings({
 
   useEffect(() => {
     let cancelled = false;
+    let firstLoad = true;
     const loadStats = () => {
-      setZeroclawUsageLoading(true);
-      setZeroclawTargetLoading(true);
+      // Only show loading spinners on the initial fetch to avoid flickering.
+      if (firstLoad) {
+        setZeroclawUsageLoading(true);
+        setZeroclawTargetLoading(true);
+      }
       ua.getZeroclawUsageStats()
         .then((stats) => {
           if (!cancelled) setZeroclawUsage(stats);
@@ -389,13 +393,18 @@ export function Settings({
         })
         .finally(() => {
           if (!cancelled) setZeroclawTargetLoading(false);
+          firstLoad = false;
         });
     };
     loadStats();
     const timer = window.setInterval(loadStats, 4_000);
+    // Also react immediately when the model preference is saved.
+    const cacheKey = buildCacheKey("__global__", "getZeroclawRuntimeTarget", []);
+    const unsubscribe = subscribeToCacheKey(cacheKey, loadStats);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      unsubscribe();
     };
   }, [ua]);
 
