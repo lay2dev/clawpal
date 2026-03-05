@@ -926,8 +926,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
-          DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle/dmg"
+            "src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          DMG_PATH=""
+          if [ -n "$BUNDLE_DIR" ]; then
+            DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          fi
           if [ -z "$DMG_PATH" ]; then
             echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
             exit 1
@@ -942,7 +957,21 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.release_meta.outputs.tag }}"
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+          )
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+          if [ -z "$BUNDLE_DIR" ]; then
+            echo "::error::No bundle directory found for target ${{ matrix.target }}"
+            exit 1
+          fi
           SUFFIX="${{ steps.signing.outputs.asset_suffix }}"
 
           FILES=()
@@ -983,7 +1012,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "src-tauri/target/${{ matrix.target }}/release/clawpal.exe" -ErrorAction SilentlyContinue
+          $candidates = @(
+            "target/${{ matrix.target }}/release/clawpal.exe",
+            "src-tauri/target/${{ matrix.target }}/release/clawpal.exe"
+          )
+          $exe = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              $exe = Get-Item $candidate
+              break
+            }
+          }
           if ($exe) {
             $dest = "ClawPal_portable_x64${{ steps.signing.outputs.asset_suffix }}.exe"
             Copy-Item $exe.FullName $dest
