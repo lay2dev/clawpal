@@ -84,6 +84,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Generate DMG background asset (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-dmg-background.sh
+
       - name: Determine if prerelease
         id: release_flags
         shell: bash
@@ -109,28 +116,80 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         with:
           args: ${{ steps.build_args.outputs.args }}
+
+      - name: Verify DMG layout (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle/dmg"
+            "src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          DMG_PATH=""
+          if [ -n "$BUNDLE_DIR" ]; then
+            DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          fi
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
+            exit 1
+          fi
+
+          bash scripts/verify-dmg-layout.sh "$DMG_PATH" "ClawPal.app"
 
       - name: Collect build artifacts
         shell: bash
         run: |
           mkdir -p artifacts
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+          )
 
-          find "$BUNDLE_DIR" -type f \( \
-            -name "*.dmg" -o \
-            -name "*.deb" -o \
-            -name "*.AppImage" -o \
-            -name "*.msi" -o \
-            -name "*.exe" -o \
-            -name "*.rpm" \
-          \) -exec cp {} artifacts/ \; 2>/dev/null || true
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \( \
+              -name "*.dmg" -o \
+              -name "*.deb" -o \
+              -name "*.AppImage" -o \
+              -name "*.msi" -o \
+              -name "*.exe" -o \
+              -name "*.rpm" \
+            \) -exec cp {} artifacts/ \; 2>/dev/null || true
+          fi
 
           # Include portable exe on Windows
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            PORTABLE="src-tauri/target/${{ matrix.target }}/release/clawpal.exe"
-            [ -f "$PORTABLE" ] && cp "$PORTABLE" "artifacts/ClawPal_portable.exe"
+            PORTABLE_CANDIDATES=(
+              "target/${{ matrix.target }}/release/clawpal.exe"
+              "src-tauri/target/${{ matrix.target }}/release/clawpal.exe"
+            )
+            for portable in "${PORTABLE_CANDIDATES[@]}"; do
+              if [ -f "$portable" ]; then
+                cp "$portable" "artifacts/ClawPal_portable.exe"
+                break
+              fi
+            done
           fi
 
           echo "### Collected artifacts:"

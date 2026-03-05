@@ -2,6 +2,7 @@ node_modules/
 dist/
 target/
 src-tauri/target/
+src-tauri/.generated/
 .worktrees/
 bun.lockb
 bun.lock
