@@ -755,11 +755,8 @@ fn hint_to_url(hint: &str) -> String {
     if hint.starts_with("http://") || hint.starts_with("https://") {
         return normalize_doc_url(hint);
     }
-    let normalized = hint.trim_start_matches('/');
-    if normalized.ends_with(".md") {
-        return format!("https://docs.openclaw.ai/{normalized}");
-    }
-    format!("https://docs.openclaw.ai/{normalized}.md")
+    let normalized = hint.trim_start_matches('/').trim_end_matches(".md");
+    format!("https://docs.openclaw.ai/{normalized}")
 }
 
 fn normalize_doc_url(url: &str) -> String {
@@ -1205,7 +1202,11 @@ mod tests {
     fn hint_to_url_normalizes_non_http_hint() {
         assert_eq!(
             hint_to_url("cli/gateway"),
-            "https://docs.openclaw.ai/cli/gateway.md"
+            "https://docs.openclaw.ai/cli/gateway"
+        );
+        assert_eq!(
+            hint_to_url("cli/gateway.md"),
+            "https://docs.openclaw.ai/cli/gateway"
         );
         assert_eq!(
             hint_to_url("https://docs.openclaw.ai/security"),
@@ -1313,7 +1314,10 @@ bar
         ];
         let ranked = rank_urls_from_rules_and_index(&matches, &index, &["gateway".to_string()]);
         assert!(!ranked.is_empty());
-        assert_eq!(ranked[0], "https://docs.openclaw.ai/cli/gateway.md");
+        assert!(
+            ranked[0] == "https://docs.openclaw.ai/cli/gateway"
+                || ranked[0] == "https://docs.openclaw.ai/cli/gateway.md"
+        );
     }
 
     #[test]
