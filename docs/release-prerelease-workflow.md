@@ -1,6 +1,6 @@
 # ClawPal Release / Prerelease 流程说明
 
-本文基于当前仓库 `.github/workflows/bump-version.yml` 与 `.github/workflows/release.yml`（2026-03-04）整理，说明 `release` 与 `prerelease` 的实际执行流程，以及 Apple Developer 签名/公证行为。
+本文基于当前仓库 `.github/workflows/bump-version.yml` 与 `.github/workflows/release.yml`（2026-03-05）整理，说明 `release` 与 `prerelease` 的实际执行流程，以及 Apple Developer 签名/公证行为。
 
 ## 1. 触发入口（推荐）
 
@@ -142,3 +142,48 @@
 5. 在 `Release` workflow 中核对 4 平台矩阵构建
 6. 在 draft release 中验证产物、签名和说明
 7. 点击 Publish（此时 GitHub 创建 `vX.Y.Z` tag 并正式发布）
+
+## 10. macOS DMG 安装体验增强（2026-03-05）
+
+为避免 DMG 内仅有 `.app`、缺少安装引导的问题，当前流程新增以下约束：
+
+1. `src-tauri/tauri.conf.json` 已配置 `bundle.macOS.dmg`：
+   - `background`: `.generated/dmg-background.png`
+   - `windowSize` / `appPosition` / `applicationFolderPosition` 固定为安装引导布局
+2. 三条 workflow 在 macOS 目标构建前都会执行：
+   - `bash scripts/generate-dmg-background.sh`
+3. 三条 workflow 的 Tauri 打包都注入：
+   - `TAURI_BUNDLER_DMG_IGNORE_CI=true`
+4. 三条 workflow 在 macOS 目标打包后都会执行结构校验：
+   - `bash scripts/verify-dmg-layout.sh <dmg>`
+   - 校验项：`.app`、`Applications -> /Applications` 链接、`.background/dmg-background.png`
+5. `release.yml` 的 signed repack 逻辑已改为“保留原 DMG 布局后替换 stapled app”：
+   - 避免 `hdiutil create -srcfolder <App>` 导致 `Applications` 链接和背景丢失
+
+### 本地无签名视觉验证
+
+可在 macOS 本地运行：
+
+```bash
+bash scripts/dmg-local-preview.sh --target aarch64-apple-darwin
+```
+
+脚本会自动：
+1. 生成 DMG 背景图
+2. 自动尝试 Finder 美化模式（可生成拖拽背景与图标布局）；若本机不可用则回退到 `headless` 模式
+3. 运行 DMG 结构校验
+
+可选参数：
+
+```bash
+# 强制 Finder 美化模式（用于本地 GUI 视觉验收）
+bash scripts/dmg-local-preview.sh --target aarch64-apple-darwin --finder
+
+# 强制无头模式（用于 CI/SSH 环境）
+bash scripts/dmg-local-preview.sh --target aarch64-apple-darwin --headless
+```
+
+### 约束说明
+
+- CI 环境下 Finder 渲染（图标自动排版/背景可视效果）受 AppleScript 与运行环境限制，当前是 best-effort。
+- 但 `Applications` 链接、背景文件与 repack 保留布局由脚本强校验，失败会阻断上传流程。

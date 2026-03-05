@@ -365,6 +365,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Generate DMG background asset (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-dmg-background.sh
+
       - name: Compute build args
         id: build_args
         shell: bash
@@ -388,6 +395,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ~/.private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         with:
           tagName: ${{ steps.release_meta.outputs.tag }}
           releaseCommitish: ${{ inputs.target_commitish }}
@@ -463,6 +471,13 @@ jobs:
           echo "- bundle_root: $bundle_root" >> "$GITHUB_STEP_SUMMARY"
           echo "- app: $app_path" >> "$GITHUB_STEP_SUMMARY"
           echo "- dmg: $dmg_path" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify DMG layout (signed build)
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-dmg-layout.sh "${{ steps.macos_assets.outputs.dmg_path }}" "ClawPal.app"
 
       - name: Preflight macOS signing diagnostics
         if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
@@ -639,23 +654,58 @@ jobs:
 
           APP_PATH="${{ steps.macos_assets.outputs.app_path }}"
           DMG_PATH="${{ steps.macos_assets.outputs.dmg_path }}"
-          VOL_NAME="$(basename "$APP_PATH" .app)"
+          APP_BUNDLE_NAME="$(basename "$APP_PATH")"
+          VOL_NAME="$(hdiutil imageinfo "$DMG_PATH" | awk -F': *' '/^ *Volume Name:/ {print $2; exit}')"
+          if [ -z "$VOL_NAME" ]; then
+            VOL_NAME="$(basename "$APP_PATH" .app)"
+          fi
           REPACKED_DMG="$RUNNER_TEMP/repacked-${{ matrix.target }}.dmg"
+          STAGING_DIR="$RUNNER_TEMP/dmg-staging-${{ matrix.target }}"
+          MOUNT_POINT="$RUNNER_TEMP/dmg-mount-${{ matrix.target }}"
+
+          cleanup() {
+            if mount | grep -q "on ${MOUNT_POINT} "; then
+              hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+            fi
+            rm -rf "$MOUNT_POINT"
+          }
+          trap cleanup EXIT
+
+          rm -rf "$STAGING_DIR" "$MOUNT_POINT"
+          mkdir -p "$STAGING_DIR" "$MOUNT_POINT"
+          hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_POINT" >/dev/null
+          rsync -a "$MOUNT_POINT"/ "$STAGING_DIR"/
+          hdiutil detach "$MOUNT_POINT" -force >/dev/null
+
+          rm -rf "$STAGING_DIR/$APP_BUNDLE_NAME"
+          cp -R "$APP_PATH" "$STAGING_DIR/$APP_BUNDLE_NAME"
 
           rm -f "$REPACKED_DMG"
           hdiutil create \
             -volname "$VOL_NAME" \
-            -srcfolder "$APP_PATH" \
+            -srcfolder "$STAGING_DIR" \
             -format UDZO \
             -ov \
             "$REPACKED_DMG"
 
           mv "$REPACKED_DMG" "$DMG_PATH"
+          rm -rf "$STAGING_DIR"
+          trap - EXIT
+          cleanup
+
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
 
           echo "### Repacked macOS DMG (${{ matrix.target }})" >> "$GITHUB_STEP_SUMMARY"
           echo "- source app: $APP_PATH" >> "$GITHUB_STEP_SUMMARY"
+          echo "- volume: $VOL_NAME" >> "$GITHUB_STEP_SUMMARY"
           echo "- repacked dmg: $DMG_PATH" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify DMG layout (repacked signed build)
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-dmg-layout.sh "${{ steps.repack_dmg.outputs.dmg_path }}" "ClawPal.app"
 
       - name: Submit repacked macOS DMG to Apple Notary
         id: notarize_dmg_submit
@@ -840,6 +890,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         with:
           tagName: ${{ steps.release_meta.outputs.tag }}
           releaseCommitish: ${{ inputs.target_commitish }}
@@ -868,6 +919,21 @@ jobs:
           releaseDraft: true
           prerelease: ${{ steps.release_flags.outputs.is_prerelease == 'true' }}
           args: ${{ steps.build_args.outputs.args }}
+
+      - name: Verify DMG layout (unsigned build)
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
+            exit 1
+          fi
+
+          bash scripts/verify-dmg-layout.sh "$DMG_PATH" "ClawPal.app"
 
       - name: Rename release assets as unsigned
         if: steps.signing.outputs.should_sign != 'true'

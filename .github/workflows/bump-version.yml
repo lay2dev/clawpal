@@ -297,6 +297,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Generate DMG background asset (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-dmg-background.sh
+
       - name: Compute build args
         id: build_args
         shell: bash
@@ -311,8 +318,24 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         with:
           args: ${{ steps.build_args.outputs.args }}
+
+      - name: Verify DMG layout (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
+            exit 1
+          fi
+
+          bash scripts/verify-dmg-layout.sh "$DMG_PATH" "ClawPal.app"
 
       - name: Collect build artifacts
         shell: bash
