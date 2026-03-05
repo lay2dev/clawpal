@@ -802,21 +802,23 @@ export function Settings({
     const next = zeroclawModel.trim();
     if (next === zeroclawLastSavedRef.current) return;
     let cancelled = false;
-    ua.setZeroclawModelPreference(next.length > 0 ? next : null)
-      .then((prefs) => {
-        if (cancelled) return;
-        const persisted = prefs.zeroclawModel || "";
-        zeroclawLastSavedRef.current = persisted.trim();
-        if (persisted !== zeroclawModel) {
-          setZeroclawModel(persisted);
-        }
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
-      });
-    return () => { cancelled = true; };
+    const timer = window.setTimeout(() => {
+      ua.setZeroclawModelPreference(next.length > 0 ? next : null)
+        .then((prefs) => {
+          if (cancelled) return;
+          const persisted = prefs.zeroclawModel || "";
+          zeroclawLastSavedRef.current = persisted.trim();
+          if (persisted !== zeroclawModel) {
+            setZeroclawModel(persisted);
+          }
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          const errorText = e instanceof Error ? e.message : String(e);
+          toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
+        });
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [ua, zeroclawModel, t]);
 
   return (
