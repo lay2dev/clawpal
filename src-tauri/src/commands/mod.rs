@@ -3922,6 +3922,10 @@ fn resolve_secret_ref_file_with_provider_config(
         .to_ascii_lowercase();
     if mode == "singlevalue" {
         if secret_ref.id.trim() != "value" {
+            eprintln!(
+                "SecretRef file source: singlevalue mode requires id 'value', got '{}'",
+                secret_ref.id.trim()
+            );
             return None;
         }
         let trimmed = content.trim();
@@ -3930,6 +3934,7 @@ fn resolve_secret_ref_file_with_provider_config(
     let parsed: Value = serde_json::from_str(&content).ok()?;
     let id = secret_ref.id.trim();
     if !id.starts_with('/') {
+        eprintln!("SecretRef file source: JSON mode expects id to start with '/', got '{id}'");
         return None;
     }
     let resolved = parsed.pointer(id)?;

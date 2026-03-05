@@ -24,6 +24,16 @@ import { explainAndBuildGuidanceError, withGuidance } from "./lib/guidance";
 import { useFont } from "./lib/use-font";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn, formatBytes } from "@/lib/utils";
@@ -408,6 +418,7 @@ export function App() {
     instanceId: null,
   });
   const [relatedSecretPushRunning, setRelatedSecretPushRunning] = useState(false);
+  const [pushRelatedSecretsConfirmOpen, setPushRelatedSecretsConfirmOpen] = useState(false);
   const [agentGuidanceByInstance, setAgentGuidanceByInstance] = useState<Record<string, AgentGuidanceItem>>({});
   const [doctorLaunchByInstance, setDoctorLaunchByInstance] = useState<Record<string, AgentGuidanceItem | null>>({});
   const [agentGuidanceOpen, setAgentGuidanceOpen] = useState(false);
@@ -1347,6 +1358,8 @@ export function App() {
       return [];
     });
   }, [openTabIds, registeredInstances, t]);
+  const activeInstanceLabel =
+    openTabs.find((tab) => tab.id === activeInstance)?.label || activeInstance;
 
   // Handle install completion — register docker instance and open tab
   const handleInstallReady = useCallback(async (session: InstallSession) => {
@@ -1632,7 +1645,7 @@ export function App() {
                 className="h-7 text-[11px]"
                 disabled={relatedSecretPushRunning}
                 onClick={() => {
-                  void pushRelatedSecretsToActiveRemote();
+                  setPushRelatedSecretsConfirmOpen(true);
                 }}
               >
                 {relatedSecretPushRunning
@@ -1984,6 +1997,30 @@ export function App() {
         )}
       </DialogContent>
     </Dialog>
+    <AlertDialog
+      open={pushRelatedSecretsConfirmOpen}
+      onOpenChange={setPushRelatedSecretsConfirmOpen}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("doctor.pushRelatedSecretsConfirmTitle")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("doctor.pushRelatedSecretsConfirmDescription", { host: activeInstanceLabel })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("config.cancel")}</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={relatedSecretPushRunning}
+            onClick={() => {
+              void pushRelatedSecretsToActiveRemote();
+            }}
+          >
+            {t("doctor.pushRelatedSecretsConfirmAction")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     <Toaster position="top-right" richColors />
     </>
   );
