@@ -3480,7 +3480,7 @@ pub(crate) fn provider_env_var_candidates(provider: &str) -> Vec<String> {
 fn is_oauth_provider_alias(provider: &str) -> bool {
     matches!(
         provider.trim().to_ascii_lowercase().as_str(),
-        "openai-codex" | "openai_codex" | "github-copilot" | "copilot" | "openai"
+        "openai-codex" | "openai_codex" | "github-copilot" | "copilot"
     )
 }
 
@@ -5667,7 +5667,10 @@ mod model_profile_upsert_tests {
             None,
         );
         assert_eq!(
-            infer_resolved_credential_kind(&profile, Some(ResolvedCredentialSource::ExplicitAuthRef)),
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
             ResolvedCredentialKind::OAuth
         );
     }
@@ -5676,14 +5679,23 @@ mod model_profile_upsert_tests {
     fn infer_resolved_credential_kind_detects_env_ref() {
         let profile = mk_profile("p-env", "openai", "gpt-4o", "OPENAI_API_KEY", None);
         assert_eq!(
-            infer_resolved_credential_kind(&profile, Some(ResolvedCredentialSource::ExplicitAuthRef)),
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
             ResolvedCredentialKind::EnvRef
         );
     }
 
     #[test]
     fn infer_resolved_credential_kind_detects_manual_and_unset() {
-        let manual = mk_profile("p-manual", "openrouter", "deepseek-v3", "", Some("sk-manual"));
+        let manual = mk_profile(
+            "p-manual",
+            "openrouter",
+            "deepseek-v3",
+            "",
+            Some("sk-manual"),
+        );
         assert_eq!(
             infer_resolved_credential_kind(&manual, Some(ResolvedCredentialSource::ManualApiKey)),
             ResolvedCredentialKind::Manual
@@ -5697,6 +5709,18 @@ mod model_profile_upsert_tests {
         assert_eq!(
             infer_resolved_credential_kind(&unset, None),
             ResolvedCredentialKind::Unset
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_does_not_treat_plain_openai_as_oauth() {
+        let profile = mk_profile("p-openai", "openai", "gpt-4o", "openai:default", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
         );
     }
 }
@@ -7831,10 +7855,7 @@ impl RemoteAuthCache {
         if let Some(ref key) = profile.api_key {
             let trimmed = key.trim();
             if !trimmed.is_empty() {
-                return Some((
-                    trimmed.to_string(),
-                    ResolvedCredentialSource::ManualApiKey,
-                ));
+                return Some((trimmed.to_string(), ResolvedCredentialSource::ManualApiKey));
             }
         }
 

@@ -17,7 +17,6 @@ const OAUTH_PROVIDER_ALIASES = new Set([
   "openai_codex",
   "github-copilot",
   "copilot",
-  "openai",
 ]);
 
 function normalizeProvider(provider: string): string {

@@ -117,8 +117,14 @@ export function Chat() {
   const [agentId, setAgentId] = useState("");
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const agentIdRef = useRef("");
 
   useEffect(() => {
+    agentIdRef.current = agentId;
+  }, [agentId]);
+
+  useEffect(() => {
+    const previousAgentId = agentIdRef.current;
     setAgentId("");
     setSessionId(undefined);
     setMessages([]);
@@ -126,7 +132,10 @@ export function Chat() {
       .then((list) => {
         const ids = list.map((a) => a.id);
         setAgents(ids);
-        const nextAgent = ids.includes(agentId) && agentId ? agentId : (ids[0] || "");
+        const nextAgent =
+          ids.includes(previousAgentId) && previousAgentId
+            ? previousAgentId
+            : (ids[0] || "");
         setAgentId(nextAgent);
         if (nextAgent) {
           setSessionId(loadSessionId(ua.instanceId, nextAgent));

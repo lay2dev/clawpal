@@ -855,10 +855,10 @@ export function useDoctorAgent(options: UseDoctorAgentOptions = {}) {
     setPendingInvokes(new Map());
     setLoading(false);
     setError(null);
-    // Restoring cached diagnosis means there was a live session in this scope.
-    // Keep the UI in connected mode after tab switches/remounts.
-    setConnected(true);
-    setBridgeConnected(nextEngine === "zeroclaw");
+    // For openclaw (stateless), cached history can stay connected.
+    // For zeroclaw (bridge/session-based), force reconnect after restore.
+    setConnected(nextEngine === "openclaw");
+    setBridgeConnected(false);
     wasConnectedRef.current = true;
     streamingRef.current = "";
     streamEndedRef.current = false;

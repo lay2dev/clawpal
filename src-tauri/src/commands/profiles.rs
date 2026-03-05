@@ -491,7 +491,9 @@ pub async fn remote_resolve_api_keys(
         Err(e) => return Err(format!("Failed to read remote model profiles: {e}")),
     };
     let profiles = clawpal_core::profile::list_profiles_from_storage_json(&content);
-    let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles).await.ok();
+    let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles)
+        .await
+        .ok();
 
     let mut out = Vec::new();
     for profile in &profiles {
@@ -1643,14 +1645,13 @@ pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
     let global_base = local_global_openclaw_base_dir();
     let mut out = Vec::new();
     for profile in &profiles {
-        let (resolved_key, source) =
-            if let Some((credential, _priority, source)) =
-                resolve_profile_credential_with_priority(profile, &global_base)
-            {
-                (credential.secret, Some(source))
-            } else {
-                (String::new(), None)
-            };
+        let (resolved_key, source) = if let Some((credential, _priority, source)) =
+            resolve_profile_credential_with_priority(profile, &global_base)
+        {
+            (credential.secret, Some(source))
+        } else {
+            (String::new(), None)
+        };
         let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
             Some(true)
         } else {
