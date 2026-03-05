@@ -1,7 +1,7 @@
+use clawpal_core::ssh::diagnostic::SshDiagnosticReport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use clawpal_core::ssh::diagnostic::SshDiagnosticReport;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

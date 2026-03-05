@@ -1,3 +1,4 @@
+use clawpal_core::ssh::diagnostic::{from_any_error, SshDiagnosticReport, SshIntent, SshStage};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -5,7 +6,6 @@ use std::io::{BufRead, BufReader};
 use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
-use clawpal_core::ssh::diagnostic::{from_any_error, SshDiagnosticReport, SshIntent, SshStage};
 
 use crate::doctor_runtime_bridge::emit_runtime_event;
 use crate::models::resolve_paths;

@@ -7160,9 +7160,10 @@ fn success_ssh_diagnostic(
 fn ssh_stage_for_intent(intent: SshIntent) -> SshStage {
     match intent {
         SshIntent::Connect => SshStage::SessionOpen,
-        SshIntent::Exec | SshIntent::InstallStep | SshIntent::DoctorRemote | SshIntent::HealthCheck => {
-            SshStage::RemoteExec
-        }
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => SshStage::RemoteExec,
         SshIntent::SftpRead => SshStage::SftpRead,
         SshIntent::SftpWrite => SshStage::SftpWrite,
         SshIntent::SftpRemove => SshStage::SftpRemove,
@@ -7190,34 +7191,26 @@ pub async fn ssh_connect(
         return Ok(true);
     }
     let hosts = read_hosts_from_registry().map_err(|error| {
-        make_ssh_command_error(
-            &app,
-            SshStage::ResolveHostConfig,
-            SshIntent::Connect,
-            error,
-        )
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
     })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect] host registry is empty");
     }
-    let host = hosts
-        .into_iter()
-        .find(|h| h.id == host_id)
-        .ok_or_else(|| {
-            let mut ids = Vec::new();
-            for h in read_hosts_from_registry().unwrap_or_default() {
-                ids.push(h.id);
-            }
-            crate::commands::logs::log_dev(format!(
-                "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
-            ));
-            make_ssh_command_error(
-                &app,
-                SshStage::ResolveHostConfig,
-                SshIntent::Connect,
-                format!("No SSH host config with id: {host_id}"),
-            )
-        })?;
+    let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+        let mut ids = Vec::new();
+        for h in read_hosts_from_registry().unwrap_or_default() {
+            ids.push(h.id);
+        }
+        crate::commands::logs::log_dev(format!(
+            "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
+        ));
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
+    })?;
     // If the host has a stored passphrase, use it directly
     let connect_result = if let Some(ref pp) = host.passphrase {
         if !pp.is_empty() {
@@ -7276,34 +7269,26 @@ pub async fn ssh_connect_with_passphrase(
         return Ok(true);
     }
     let hosts = read_hosts_from_registry().map_err(|error| {
-        make_ssh_command_error(
-            &app,
-            SshStage::ResolveHostConfig,
-            SshIntent::Connect,
-            error,
-        )
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
     })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
     }
-    let host = hosts
-        .into_iter()
-        .find(|h| h.id == host_id)
-        .ok_or_else(|| {
-            let mut ids = Vec::new();
-            for h in read_hosts_from_registry().unwrap_or_default() {
-                ids.push(h.id);
-            }
-            crate::commands::logs::log_dev(format!(
-                "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
-            ));
-            make_ssh_command_error(
-                &app,
-                SshStage::ResolveHostConfig,
-                SshIntent::Connect,
-                format!("No SSH host config with id: {host_id}"),
-            )
-        })?;
+    let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+        let mut ids = Vec::new();
+        for h in read_hosts_from_registry().unwrap_or_default() {
+            ids.push(h.id);
+        }
+        crate::commands::logs::log_dev(format!(
+            "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
+        ));
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
+    })?;
     if let Err(error) = pool
         .connect_with_passphrase(&host, Some(passphrase.as_str()))
         .await
@@ -7387,9 +7372,7 @@ pub async fn ssh_exec(
             );
             result
         })
-        .map_err(|error| {
-            make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error)
-        })
+        .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
 }
 
 #[tauri::command]
@@ -7410,7 +7393,9 @@ pub async fn sftp_read_file(
             );
             result
         })
-        .map_err(|error| make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error))
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -7453,7 +7438,9 @@ pub async fn sftp_list_dir(
             );
             result
         })
-        .map_err(|error| make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error))
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -7463,11 +7450,9 @@ pub async fn sftp_remove_file(
     path: String,
     app: AppHandle,
 ) -> Result<bool, SshCommandError> {
-    pool.sftp_remove(&host_id, &path)
-        .await
-        .map_err(|error| {
-            make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
-        })?;
+    pool.sftp_remove(&host_id, &path).await.map_err(|error| {
+        make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
+    })?;
     let _ = success_ssh_diagnostic(
         &app,
         SshStage::SftpRemove,
@@ -7504,12 +7489,7 @@ pub async fn diagnose_ssh(
             ));
         }
         let hosts = read_hosts_from_registry().map_err(|error| {
-            make_ssh_command_error(
-                &app,
-                SshStage::ResolveHostConfig,
-                SshIntent::Connect,
-                error,
-            )
+            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
         })?;
         let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
             make_ssh_command_error(
@@ -7520,7 +7500,12 @@ pub async fn diagnose_ssh(
             )
         })?;
         return Ok(match pool.connect(&host).await {
-            Ok(_) => success_ssh_diagnostic(&app, SshStage::SessionOpen, SshIntent::Connect, "SSH connect probe succeeded"),
+            Ok(_) => success_ssh_diagnostic(
+                &app,
+                SshStage::SessionOpen,
+                SshIntent::Connect,
+                "SSH connect probe succeeded",
+            ),
             Err(error) => {
                 let report = from_any_error(SshStage::TcpReachability, SshIntent::Connect, error);
                 emit_ssh_diagnostic(&app, &report);
@@ -7536,7 +7521,10 @@ pub async fn diagnose_ssh(
     }
 
     let report = match intent {
-        SshIntent::Exec | SshIntent::InstallStep | SshIntent::DoctorRemote | SshIntent::HealthCheck => {
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => {
             match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
                 Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
                 Err(error) => from_any_error(stage, intent, error),

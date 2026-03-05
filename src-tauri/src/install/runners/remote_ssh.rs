@@ -2,9 +2,7 @@ use super::{RunnerFailure, RunnerOutput};
 use crate::cli_runner::run_openclaw_remote;
 use crate::install::types::InstallStep;
 use crate::ssh::SshConnectionPool;
-use clawpal_core::ssh::diagnostic::{
-    from_any_error, SshErrorCode, SshIntent, SshStage,
-};
+use clawpal_core::ssh::diagnostic::{from_any_error, SshErrorCode, SshIntent, SshStage};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -78,17 +76,14 @@ pub async fn run_step(
                 });
             }
             let script = "mkdir -p ~/.clawpal/install/cache && INSTALLER=~/.clawpal/install/cache/openclaw-install.sh && ( [ -s \"$INSTALLER\" ] || curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$INSTALLER\" ) && bash \"$INSTALLER\" --no-prompt --no-onboard";
-            let result = pool
-                .exec_login(host_id, script)
-                .await
-                .map_err(|e| {
-                    ssh_runner_failure(
-                        SshStage::RemoteExec,
-                        "remote ssh install failed",
-                        e,
-                        vec![script.to_string()],
-                    )
-                })?;
+            let result = pool.exec_login(host_id, script).await.map_err(|e| {
+                ssh_runner_failure(
+                    SshStage::RemoteExec,
+                    "remote ssh install failed",
+                    e,
+                    vec![script.to_string()],
+                )
+            })?;
             if result.exit_code != 0 {
                 return Err(ssh_runner_failure(
                     SshStage::RemoteExec,
@@ -110,17 +105,14 @@ pub async fn run_step(
         }
         InstallStep::Init => {
             let init_cmd = "mkdir -p ~/.openclaw && [ -f ~/.openclaw/openclaw.json ] || printf '{}' > ~/.openclaw/openclaw.json";
-            let result = pool
-                .exec_login(host_id, init_cmd)
-                .await
-                .map_err(|e| {
-                    ssh_runner_failure(
-                        SshStage::RemoteExec,
-                        "install.ssh.init.failed",
-                        e,
-                        vec![init_cmd.to_string()],
-                    )
-                })?;
+            let result = pool.exec_login(host_id, init_cmd).await.map_err(|e| {
+                ssh_runner_failure(
+                    SshStage::RemoteExec,
+                    "install.ssh.init.failed",
+                    e,
+                    vec![init_cmd.to_string()],
+                )
+            })?;
             if result.exit_code != 0 {
                 return Err(ssh_runner_failure(
                     SshStage::RemoteExec,

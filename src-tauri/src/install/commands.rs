@@ -1054,28 +1054,22 @@ async fn run_remote_ssh_step(
                 vec![],
             )
         })?;
-        let host =
-            hosts
-                .into_iter()
-                .find(|h| h.id == host_id)
-                .ok_or_else(|| {
-                    make_remote_ssh_runner_failure(
-                        SshStage::ResolveHostConfig,
-                        "remote ssh host not found",
-                        format!("No SSH host config with id: {host_id}"),
-                        vec![],
-                    )
-                })?;
-        pool.connect(&host)
-            .await
-            .map_err(|e| {
-                make_remote_ssh_runner_failure(
-                    SshStage::TcpReachability,
-                    "remote ssh connect failed",
-                    e,
-                    vec![format!("connect host {host_id}")],
-                )
-            })?;
+        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+            make_remote_ssh_runner_failure(
+                SshStage::ResolveHostConfig,
+                "remote ssh host not found",
+                format!("No SSH host config with id: {host_id}"),
+                vec![],
+            )
+        })?;
+        pool.connect(&host).await.map_err(|e| {
+            make_remote_ssh_runner_failure(
+                SshStage::TcpReachability,
+                "remote ssh connect failed",
+                e,
+                vec![format!("connect host {host_id}")],
+            )
+        })?;
     }
     runners::remote_ssh::run_step(pool, host_id, step, artifacts).await
 }
@@ -1176,8 +1170,14 @@ async fn run_step(
             session.updated_at = Utc::now().to_rfc3339();
             store.upsert(session)?;
 
-            let mut result =
-                make_result(true, output.summary, output.details, next_step(&step), None, None);
+            let mut result = make_result(
+                true,
+                output.summary,
+                output.details,
+                next_step(&step),
+                None,
+                None,
+            );
             result.commands = output.commands;
             result.artifacts = output.artifacts;
             Ok(result)

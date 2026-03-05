@@ -134,7 +134,11 @@ impl SshDiagnosticReport {
     }
 }
 
-pub fn from_any_error(stage: SshStage, intent: SshIntent, raw_error: impl Into<String>) -> SshDiagnosticReport {
+pub fn from_any_error(
+    stage: SshStage,
+    intent: SshIntent,
+    raw_error: impl Into<String>,
+) -> SshDiagnosticReport {
     let raw = raw_error.into();
     let lowered = raw.to_ascii_lowercase();
     let (error_code, confidence) = classify_error_code(stage, &lowered);
@@ -268,8 +272,10 @@ fn looks_like_remote_command_failure(stage: SshStage, lowered: &str) -> bool {
 }
 
 fn looks_like_sftp_permission_denied(stage: SshStage, lowered: &str) -> bool {
-    matches!(stage, SshStage::SftpRead | SshStage::SftpWrite | SshStage::SftpRemove)
-        && lowered.contains("permission denied")
+    matches!(
+        stage,
+        SshStage::SftpRead | SshStage::SftpWrite | SshStage::SftpRemove
+    ) && lowered.contains("permission denied")
 }
 
 fn repair_plan_for_error(code: SshErrorCode) -> Vec<SshRepairAction> {
