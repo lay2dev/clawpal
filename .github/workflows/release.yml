@@ -92,7 +92,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
-    environment: ${{ inputs.is_prerelease && 'prerelease' || 'release' }}
+    environment: ${{ (inputs.is_prerelease || contains(inputs.version, '-')) && 'prerelease' || 'release' }}
 
     steps:
       - name: Checkout
@@ -662,9 +662,7 @@ jobs:
           MOUNT_POINT="$RUNNER_TEMP/dmg-mount-${{ matrix.target }}"
 
           cleanup() {
-            if mount | grep -q "on ${MOUNT_POINT} "; then
-              hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
-            fi
+            hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
             rm -rf "$MOUNT_POINT"
           }
           trap cleanup EXIT
@@ -855,7 +853,7 @@ jobs:
           fi
 
           xcrun stapler validate "$APP_IN_DMG"
-          syspolicy_check distribution "$APP_IN_DMG" -v
+          spctl --assess --type open --context context:primary-signature -v "$APP_IN_DMG"
 
           hdiutil detach "$MOUNT_POINT" -force
           rm -rf "$MOUNT_POINT"
