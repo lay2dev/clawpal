@@ -841,6 +841,10 @@
   "start.connected": "Connected {{label}}",
   "start.fromContainer": "From Docker container",
   "start.fromDataDir": "From data directory",
+  "quickDiagnose.title": "Quick Diagnose",
+  "quickDiagnose.placeholder": "Diagnose this issue and propose concrete next steps.",
+  "quickDiagnose.buttonLabel": "Quick Diagnose",
+  "quickDiagnose.diagnoseWithZeroclaw": "Diagnose with Zeroclaw",
 
   "instance.close": "Close tab",
 

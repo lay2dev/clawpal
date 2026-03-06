@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { MonitorIcon, ContainerIcon, ServerIcon, LaptopIcon, EllipsisIcon, PencilIcon, Trash2Icon, RefreshCwIcon, LinkIcon } from "lucide-react";
+import { MonitorIcon, ContainerIcon, ServerIcon, LaptopIcon, EllipsisIcon, PencilIcon, Trash2Icon, RefreshCwIcon, LinkIcon, StethoscopeIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -25,6 +25,7 @@ interface InstanceCardProps {
   discovered?: boolean;
   discoveredSource?: string;
   onConnect?: () => void;
+  onQuickDiagnose?: (() => void) | null;
 }
 
 const typeIcons: Record<InstanceType, typeof MonitorIcon> = {
@@ -64,6 +65,7 @@ export function InstanceCard({
   discovered,
   discoveredSource,
   onConnect,
+  onQuickDiagnose,
 }: InstanceCardProps) {
   const { t } = useTranslation();
   const TypeIcon = typeIcons[type];
@@ -98,54 +100,69 @@ export function InstanceCard({
               {typeLabel}
             </Badge>
           </div>
-          {hasMenu && (
-            <Popover>
-              <PopoverTrigger asChild>
+          {(onQuickDiagnose || hasMenu) && (
+            <div className="flex items-center gap-1">
+              {onQuickDiagnose && (
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-7 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                  onClick={(e) => e.stopPropagation()}
+                  className="size-7"
+                  onClick={(e) => { e.stopPropagation(); onQuickDiagnose(); }}
+                  aria-label={t("quickDiagnose.buttonLabel")}
                 >
-                  <EllipsisIcon className="size-4" />
+                  <StethoscopeIcon className="size-4" />
                 </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                align="end"
-                className="w-40 p-1"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex flex-col">
-                  {onRename && (
-                    <button
-                      className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent transition-colors text-left"
-                      onClick={onRename}
+              )}
+              {hasMenu && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <PencilIcon className="size-3.5" />
-                      {t("start.menuRename")}
-                    </button>
-                  )}
-                  {onEdit && (
-                    <button
-                      className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent transition-colors text-left"
-                      onClick={onEdit}
-                    >
-                      <TypeIcon className="size-3.5" />
-                      {t("start.menuEdit")}
-                    </button>
-                  )}
-                  {onDelete && (
-                    <button
-                      className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors text-left"
-                      onClick={onDelete}
-                    >
-                      <Trash2Icon className="size-3.5" />
-                      {t("start.menuDelete")}
-                    </button>
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
+                      <EllipsisIcon className="size-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    className="w-40 p-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex flex-col">
+                      {onRename && (
+                        <button
+                          className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent transition-colors text-left"
+                          onClick={onRename}
+                        >
+                          <PencilIcon className="size-3.5" />
+                          {t("start.menuRename")}
+                        </button>
+                      )}
+                      {onEdit && (
+                        <button
+                          className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent transition-colors text-left"
+                          onClick={onEdit}
+                        >
+                          <TypeIcon className="size-3.5" />
+                          {t("start.menuEdit")}
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors text-left"
+                          onClick={onDelete}
+                        >
+                          <Trash2Icon className="size-3.5" />
+                          {t("start.menuDelete")}
+                        </button>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
+            </div>
           )}
         </div>
 
