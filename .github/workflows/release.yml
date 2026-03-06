@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: true
+
 jobs:
   changelog:
     runs-on: ubuntu-latest
@@ -71,8 +75,53 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  validate_release_state:
     needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if the tag already has a published release
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_COMMITISH: ${{ inputs.target_commitish }}
+          IS_PRERELEASE: ${{ inputs.is_prerelease }}
+        with:
+          script: |
+            const tag = `v${process.env.VERSION}`;
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+
+            const existing = releases.find((release) => release.tag_name === tag);
+            const prerelease = process.env.IS_PRERELEASE === "true" || process.env.VERSION.includes("-");
+
+            if (existing && !existing.draft) {
+              core.setFailed(`Release ${tag} has already been published and cannot be overwritten.`);
+              return;
+            }
+
+            if (existing) {
+              core.summary
+                .addHeading("Release state")
+                .addRaw(`Draft release \`${tag}\` already exists and will be refreshed.\n\n`)
+                .addRaw(`- URL: ${existing.html_url}\n`)
+                .addRaw(`- Target commit: \`${process.env.TARGET_COMMITISH}\`\n`)
+                .addRaw(`- Prerelease: \`${prerelease}\`\n`)
+                .write();
+              return;
+            }
+
+            core.summary
+              .addHeading("Release state")
+              .addRaw(`Draft release \`${tag}\` does not exist yet and will be created by this run.\n\n`)
+              .addRaw(`- Target commit: \`${process.env.TARGET_COMMITISH}\`\n`)
+              .addRaw(`- Prerelease: \`${prerelease}\`\n`)
+              .write();
+
+  build:
+    needs: [changelog, validate_release_state]
     strategy:
       fail-fast: false
       matrix:
@@ -1028,6 +1077,72 @@ jobs:
             gh release upload "${{ steps.release_meta.outputs.tag }}" $dest --clobber
           }
 
+      - name: Collect final release artifacts
+        shell: bash
+        env:
+          SHOULD_SIGN: ${{ steps.signing.outputs.should_sign }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          REPACKED_DMG: ${{ steps.repack_dmg.outputs.dmg_path }}
+          ASSET_SUFFIX: ${{ steps.signing.outputs.asset_suffix }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p final-artifacts
+
+          if [ "$SHOULD_SIGN" = "true" ] && [[ "$TARGET" == *apple-darwin* ]] && [ -n "$REPACKED_DMG" ]; then
+            cp "$REPACKED_DMG" final-artifacts/
+            if [ -f "${REPACKED_DMG}.sig" ]; then
+              cp "${REPACKED_DMG}.sig" final-artifacts/
+            fi
+          elif [ "$SHOULD_SIGN" != "true" ] && [ -d unsigned-release-assets ]; then
+            find unsigned-release-assets -maxdepth 1 -type f -exec cp {} final-artifacts/ \;
+          else
+            CANDIDATES=(
+              "target/${TARGET}/release/bundle"
+              "src-tauri/target/${TARGET}/release/bundle"
+            )
+
+            BUNDLE_DIR=""
+            for candidate in "${CANDIDATES[@]}"; do
+              if [ -d "$candidate" ]; then
+                BUNDLE_DIR="$candidate"
+                break
+              fi
+            done
+
+            if [ -n "$BUNDLE_DIR" ]; then
+              find "$BUNDLE_DIR" -type f \( \
+                -name "*.dmg" -o \
+                -name "*.deb" -o \
+                -name "*.AppImage" -o \
+                -name "*.msi" -o \
+                -name "*.exe" -o \
+                -name "*.rpm" \
+              \) -exec cp {} final-artifacts/ \;
+            fi
+          fi
+
+          PORTABLE="ClawPal_portable_x64${ASSET_SUFFIX}.exe"
+          if [ -f "$PORTABLE" ]; then
+            cp "$PORTABLE" final-artifacts/
+          fi
+
+          echo "### Final release artifacts (${{ matrix.label }})" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$(find final-artifacts -mindepth 1 -maxdepth 1 -type f -print -quit)" ]; then
+            ls -lh final-artifacts >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- No final artifacts collected" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: final-artifacts/*
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Cleanup Apple signing (macOS only)
         if: ${{ contains(matrix.target, 'apple-darwin') && always() }}
         run: |
@@ -1067,3 +1182,70 @@ jobs:
             echo "Deleting asset: $name"
             gh release delete-asset "$TAG" "$name" --repo "$GITHUB_REPOSITORY" -y
           done
+
+  release_summary:
+    name: Release Summary
+    needs: [build, cleanup_release_assets]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.build.result == 'success' }}
+    steps:
+      - name: Write summary with workflow artifacts and draft release assets
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_COMMITISH: ${{ inputs.target_commitish }}
+          IS_PRERELEASE: ${{ inputs.is_prerelease }}
+        with:
+          script: |
+            const tag = `v${process.env.VERSION}`;
+            const prerelease = process.env.IS_PRERELEASE === "true" || process.env.VERSION.includes("-");
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const workflowArtifacts = artifacts.filter((artifact) => artifact.name.startsWith("release-"));
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find((item) => item.tag_name === tag);
+
+            let body = `## Release Summary\n\n`;
+            body += `- Tag: \`${tag}\`\n`;
+            body += `- Target commit: \`${process.env.TARGET_COMMITISH}\`\n`;
+            body += `- Prerelease: \`${prerelease}\`\n`;
+            body += `- Workflow run: ${runUrl}\n\n`;
+
+            body += `### Workflow Artifacts\n\n`;
+            if (workflowArtifacts.length === 0) {
+              body += `- No workflow artifacts found.\n`;
+            } else {
+              body += `| Artifact | Download | Size |\n|---|---|---|\n`;
+              for (const artifact of workflowArtifacts) {
+                const sizeMb = (artifact.size_in_bytes / (1024 * 1024)).toFixed(1);
+                body += `| ${artifact.name} | [Download](${runUrl}/artifacts/${artifact.id}) | ${sizeMb} MB |\n`;
+              }
+            }
+
+            body += `\n### Draft Release Assets\n\n`;
+            if (!release) {
+              body += `- Draft release \`${tag}\` was not found.\n`;
+            } else {
+              body += `- [Open draft release](${release.html_url})\n`;
+              if (release.assets.length === 0) {
+                body += `- No draft release assets found.\n`;
+              } else {
+                body += `\n| Asset | Download | Size |\n|---|---|---|\n`;
+                for (const asset of release.assets) {
+                  const sizeMb = (asset.size / (1024 * 1024)).toFixed(1);
+                  body += `| ${asset.name} | [Download](${asset.browser_download_url}) | ${sizeMb} MB |\n`;
+                }
+              }
+            }
+
+            core.summary.addRaw(body).write();

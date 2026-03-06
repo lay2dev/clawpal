@@ -1,30 +1,51 @@
 # ClawPal Release / Prerelease 流程说明
 
-本文基于当前仓库 `.github/workflows/bump-version.yml` 与 `.github/workflows/release.yml`（2026-03-05）整理，说明 `release` 与 `prerelease` 的实际执行流程，以及 Apple Developer 签名/公证行为。
+本文基于当前仓库 `.github/workflows/bump-version.yml` 与 `.github/workflows/release.yml`（2026-03-06）整理，说明 `release` 与 `prerelease` 的实际执行流程，以及 Apple Developer 签名/公证行为。
 
 ## 1. 触发入口（推荐）
 
-推荐通过 `Bump Version` workflow（手动触发）作为统一入口：
+推荐通过 **远端创建 `rc/v<semver>` 分支** 作为统一入口：
 
-1. 校验目标版本（严格 semver + tag 冲突检查）
-2. 更新代码版本（`package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock`）
-3. 运行测试 CI（前端 typecheck/build + Rust fmt/clippy/test）
-4. 运行打包 CI（4 平台矩阵，验证可打包）
-5. 全部通过后才执行 commit + push（不打 tag）
-6. `Bump Version` 直接 dispatch `Release` workflow 创建/更新 Draft Release
-7. 人工审核后点击 Publish，GitHub 才会创建 `vX.Y.Z` tag
+1. 从 `main` 或 `develop` 创建远端分支：
+   - 正式版：`rc/vX.Y.Z`
+   - 预发布：`rc/vX.Y.Z-rc.N`（也允许 `develop -> rc/vX.Y.Z`，仍按 prerelease 处理）
+2. `Bump Version` 在分支创建事件（`create`）上自动启动，无需先手动 push 第二次提交
+3. workflow 从分支名解析版本，并校验：
+   - 严格 semver
+   - `package.json` 与 `src-tauri/Cargo.toml` 当前版本一致
+   - 目标版本不低于当前分支版本（防止回退）
+   - `v<version>` tag 尚未存在
+4. workflow 根据分支祖先关系自动判定发布类型：
+   - 来自 `main`：`release`
+   - 来自 `develop`：`prerelease`
+5. 首次运行如发现源码版本尚未同步，会自动更新 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` 并 push 回当前 rc 分支
+6. 随后运行测试 CI（前端 typecheck/build + Rust fmt/clippy/test）
+7. 运行打包 CI（4 平台矩阵，验证可打包）
+8. `Bump Version` dispatch `Release` workflow 创建/更新 Draft Release
+9. 后续对同一 rc 分支的 push 不再重复 bump 版本，但会刷新同一个 Draft Release 及其 artifact
+10. 人工审核后点击 Publish，GitHub 才会创建 `vX.Y.Z` tag
 
-## 2. Release Workflow 触发条件
+## 2. Workflow 触发条件
 
-- Workflow: `Release`
-- 触发事件: `workflow_dispatch`（由 `Bump Version` 触发）
-- 输入:
+### `Bump Version`
+
+- 触发事件：
+  - `create`：远端创建 `rc/v*` 分支时自动触发
+  - `push`：已有 `rc/v*` 分支后续更新时自动触发
+  - `workflow_dispatch`：人工兜底入口
+- `create` 只处理 `branch` 类型，tag 创建不会进入发布流程
+- `push` 对纯版本同步提交（`package.json` / `Cargo.toml` / `Cargo.lock`）做了忽略，避免自触发循环
+
+### `Release`
+
+- 触发事件：`workflow_dispatch`（由 `Bump Version` 触发）
+- 输入：
   - `version`
   - `target_commitish`
   - `is_prerelease`
-- 示例:
-  - 正式版: `v0.1.1`
-  - 预发布: `v0.1.1-beta.1` / `v0.1.1-rc.1`
+- 示例：
+  - 正式版：`v0.1.1`
+  - 预发布：`v0.1.1-beta.1` / `v0.1.1-rc.1`
 
 ## 3. 总体结构
 
@@ -89,6 +110,11 @@
    - 正式版一般为 `vX.Y.Z`
    - 预发布一般为 `vX.Y.Z-alpha.N / beta.N / rc.N`
 
+5. rc 分支来源规则
+   - `main -> rc/v...`：正式版
+   - `develop -> rc/v...`：预发布
+   - 对于自动化入口，发布类型以分支来源为准，而不是只看版本号是否带 `-rc/-beta/-alpha`
+
 ## 6. 签名决策逻辑（关键）
 
 签名由 secrets 是否齐全决定，而不是仅看 release/prerelease：
@@ -133,15 +159,17 @@
 
 ## 9. 典型发布操作建议
 
-1. 先确认版本号与 tag 语义
-   - 正式版: `vX.Y.Z`
-   - 预发布: `vX.Y.Z-beta.N`
-2. 手动触发 `Bump Version`，选择 `patch/minor/major/custom`
+1. 先确认版本号与发布类型
+   - 正式版：从 `main` 创建 `rc/vX.Y.Z`
+   - 预发布：从 `develop` 创建 `rc/vX.Y.Z-rc.N` 或 `rc/vX.Y.Z`
+2. 在远端创建 rc 分支后，等待 `Bump Version` 自动启动
 3. 等待 `Bump Version` 的 `Test CI` 与 `Package CI` 全部通过
 4. 确认 `Commit and Trigger Draft Release` 成功（此时尚未创建 git tag）
 5. 在 `Release` workflow 中核对 4 平台矩阵构建
-6. 在 draft release 中验证产物、签名和说明
-7. 点击 Publish（此时 GitHub 创建 `vX.Y.Z` tag 并正式发布）
+6. 在 `Release` workflow summary 中直接下载本次 run artifact，或跳转到 draft release 下载最终资产
+7. 若 rc 分支有后续更新，直接继续 push 到同一 rc 分支；workflow 会复用同一版本并刷新 draft release
+8. 在 draft release 中验证产物、签名和说明
+9. 点击 Publish（此时 GitHub 创建 `vX.Y.Z` tag 并正式发布）
 
 ## 10. macOS DMG 安装体验增强（2026-03-05）
 
