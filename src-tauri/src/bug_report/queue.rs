@@ -1,13 +1,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::reporter::{send_report, BugReportEvent};
-use super::sanitize::{sanitize_optional_text, sanitize_text};
 use super::settings::BugReportSettings;
 use crate::models::resolve_paths;
 
@@ -20,6 +20,14 @@ const PENDING_FILE: &str = "pending.jsonl";
 const DEAD_LETTER_FILE: &str = "dead_letter.jsonl";
 const SENT_FILE: &str = "sent.jsonl";
 const FAILURES_FILE: &str = "failures.jsonl";
+
+/// Process-level lock serialising all mutations to `pending.jsonl` and
+/// `dead_letter.jsonl`. Prevents races between the async sender thread
+/// (`mark_sent`) and startup `flush` / hot-path `enqueue`.
+fn pending_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingEntry {
@@ -141,14 +149,15 @@ impl QueueStore {
         stack_trace: Option<&str>,
     ) -> Result<String, String> {
         self.ensure_dir()?;
+        let _guard = pending_lock().lock().map_err(|e| e.to_string())?;
         let path = self.path(PENDING_FILE);
         let mut entries: Vec<PendingEntry> = self.read_jsonl(&path)?;
         let entry = PendingEntry {
             id: Uuid::new_v4().to_string(),
             ts: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             level: level.to_string(),
-            message: sanitize_text(message),
-            stack_trace: sanitize_optional_text(stack_trace),
+            message: message.to_string(),
+            stack_trace: stack_trace.map(str::to_string),
             attempts: 0,
         };
         entries.push(entry.clone());
@@ -162,6 +171,7 @@ impl QueueStore {
 
     fn mark_sent(&self, id: &str) -> Result<(), String> {
         self.ensure_dir()?;
+        let _guard = pending_lock().lock().map_err(|e| e.to_string())?;
         let pending_path = self.path(PENDING_FILE);
         let sent_path = self.path(SENT_FILE);
         let mut pending: Vec<PendingEntry> = self.read_jsonl(&pending_path)?;
@@ -181,6 +191,7 @@ impl QueueStore {
             return Ok(());
         }
         self.ensure_dir()?;
+        let _guard = pending_lock().lock().map_err(|e| e.to_string())?;
         let pending_path = self.path(PENDING_FILE);
         let dead_letter_path = self.path(DEAD_LETTER_FILE);
         let sent_path = self.path(SENT_FILE);
@@ -197,7 +208,7 @@ impl QueueStore {
             match send_report(settings, &event) {
                 Ok(()) => sent.push(SentEntry::from_pending(entry)),
                 Err(err) => {
-                    if let Err(log_err) = self.log_send_failure(&err) {
+                    if let Err(log_err) = self.log_send_failure_unlocked(&err) {
                         eprintln!("[bug-report] failure log write failed: {log_err}");
                     }
                     entry.attempts = entry.attempts.saturating_add(1);
@@ -222,6 +233,10 @@ impl QueueStore {
 
     fn log_send_failure(&self, err: &str) -> Result<(), String> {
         self.ensure_dir()?;
+        self.log_send_failure_unlocked(err)
+    }
+
+    fn log_send_failure_unlocked(&self, err: &str) -> Result<(), String> {
         let entry = FailureEntry {
             ts: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             error: err.to_string(),
@@ -231,10 +246,13 @@ impl QueueStore {
 
     fn cleanup_old_logs(&self) -> Result<(), String> {
         self.ensure_dir()?;
-        self.cleanup_by_retention::<SentEntry>(&self.path(SENT_FILE), |entry| {
-            parse_timestamp_utc(&entry.sent_at)
-        })?;
-        self.cleanup_by_retention::<FailureEntry>(&self.path(FAILURES_FILE), |entry| {
+        {
+            let _guard = pending_lock().lock().map_err(|e| e.to_string())?;
+            self.cleanup_by_retention(&self.path(SENT_FILE), |entry: &SentEntry| {
+                parse_timestamp_utc(&entry.sent_at)
+            })?;
+        }
+        self.cleanup_by_retention(&self.path(FAILURES_FILE), |entry: &FailureEntry| {
             parse_timestamp_utc(&entry.ts)
         })?;
         Ok(())
@@ -373,6 +391,17 @@ mod tests {
             .expect("read failures");
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].error, fresh.error);
+        if let Err(err) = fs::remove_dir_all(&store.root) {
+            eprintln!("cleanup test dir failed: {err}");
+        }
+    }
+
+    #[test]
+    fn mark_sent_is_idempotent_for_unknown_id() {
+        let store = make_store("mark-sent-idempotent");
+        store
+            .mark_sent("nonexistent-id")
+            .expect("mark_sent should not error for unknown id");
         if let Err(err) = fs::remove_dir_all(&store.root) {
             eprintln!("cleanup test dir failed: {err}");
         }

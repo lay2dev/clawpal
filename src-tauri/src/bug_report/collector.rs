@@ -259,7 +259,15 @@ fn send_event_sync(
 }
 
 pub fn capture(level: BugReportSeverity, message: &str, stack_trace: Option<&str>) {
-    let persisted_id = match queue::enqueue(level.as_str(), message, stack_trace) {
+    // Sanitise once here so both the disk copy (queue) and the network copy
+    // (Sentry/backend) are produced from the same sanitised source.
+    let sanitised_message = sanitize_text(message);
+    let sanitised_stack = sanitize_optional_text(stack_trace);
+    let persisted_id = match queue::enqueue(
+        level.as_str(),
+        &sanitised_message,
+        sanitised_stack.as_deref(),
+    ) {
         Ok(id) => Some(id),
         Err(err) => {
             eprintln!("[bug-report] queue enqueue failed: {err}");
@@ -268,8 +276,8 @@ pub fn capture(level: BugReportSeverity, message: &str, stack_trace: Option<&str
     };
     if let Err(err) = enqueue_event(
         level,
-        message,
-        stack_trace,
+        &sanitised_message,
+        sanitised_stack.as_deref(),
         persisted_id,
         false,
         false,

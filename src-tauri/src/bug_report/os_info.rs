@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::OnceLock;
 
 #[cfg(target_os = "macos")]
@@ -29,16 +29,21 @@ pub fn os_version_string() -> String {
 
 #[cfg(target_os = "linux")]
 pub fn os_version_string() -> String {
-    std::fs::read_to_string("/etc/os-release")
-        .ok()
-        .and_then(|content| {
-            content
-                .lines()
-                .find_map(|line| line.strip_prefix("PRETTY_NAME="))
-                .map(|raw| raw.trim_matches('"').to_string())
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            std::fs::read_to_string("/etc/os-release")
+                .ok()
+                .and_then(|content| {
+                    content
+                        .lines()
+                        .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+                        .map(|raw| raw.trim_matches('"').to_string())
+                })
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "unknown".to_string())
         })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+        .clone()
 }
 
 #[cfg(target_os = "windows")]
