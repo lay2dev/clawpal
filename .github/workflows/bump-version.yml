@@ -123,56 +123,56 @@ jobs:
           fi
 
           COMPARISON=$(
-            CURRENT_VERSION="$CURRENT" TARGET_VERSION="$NEW" node - <<'NODE'
-            function parse(version) {
-              const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/);
-              if (!match) {
-                throw new Error(`Invalid semver: ${version}`);
-              }
-              return {
-                major: Number(match[1]),
-                minor: Number(match[2]),
-                patch: Number(match[3]),
-                prerelease: match[4] ? match[4].split(".") : []
-              };
-            }
-
-            function compareIdentifier(left, right) {
-              const leftNumeric = /^\d+$/.test(left);
-              const rightNumeric = /^\d+$/.test(right);
-              if (leftNumeric && rightNumeric) return Number(left) - Number(right);
-              if (leftNumeric) return -1;
-              if (rightNumeric) return 1;
-              return left.localeCompare(right);
-            }
-
-            function compare(left, right) {
-              for (const key of ["major", "minor", "patch"]) {
-                if (left[key] !== right[key]) {
-                  return left[key] - right[key];
+            CURRENT_VERSION="$CURRENT" TARGET_VERSION="$NEW" node -e '
+              function parse(version) {
+                const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/);
+                if (!match) {
+                  throw new Error(`Invalid semver: ${version}`);
                 }
+                return {
+                  major: Number(match[1]),
+                  minor: Number(match[2]),
+                  patch: Number(match[3]),
+                  prerelease: match[4] ? match[4].split(".") : []
+                };
               }
 
-              if (!left.prerelease.length && !right.prerelease.length) return 0;
-              if (!left.prerelease.length) return 1;
-              if (!right.prerelease.length) return -1;
-
-              const len = Math.max(left.prerelease.length, right.prerelease.length);
-              for (let i = 0; i < len; i += 1) {
-                if (left.prerelease[i] === undefined) return -1;
-                if (right.prerelease[i] === undefined) return 1;
-                const diff = compareIdentifier(left.prerelease[i], right.prerelease[i]);
-                if (diff !== 0) return diff;
+              function compareIdentifier(left, right) {
+                const leftNumeric = /^\d+$/.test(left);
+                const rightNumeric = /^\d+$/.test(right);
+                if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+                if (leftNumeric) return -1;
+                if (rightNumeric) return 1;
+                return left.localeCompare(right);
               }
 
-              return 0;
-            }
+              function compare(left, right) {
+                for (const key of ["major", "minor", "patch"]) {
+                  if (left[key] !== right[key]) {
+                    return left[key] - right[key];
+                  }
+                }
 
-            const current = parse(process.env.CURRENT_VERSION);
-            const next = parse(process.env.TARGET_VERSION);
-            const diff = compare(next, current);
-            process.stdout.write(diff < 0 ? "lt" : diff > 0 ? "gt" : "eq");
-            NODE
+                if (!left.prerelease.length && !right.prerelease.length) return 0;
+                if (!left.prerelease.length) return 1;
+                if (!right.prerelease.length) return -1;
+
+                const len = Math.max(left.prerelease.length, right.prerelease.length);
+                for (let i = 0; i < len; i += 1) {
+                  if (left.prerelease[i] === undefined) return -1;
+                  if (right.prerelease[i] === undefined) return 1;
+                  const diff = compareIdentifier(left.prerelease[i], right.prerelease[i]);
+                  if (diff !== 0) return diff;
+                }
+
+                return 0;
+              }
+
+              const current = parse(process.env.CURRENT_VERSION);
+              const next = parse(process.env.TARGET_VERSION);
+              const diff = compare(next, current);
+              process.stdout.write(diff < 0 ? "lt" : diff > 0 ? "gt" : "eq");
+            '
           )
 
           if [ "$COMPARISON" = "lt" ]; then
