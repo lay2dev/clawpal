@@ -175,37 +175,81 @@ pub fn from_any_error(
 }
 
 fn classify_error_code(stage: SshStage, lowered: &str) -> (SshErrorCode, f32) {
-    if looks_like_host_unreachable(lowered) {
-        return (SshErrorCode::HostUnreachable, 0.96);
-    }
-    if lowered.contains("connection refused") {
-        return (SshErrorCode::ConnectionRefused, 0.97);
-    }
-    if looks_like_timeout(lowered) {
-        return (SshErrorCode::Timeout, 0.93);
-    }
-    if looks_like_host_key_failure(lowered) {
-        return (SshErrorCode::HostKeyFailed, 0.97);
-    }
-    if looks_like_keyfile_missing(lowered) {
-        return (SshErrorCode::KeyfileMissing, 0.92);
-    }
-    if looks_like_passphrase_required(lowered) {
-        return (SshErrorCode::PassphraseRequired, 0.94);
-    }
-    if looks_like_sftp_permission_denied(stage, lowered) {
-        return (SshErrorCode::SftpPermissionDenied, 0.96);
-    }
-    if looks_like_session_stale(lowered) {
-        return (SshErrorCode::SessionStale, 0.9);
-    }
-    if looks_like_auth_failure(lowered) {
-        return (SshErrorCode::AuthFailed, 0.9);
-    }
-    if looks_like_remote_command_failure(stage, lowered) {
-        return (SshErrorCode::RemoteCommandFailed, 0.82);
+    type MatchRule = (fn(SshStage, &str) -> bool, SshErrorCode, f32);
+    let rules: [MatchRule; 10] = [
+        (rule_host_unreachable, SshErrorCode::HostUnreachable, 0.96),
+        (
+            rule_connection_refused,
+            SshErrorCode::ConnectionRefused,
+            0.97,
+        ),
+        (rule_timeout, SshErrorCode::Timeout, 0.93),
+        (rule_host_key_failed, SshErrorCode::HostKeyFailed, 0.97),
+        (rule_keyfile_missing, SshErrorCode::KeyfileMissing, 0.92),
+        (
+            rule_passphrase_required,
+            SshErrorCode::PassphraseRequired,
+            0.94,
+        ),
+        (
+            rule_sftp_permission_denied,
+            SshErrorCode::SftpPermissionDenied,
+            0.96,
+        ),
+        (rule_session_stale, SshErrorCode::SessionStale, 0.9),
+        (rule_auth_failed, SshErrorCode::AuthFailed, 0.9),
+        (
+            rule_remote_command_failed,
+            SshErrorCode::RemoteCommandFailed,
+            0.82,
+        ),
+    ];
+    for (matches, code, confidence) in rules {
+        if matches(stage, lowered) {
+            return (code, confidence);
+        }
     }
     (SshErrorCode::Unknown, 0.55)
+}
+
+fn rule_host_unreachable(_: SshStage, lowered: &str) -> bool {
+    looks_like_host_unreachable(lowered)
+}
+
+fn rule_connection_refused(_: SshStage, lowered: &str) -> bool {
+    lowered.contains("connection refused")
+}
+
+fn rule_timeout(_: SshStage, lowered: &str) -> bool {
+    looks_like_timeout(lowered)
+}
+
+fn rule_host_key_failed(_: SshStage, lowered: &str) -> bool {
+    looks_like_host_key_failure(lowered)
+}
+
+fn rule_keyfile_missing(_: SshStage, lowered: &str) -> bool {
+    looks_like_keyfile_missing(lowered)
+}
+
+fn rule_passphrase_required(_: SshStage, lowered: &str) -> bool {
+    looks_like_passphrase_required(lowered)
+}
+
+fn rule_sftp_permission_denied(stage: SshStage, lowered: &str) -> bool {
+    looks_like_sftp_permission_denied(stage, lowered)
+}
+
+fn rule_session_stale(_: SshStage, lowered: &str) -> bool {
+    looks_like_session_stale(lowered)
+}
+
+fn rule_auth_failed(_: SshStage, lowered: &str) -> bool {
+    looks_like_auth_failure(lowered)
+}
+
+fn rule_remote_command_failed(stage: SshStage, lowered: &str) -> bool {
+    looks_like_remote_command_failure(stage, lowered)
 }
 
 fn looks_like_host_unreachable(lowered: &str) -> bool {
@@ -414,5 +458,15 @@ mod tests {
             "command failed: exit code 127",
         );
         assert_eq!(report.error_code, Some(SshErrorCode::RemoteCommandFailed));
+    }
+
+    #[test]
+    fn classify_unknown() {
+        let report = from_any_error(
+            SshStage::RemoteExec,
+            SshIntent::Exec,
+            "unexpected packet framing mismatch",
+        );
+        assert_eq!(report.error_code, Some(SshErrorCode::Unknown));
     }
 }

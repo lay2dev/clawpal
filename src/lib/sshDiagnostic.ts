@@ -77,7 +77,7 @@ function errorCodeToI18nKey(code?: SshErrorCode | null): string {
   }
 }
 
-function repairActionToLabel(action: SshRepairAction, t: TranslateFn): string {
+export function repairActionToLabel(action: SshRepairAction, t: TranslateFn): string {
   switch (action) {
     case "promptPassphrase":
       return t("ssh.repairPromptPassphrase");

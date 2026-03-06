@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::instance::{Instance, InstanceType};
 use crate::openclaw::{parse_json_output, CliOutput, OpenclawCli};
+use crate::ssh::diagnostic::{from_any_error, SshDiagnosticReport, SshIntent, SshStage};
 
 const HEALTH_SSH_CONNECT_TIMEOUT_SECS: u64 = 10;
 const HEALTH_SSH_SERVER_ALIVE_INTERVAL_SECS: u64 = 10;
@@ -19,6 +20,8 @@ pub struct HealthStatus {
     pub healthy: bool,
     pub active_agents: u32,
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_diagnostic: Option<SshDiagnosticReport>,
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +74,7 @@ fn check_local_or_docker(instance: &Instance, cli: &OpenclawCli) -> Result<Healt
         healthy: agents_output.exit_code == 0,
         active_agents,
         version,
+        ssh_diagnostic: None,
     })
 }
 
@@ -114,6 +118,25 @@ fn check_remote_ssh(instance: &Instance) -> Result<HealthStatus> {
     let mut agents_args = base_args.clone();
     agents_args.push(wrap_remote_health_command(&agents_command));
     let agents_output = run_ssh_command(&agents_args)?;
+    let ssh_diagnostic = if agents_output.exit_code != 0 {
+        let mut err_string = agents_output.stderr.trim().to_string();
+        if err_string.is_empty() {
+            err_string = agents_output.stdout.trim().to_string();
+        }
+        if err_string.is_empty() {
+            err_string = format!(
+                "ssh health check failed with exit code {}",
+                agents_output.exit_code
+            );
+        }
+        Some(from_any_error(
+            SshStage::RemoteExec,
+            SshIntent::HealthCheck,
+            &err_string,
+        ))
+    } else {
+        None
+    };
     let active_agents = parse_active_agents(&agents_output)?;
 
     let version_command = if let Some(home) = &instance.openclaw_home {
@@ -134,6 +157,7 @@ fn check_remote_ssh(instance: &Instance) -> Result<HealthStatus> {
         healthy: agents_output.exit_code == 0,
         active_agents,
         version,
+        ssh_diagnostic,
     })
 }
 
