@@ -242,10 +242,16 @@ fn run_case(case: &ModelCase) -> CaseResult {
     // 1. upsert
     let saved = match profile::upsert_profile(&cli, mp) {
         Ok(p) => p,
-        Err(e) => return CaseResult::Failed { error: format!("upsert_profile: {e}") },
+        Err(e) => {
+            return CaseResult::Failed {
+                error: format!("upsert_profile: {e}"),
+            }
+        }
     };
     if saved.id.is_empty() {
-        return CaseResult::Failed { error: "profile id empty after upsert".into() };
+        return CaseResult::Failed {
+            error: "profile id empty after upsert".into(),
+        };
     }
     if saved.provider != case.provider || saved.model != case.model {
         return CaseResult::Failed {
@@ -259,13 +265,23 @@ fn run_case(case: &ModelCase) -> CaseResult {
     // 2. persistence round-trip
     match profile::list_profiles(&cli) {
         Ok(ps) if ps.iter().any(|p| p.id == saved.id) => {}
-        Ok(_) => return CaseResult::Failed { error: "saved profile missing from list".into() },
-        Err(e) => return CaseResult::Failed { error: format!("list_profiles: {e}") },
+        Ok(_) => {
+            return CaseResult::Failed {
+                error: "saved profile missing from list".into(),
+            }
+        }
+        Err(e) => {
+            return CaseResult::Failed {
+                error: format!("list_profiles: {e}"),
+            }
+        }
     }
 
     // 3. real API probe
     if let Err(e) = probe_model(case, &api_key) {
-        return CaseResult::Failed { error: format!("API probe: {e}") };
+        return CaseResult::Failed {
+            error: format!("API probe: {e}"),
+        };
     }
 
     CaseResult::Passed
@@ -320,5 +336,8 @@ fn e2e_all_model_profiles() {
         );
     }
 
-    assert_eq!(failed, 0, "{failed} profile e2e case(s) failed — see summary above");
+    assert_eq!(
+        failed, 0,
+        "{failed} profile e2e case(s) failed — see summary above"
+    );
 }
