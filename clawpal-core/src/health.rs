@@ -14,7 +14,7 @@ const HEALTH_SSH_SERVER_ALIVE_INTERVAL_SECS: u64 = 10;
 const HEALTH_SSH_SERVER_ALIVE_COUNT_MAX: u64 = 2;
 const HEALTH_REMOTE_COMMAND_TIMEOUT_SECS: u64 = 20;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthStatus {
     pub healthy: bool,
