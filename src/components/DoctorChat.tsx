@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { AgentMessageBubble } from "@/components/AgentMessageBubble";
 import { DiagnosisCard } from "@/components/DiagnosisCard";
+import { Textarea } from "@/components/ui/textarea";
 import type { DoctorChatMessage } from "@/lib/types";
 
 function formatTime(ts: number): string {
@@ -60,7 +60,7 @@ export function DoctorChat({
       {/* Message list */}
       <div
         ref={scrollRef}
-        className="h-[420px] mb-2 border rounded-md p-3 bg-muted/30 overflow-y-auto"
+        className="h-[420px] mb-2 border rounded-md p-3 bg-muted/30 overflow-y-auto overflow-x-hidden"
       >
         <div className="space-y-3">
           {error && (
@@ -108,8 +108,8 @@ export function DoctorChat({
       </div>
 
       {/* Input area */}
-      <div className="flex gap-2">
-        <Input
+      <div className="flex items-end gap-2">
+        <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -120,7 +120,8 @@ export function DoctorChat({
           }}
           placeholder={t("doctor.sendFollowUp")}
           disabled={!connected || loading}
-          className="flex-1"
+          rows={1}
+          className="flex-1 min-h-[44px] max-h-32 resize-none"
         />
         <Button
           onClick={handleSend}

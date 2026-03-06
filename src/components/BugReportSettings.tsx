@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useApi } from "@/lib/use-api";
 import type { BugReportSettings as BugReportSettingsModel, BugReportStats } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -90,89 +90,93 @@ export function BugReportSettings() {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{t("settings.bugReportTitle")}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {loading || !settings ? (
-          <p className="text-sm text-muted-foreground">{t("settings.loading")}</p>
-        ) : (
-          <>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="bug-report-enabled"
-                checked={settings.enabled}
-                onCheckedChange={(checked) => update({ enabled: checked === true })}
-              />
-              <Label htmlFor="bug-report-enabled">{t("settings.bugReportToggle")}</Label>
-            </div>
+      <CardContent>
+        <details className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+          <summary className="cursor-pointer text-sm font-semibold text-foreground">
+            {t("settings.bugReportTitle")}
+          </summary>
+          <div className="mt-3 space-y-4">
+            {loading || !settings ? (
+              <p className="text-sm text-muted-foreground">{t("settings.loading")}</p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="bug-report-enabled"
+                    checked={settings.enabled}
+                    onCheckedChange={(checked) => update({ enabled: checked === true })}
+                  />
+                  <Label htmlFor="bug-report-enabled">{t("settings.bugReportToggle")}</Label>
+                </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>{t("settings.bugReportBackend")}</Label>
-                <span className="text-sm text-muted-foreground">Sentry</span>
-              </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>{t("settings.bugReportBackend")}</Label>
+                    <span className="text-sm text-muted-foreground">Sentry</span>
+                  </div>
 
-              <div className="space-y-1.5">
-                <Label>{t("settings.bugReportSeverityThreshold")}</Label>
-                <Select
-                  value={settings.severityThreshold}
-                  onValueChange={(severityThreshold) =>
-                    update({ severityThreshold: severityThreshold as BugReportSettingsModel["severityThreshold"] })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="error">{t("settings.bugReportSeverityError")}</SelectItem>
-                    <SelectItem value="critical">{t("settings.bugReportSeverityCritical")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+                  <div className="space-y-1.5">
+                    <Label>{t("settings.bugReportSeverityThreshold")}</Label>
+                    <Select
+                      value={settings.severityThreshold}
+                      onValueChange={(severityThreshold) =>
+                        update({ severityThreshold: severityThreshold as BugReportSettingsModel["severityThreshold"] })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="error">{t("settings.bugReportSeverityError")}</SelectItem>
+                        <SelectItem value="critical">{t("settings.bugReportSeverityCritical")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-            <p className="text-xs text-muted-foreground">{t("settings.bugReportSentryBuiltin")}</p>
+                <p className="text-xs text-muted-foreground">{t("settings.bugReportSentryBuiltin")}</p>
 
-            <div className="space-y-1.5 max-w-[220px]">
-              <Label>{t("settings.bugReportRateLimit")}</Label>
-              <Input
-                type="number"
-                min={1}
-                max={1000}
-                value={settings.maxReportsPerHour}
-                onChange={(event) => {
-                  const next = Number.parseInt(event.target.value, 10);
-                  update({
-                    maxReportsPerHour: Number.isFinite(next) ? next : settings.maxReportsPerHour,
-                  });
-                }}
-              />
-            </div>
+                <div className="space-y-1.5 max-w-[220px]">
+                  <Label>{t("settings.bugReportRateLimit")}</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={settings.maxReportsPerHour}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      update({
+                        maxReportsPerHour: Number.isFinite(next) ? next : settings.maxReportsPerHour,
+                      });
+                    }}
+                  />
+                </div>
 
-            <p className="text-xs text-muted-foreground">{t("settings.bugReportDescription")}</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" onClick={save} disabled={saving}>
-                {saving ? t("settings.saving") : t("settings.save")}
-              </Button>
-              <Button size="sm" variant="outline" onClick={sendTestReport} disabled={testing || !settings.enabled}>
-                {testing ? t("settings.testing") : t("settings.bugReportTest")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => ua.openUrl(PRIVACY_POLICY_URL)}>
-                {t("settings.bugReportPrivacyPolicy")}
-              </Button>
-            </div>
+                <p className="text-xs text-muted-foreground">{t("settings.bugReportDescription")}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={save} disabled={saving}>
+                    {saving ? t("settings.saving") : t("settings.save")}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={sendTestReport} disabled={testing || !settings.enabled}>
+                    {testing ? t("settings.testing") : t("settings.bugReportTest")}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => ua.openUrl(PRIVACY_POLICY_URL)}>
+                    {t("settings.bugReportPrivacyPolicy")}
+                  </Button>
+                </div>
 
-            {stats && (
-              <div className="text-xs text-muted-foreground grid gap-1">
-                <p>{t("settings.bugReportStatsSent", { count: stats.totalSent })}</p>
-                <p>{t("settings.bugReportStatsLastHour", { count: stats.sentLastHour })}</p>
-                <p>{t("settings.bugReportStatsDropped", { count: stats.droppedRateLimited })}</p>
-                <p>{t("settings.bugReportStatsLastSent", { value: stats.lastSentAt || "-" })}</p>
-              </div>
+                {stats && (
+                  <div className="text-xs text-muted-foreground grid gap-1">
+                    <p>{t("settings.bugReportStatsSent", { count: stats.totalSent })}</p>
+                    <p>{t("settings.bugReportStatsLastHour", { count: stats.sentLastHour })}</p>
+                    <p>{t("settings.bugReportStatsDropped", { count: stats.droppedRateLimited })}</p>
+                    <p>{t("settings.bugReportStatsLastSent", { value: stats.lastSentAt || "-" })}</p>
+                  </div>
+                )}
+              </>
             )}
-          </>
-        )}
+          </div>
+        </details>
       </CardContent>
     </Card>
   );

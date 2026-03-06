@@ -21,3 +21,10 @@ export function handleQuickDiagnoseDialogOpenChange(
 ): void {
   onOpenChange(open);
 }
+
+export function resolveQuickDiagnoseError(
+  bootstrapError: string | null,
+  agentError: string | null,
+): string | null {
+  return bootstrapError || agentError || null;
+}

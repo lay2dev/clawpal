@@ -153,8 +153,6 @@ export function Doctor({
   const [runtimeModel, setRuntimeModel] = useState<string | undefined>(undefined);
   const [sessionModelOverride, setSessionModelOverride] = useState<string | undefined>(undefined);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
-  const [remoteConnState, setRemoteConnState] = useState<"checking" | "connected" | "disconnected">("checking");
-
   const [zeroclawDiagnosing, setZeroclawDiagnosing] = useState(false);
   const [zeroclawStartupStage, setZeroclawStartupStage] = useState<"idle" | "connecting" | "collecting" | "starting">("idle");
   const [zeroclawStartError, setZeroclawStartError] = useState<string | null>(null);
@@ -371,7 +369,6 @@ export function Doctor({
           : "local";
 
       if (isRemote) {
-        setRemoteConnState("checking");
         const status = await ua.sshStatus(instanceId);
         if (status !== "connected") {
           if (connectRemoteHost) {
@@ -380,7 +377,6 @@ export function Doctor({
             await ua.sshConnect(instanceId);
           }
         }
-        setRemoteConnState("connected");
       }
 
       if (engine === "zeroclaw") {
@@ -416,9 +412,6 @@ export function Doctor({
         setZeroclawStartError(msg);
       } else {
         setOpenclawStartError(msg);
-      }
-      if (isRemote) {
-        setRemoteConnState("disconnected");
       }
     } finally {
       if (engine === "zeroclaw") {
@@ -823,29 +816,6 @@ export function Doctor({
   }, [logsOpen, logsSource, logsTab]);
 
   useEffect(() => {
-    if (!isRemote) {
-      setRemoteConnState("connected");
-      return;
-    }
-    let cancelled = false;
-    setRemoteConnState("checking");
-    ua.sshStatus(instanceId)
-      .then((status) => {
-        if (!cancelled) {
-          setRemoteConnState(status === "connected" ? "connected" : "disconnected");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setRemoteConnState("disconnected");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [ua, instanceId, isRemote]);
-
-  useEffect(() => {
     let cancelled = false;
 
     const loadZeroclawDoctorUiPreference = () => {
@@ -911,18 +881,6 @@ export function Doctor({
                   <span className="text-xs text-muted-foreground">{t("doctor.targetExecutionLabel")}</span>
                   <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{displayedDoctorTarget}</code>
                   <Badge variant="outline" className="text-[10px]">{instanceTypeLabel}</Badge>
-                  {isRemote && (
-                    <Badge
-                      variant={remoteConnState === "disconnected" ? "destructive" : "outline"}
-                      className="text-[10px]"
-                    >
-                      {remoteConnState === "checking"
-                        ? t("doctor.connecting")
-                        : remoteConnState === "connected"
-                          ? t("doctor.connected")
-                          : t("doctor.disconnected")}
-                    </Badge>
-                  )}
                   {isPureLocal && (
                     <span className="text-[11px] text-amber-700 dark:text-amber-300">
                       {t("doctor.targetExecutionLocalWarning")}

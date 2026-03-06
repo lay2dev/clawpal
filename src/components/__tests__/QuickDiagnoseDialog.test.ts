@@ -4,6 +4,7 @@ import {
   buildPrefillMessage,
   shouldSeedContext,
   handleQuickDiagnoseDialogOpenChange,
+  resolveQuickDiagnoseError,
 } from "../quick-diagnose-utils";
 
 describe("getQuickDiagnoseTransport", () => {
@@ -93,5 +94,19 @@ describe("handleQuickDiagnoseDialogOpenChange", () => {
     let count = 0;
     handleQuickDiagnoseDialogOpenChange(() => count++, true);
     expect(count).toBe(1);
+  });
+});
+
+describe("resolveQuickDiagnoseError", () => {
+  test("prefers bootstrap error when present", () => {
+    expect(resolveQuickDiagnoseError("bootstrap failed", "agent failed")).toBe("bootstrap failed");
+  });
+
+  test("falls back to agent error", () => {
+    expect(resolveQuickDiagnoseError(null, "agent failed")).toBe("agent failed");
+  });
+
+  test("returns null when both errors are empty", () => {
+    expect(resolveQuickDiagnoseError(null, null)).toBeNull();
   });
 });

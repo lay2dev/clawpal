@@ -1075,8 +1075,6 @@ export function Settings({
             </Card>
             )}
 
-            {showPreferences && <BugReportSettings />}
-
             {/* Profiles list */}
             {showProfiles && (
             <Card>
@@ -1255,6 +1253,8 @@ export function Settings({
                 </CardContent>
               </Card>
             )}
+
+            {showPreferences && <BugReportSettings />}
           </div>
 
       {message && (

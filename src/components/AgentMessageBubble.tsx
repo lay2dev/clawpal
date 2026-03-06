@@ -30,8 +30,8 @@ export function AgentMessageBubble({
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.205_0_0)] dark:bg-[oklch(0.35_0.02_55)] text-white">
-          <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+        <div className="px-3 py-2 rounded-lg max-w-[85%] min-w-0 overflow-hidden bg-[oklch(0.205_0_0)] dark:bg-[oklch(0.35_0.02_55)] text-white">
+          <div className="whitespace-pre-wrap break-words text-sm">{message.content}</div>
         </div>
       </div>
     );
@@ -40,8 +40,8 @@ export function AgentMessageBubble({
   if (message.role === "assistant") {
     return (
       <div className="flex justify-start">
-        <div className="px-3 py-2 rounded-lg max-w-[85%] bg-[oklch(0.93_0_0)] dark:bg-muted dark:text-foreground">
-          <div className="text-sm"><SimpleMarkdown content={message.content} /></div>
+        <div className="px-3 py-2 rounded-lg max-w-[85%] min-w-0 overflow-hidden bg-[oklch(0.93_0_0)] dark:bg-muted dark:text-foreground">
+          <div className="text-sm min-w-0 break-words"><SimpleMarkdown content={message.content} /></div>
         </div>
       </div>
     );
@@ -64,7 +64,7 @@ export function AgentMessageBubble({
     return (
       <div className="rounded-md p-3 text-sm border-l-[3px] border-l-primary/40 border border-border bg-[oklch(0.96_0_0)] dark:bg-muted/50">
         <div className="flex items-center justify-between mb-1">
-          <span className="font-mono font-medium text-xs">{inv.command}</span>
+          <span className="font-mono font-medium text-xs min-w-0 break-all">{inv.command}</span>
           <div className="flex items-center gap-2">
             {isPendingWrite && (
               <>

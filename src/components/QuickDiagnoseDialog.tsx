@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { XIcon } from "lucide-react";
 import { DoctorChat } from "@/components/DoctorChat";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +14,7 @@ import {
   buildPrefillMessage,
   shouldSeedContext,
   handleQuickDiagnoseDialogOpenChange,
+  resolveQuickDiagnoseError,
 } from "@/components/quick-diagnose-utils";
 
 
@@ -50,14 +49,11 @@ export function QuickDiagnoseDialog({
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const seededRef = useRef<string>("");
   const transport = useMemo(() => getQuickDiagnoseTransport(isRemote, isDocker), [isDocker, isRemote]);
+  const displayedError = resolveQuickDiagnoseError(bootstrapError, error);
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
     handleQuickDiagnoseDialogOpenChange(onOpenChange, nextOpen);
   }, [onOpenChange]);
-
-  const handleClose = useCallback(() => {
-    handleOpenChange(false);
-  }, [handleOpenChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -118,23 +114,8 @@ export function QuickDiagnoseDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <div className="flex items-center justify-between gap-3">
-            <DialogTitle>{t("quickDiagnose.title")}</DialogTitle>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={handleClose}
-              aria-label={t("config.close")}
-            >
-              <XIcon className="size-4" />
-            </Button>
-          </div>
+          <DialogTitle>{t("quickDiagnose.title")}</DialogTitle>
         </DialogHeader>
-        {(bootstrapError || error) && (
-          <div className="text-sm text-destructive">
-            {bootstrapError || error}
-          </div>
-        )}
         {bootstrapping && messages.length === 0 && (
           <div className="text-sm text-muted-foreground animate-pulse">
             {t("doctor.connecting")}
@@ -143,7 +124,7 @@ export function QuickDiagnoseDialog({
         <DoctorChat
           messages={messages}
           loading={loading || bootstrapping}
-          error={error}
+          error={displayedError}
           connected={connected}
           onSendMessage={sendMessage}
           onApproveInvoke={approveInvoke}

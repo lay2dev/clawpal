@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import type { ReactNode } from "react";
 
 /**
  * Lightweight inline markdown renderer — no dependencies.
@@ -10,7 +10,7 @@ export function SimpleMarkdown({ content }: { content: string }) {
   return (
     <>
       {blocks.map((block, i) => (
-        <Fragment key={i}>{renderBlock(block)}</Fragment>
+        <span key={i} className="contents">{renderBlock(block)}</span>
       ))}
     </>
   );
@@ -50,7 +50,7 @@ function renderBlock(block: Block) {
   }
 
   const lines = block.content.split("\n");
-  const elements: React.ReactNode[] = [];
+  const elements: ReactNode[] = [];
   let i = 0;
 
   while (i < lines.length) {
@@ -60,7 +60,7 @@ function renderBlock(block: Block) {
     const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
     if (headingMatch) {
       const level = headingMatch[1].length;
-      const cls = level === 1 ? "text-base font-bold mt-2 mb-1" : level === 2 ? "text-sm font-bold mt-1.5 mb-0.5" : "text-sm font-semibold mt-1 mb-0.5";
+      const cls = level === 1 ? "text-base font-bold mt-2 mb-1 break-words" : level === 2 ? "text-sm font-bold mt-1.5 mb-0.5 break-words" : "text-sm font-semibold mt-1 mb-0.5 break-words";
       elements.push(<div key={i} className={cls}>{renderInline(headingMatch[2])}</div>);
       i++;
       continue;
@@ -74,7 +74,7 @@ function renderBlock(block: Block) {
         i++;
       }
       elements.push(
-        <ul key={`ul-${i}`} className="list-disc list-inside my-0.5 space-y-0.5">
+        <ul key={`ul-${i}`} className="list-disc list-inside my-0.5 space-y-0.5 break-words">
           {items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}
         </ul>
       );
@@ -89,7 +89,7 @@ function renderBlock(block: Block) {
         i++;
       }
       elements.push(
-        <ol key={`ol-${i}`} className="list-decimal list-inside my-0.5 space-y-0.5">
+        <ol key={`ol-${i}`} className="list-decimal list-inside my-0.5 space-y-0.5 break-words">
           {items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}
         </ol>
       );
@@ -104,16 +104,16 @@ function renderBlock(block: Block) {
     }
 
     // Regular text line
-    elements.push(<div key={i}>{renderInline(line)}</div>);
+    elements.push(<div key={i} className="whitespace-pre-wrap break-words">{renderInline(line)}</div>);
     i++;
   }
 
   return <>{elements}</>;
 }
 
-function renderInline(text: string): React.ReactNode {
+function renderInline(text: string): ReactNode {
   // Split by inline patterns: **bold**, `code`
-  const parts: React.ReactNode[] = [];
+  const parts: ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
   let lastIdx = 0;
   let match;
@@ -128,7 +128,14 @@ function renderInline(text: string): React.ReactNode {
       parts.push(<strong key={key++}>{match[2]}</strong>);
     } else if (match[3]) {
       // `code`
-      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-muted text-xs font-mono">{match[3]}</code>);
+      parts.push(
+        <code
+          key={key++}
+          className="px-1 py-0.5 rounded bg-muted text-xs font-mono whitespace-pre-wrap break-all"
+        >
+          {match[3]}
+        </code>
+      );
     }
     lastIdx = match.index + match[0].length;
   }
