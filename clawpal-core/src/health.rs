@@ -438,8 +438,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
-        let dir = std::env::temp_dir()
-            .join(format!("clawpal-core-health-diag-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("clawpal-core-health-diag-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let ssh_bin = dir.join("ssh");
         std::fs::write(
@@ -482,7 +481,8 @@ mod tests {
             }),
         };
 
-        let status = check_instance(&instance).expect("should return HealthStatus even on SSH failure");
+        let status =
+            check_instance(&instance).expect("should return HealthStatus even on SSH failure");
 
         assert!(!status.healthy, "status must be unhealthy");
         let diag = status
