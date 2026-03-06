@@ -48,4 +48,30 @@ describe("InstanceCard SSH connection profile", () => {
     expect(html).toContain(">Poor<");
     expect(html).not.toContain("Poor · 2.42 s");
   });
+
+  test("hides quick diagnose button until card hover", async () => {
+    await i18n.changeLanguage("en");
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(InstanceCard, {
+          id: "ssh:hetzner",
+          label: "hetzner",
+          type: "ssh",
+          healthy: true,
+          agentCount: 1,
+          opened: false,
+          checked: true,
+          checking: false,
+          onClick: () => {},
+          onQuickDiagnose: () => {},
+        }),
+      }),
+    );
+
+    expect(html).toContain('aria-label="Quick Diagnose"');
+    expect(html).toContain("opacity-0");
+    expect(html).toContain("group-hover:opacity-100");
+  });
 });

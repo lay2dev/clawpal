@@ -209,7 +209,7 @@ export function InstanceCard({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-7"
+                  className="size-7 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                   onClick={(e) => { e.stopPropagation(); onQuickDiagnose(); }}
                   aria-label={t("quickDiagnose.buttonLabel")}
                 >
