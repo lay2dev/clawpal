@@ -43,9 +43,8 @@ jobs:
   build:
     name: Build (${{ matrix.label }})
     needs: authorize
-    if: needs.authorize.outputs.can_download == 'true'
+    if: needs.authorize.outputs.can_download == 'true' && github.ref_name == 'develop'
     runs-on: ${{ matrix.platform }}
-    environment: prerelease
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +67,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: develop
-          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
