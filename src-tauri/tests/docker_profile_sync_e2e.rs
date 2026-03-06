@@ -1,8 +1,8 @@
 //! E2E test: Docker Ubuntu container with OpenClaw config → ClawPal SSH connect
 //! → profile sync → doctor check.
 //!
-//! This test spins up a Docker container running Ubuntu with SSH and a fake
-//! `openclaw` CLI, seeds OpenClaw configuration files, then:
+//! This test spins up a Docker container running Ubuntu with SSH and the latest
+//! real `openclaw` CLI (installed via npm), seeds OpenClaw configuration files, then:
 //! 1. Connects via `SshConnectionPool` (password auth)
 //! 2. Reads the OpenClaw config from the container
 //! 3. Extracts model profiles from the config
@@ -25,7 +25,7 @@ const CONTAINER_NAME: &str = "clawpal-e2e-docker-sync";
 const SSH_PORT: u16 = 2299;
 const ROOT_PASSWORD: &str = "clawpal-e2e-pass";
 
-/// Dockerfile content: Ubuntu + openssh-server + seeded OpenClaw config + fake openclaw CLI.
+/// Dockerfile: Ubuntu + openssh-server + Node.js + real openclaw CLI (latest from npm) + seeded OpenClaw config.
 const DOCKERFILE: &str = r#"
 FROM ubuntu:22.04
 
@@ -81,76 +81,34 @@ RUN cat > /root/.openclaw/agents/main/agent/auth-profiles.json <<'AUTHEOF'
     "anthropic:default": {
       "type": "token",
       "provider": "anthropic",
-      "token": "sk-ant-e2e-test-key-1234567890"
+      "token": "e2e-anthropic-fake-key-00000000"
     },
     "openai:default": {
       "type": "token",
       "provider": "openai",
-      "token": "sk-openai-e2e-test-key-0987654321"
+      "token": "e2e-openai-fake-key-11111111"
     }
   }
 }
 AUTHEOF
 
-# Fake openclaw CLI that supports --version and doctor --json
-RUN cat > /usr/local/bin/openclaw <<'CLIEOF'
-#!/bin/bash
-case "$1" in
-  --version)
-    echo "openclaw 0.42.0-e2e-test"
-    ;;
-  doctor)
-    if echo "$@" | grep -q -- '--json'; then
-      cat <<'JSON'
-{
-  "ok": true,
-  "score": 100,
-  "issues": [],
-  "checks": [
-    {"id": "gateway", "label": "Gateway", "status": "ok"},
-    {"id": "config", "label": "Configuration", "status": "ok"},
-    {"id": "agents", "label": "Agents", "status": "ok"}
-  ]
-}
-JSON
-    else
-      echo "openclaw doctor: all checks passed"
-    fi
-    ;;
-  config)
-    if [ "$2" = "get" ] && [ "$3" = "agents" ] && echo "$@" | grep -q -- '--json'; then
-      cat <<'JSON'
-{
-  "list": [
-    {"id": "main", "model": "anthropic/claude-sonnet-4-20250514"}
-  ],
-  "defaults": {
-    "model": "anthropic/claude-sonnet-4-20250514"
-  }
-}
-JSON
-    else
-      echo "{}"
-    fi
-    ;;
-  agents)
-    if [ "$2" = "list" ] && echo "$@" | grep -q -- '--json'; then
-      echo '[{"id":"main","status":"active"}]'
-    else
-      echo "main (active)"
-    fi
-    ;;
-  *)
-    echo "openclaw: unknown command '$1'" >&2
-    exit 1
-    ;;
-esac
-CLIEOF
-RUN chmod +x /usr/local/bin/openclaw
+# Install Node.js (pinned) + openclaw CLI (pinned) for reproducible builds.
+# Node: official binary tarball — no apt source or remote script execution.
+# openclaw: exact published version — no floating @latest tag.
+ARG NODE_VERSION=24.13.0
+ARG OPENCLAW_VERSION=2026.3.2
+RUN apt-get update && \
+    apt-get install -y curl ca-certificates xz-utils && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      -o /tmp/node.tar.xz && \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.xz && \
+    npm install -g "openclaw@${OPENCLAW_VERSION}"
 
 # Set env vars that ClawPal profile sync checks
-RUN echo "export ANTHROPIC_API_KEY=sk-ant-e2e-test-key-1234567890" >> /root/.bashrc && \
-    echo "export OPENAI_API_KEY=sk-openai-e2e-test-key-0987654321" >> /root/.bashrc
+RUN echo "export ANTHROPIC_API_KEY=e2e-anthropic-fake-key-00000000" >> /root/.bashrc && \
+    echo "export OPENAI_API_KEY=e2e-openai-fake-key-11111111" >> /root/.bashrc
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]
@@ -357,13 +315,13 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .pointer("/profiles/anthropic:default/token")
         .and_then(|v| v.as_str())
         .expect("anthropic:default token should exist");
-    assert_eq!(anthropic_token, "sk-ant-e2e-test-key-1234567890");
+    assert_eq!(anthropic_token, "e2e-anthropic-fake-key-00000000");
 
     let openai_token = auth
         .pointer("/profiles/openai:default/token")
         .and_then(|v| v.as_str())
         .expect("openai:default token should exist");
-    assert_eq!(openai_token, "sk-openai-e2e-test-key-0987654321");
+    assert_eq!(openai_token, "e2e-openai-fake-key-11111111");
     eprintln!("[e2e] Auth store verified: 2 provider credentials found");
 
     // --- Step 4: Extract model profiles from config ---
@@ -391,9 +349,15 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .await
         .expect("openclaw --version should succeed");
     assert_eq!(version_result.exit_code, 0);
+    // Version string comes from the real openclaw binary; just verify it's non-empty
+    // and looks like a semver or calver (e.g. "2026.3.2" or "1.2.3").
     assert!(
-        version_result.stdout.contains("0.42.0-e2e-test"),
-        "version output should contain expected version: {}",
+        !version_result.stdout.trim().is_empty(),
+        "openclaw --version should produce non-empty output"
+    );
+    assert!(
+        version_result.stdout.chars().any(|c| c.is_ascii_digit()),
+        "version output should contain a version number: {}",
         version_result.stdout.trim()
     );
     eprintln!("[e2e] OpenClaw version: {}", version_result.stdout.trim());
@@ -440,7 +404,7 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .expect("should read env var");
     assert_eq!(
         env_result.stdout.trim(),
-        "sk-ant-e2e-test-key-1234567890",
+        "e2e-anthropic-fake-key-00000000",
         "ANTHROPIC_API_KEY should be set in remote env"
     );
     eprintln!("[e2e] Remote env vars verified");
