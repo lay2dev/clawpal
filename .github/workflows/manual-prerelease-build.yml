@@ -1,0 +1,232 @@
+name: Manual Prerelease Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  authorize:
+    name: Verify dispatcher permission
+    runs-on: ubuntu-latest
+    outputs:
+      can_download: ${{ steps.check.outputs.can_download }}
+    steps:
+      - name: Check if actor is repo member
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission" --jq '.permission' > /tmp/perm.json 2>/tmp/perm.err; then
+            PERMISSION=$(cat /tmp/perm.json)
+          else
+            PERMISSION="none"
+          fi
+
+          case "$PERMISSION" in
+            admin|maintain|write)
+              echo "can_download=true" >> "$GITHUB_OUTPUT"
+              echo "## ✅ 权限校验通过" >> "$GITHUB_STEP_SUMMARY"
+              echo "触发者 **${{ github.actor }}** 为仓库成员，可下载构建产物。" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "can_download=false" >> "$GITHUB_OUTPUT"
+              echo "## ⚠️ 权限不足" >> "$GITHUB_STEP_SUMMARY"
+              echo "触发者 **${{ github.actor }}** 无法生成可下载产物。仅 repo 成员可获取 Action Summary 下载链接。" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
+
+  build:
+    name: Build (${{ matrix.label }})
+    needs: authorize
+    if: needs.authorize.outputs.can_download == 'true'
+    runs-on: ${{ matrix.platform }}
+    environment: prerelease
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-ARM64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Disable code signing for prerelease build
+        shell: bash
+        run: |
+          node << 'EOF'
+          const fs = require("fs");
+          const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          conf.bundle.createUpdaterArtifacts = false;
+          if (conf.bundle.macOS) conf.bundle.macOS.signingIdentity = "-";
+          fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(conf, null, 2));
+          EOF
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate DMG background asset (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-dmg-background.sh
+
+      - name: Compute build args
+        id: build_args
+        shell: bash
+        run: |
+          args="--target ${{ matrix.target }}"
+
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            args+=" --bundles nsis"
+          fi
+
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        with:
+          args: ${{ steps.build_args.outputs.args }}
+
+      - name: Verify DMG layout (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle/dmg"
+            "src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          DMG_PATH=""
+          if [ -n "$BUNDLE_DIR" ]; then
+            DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          fi
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
+            exit 1
+          fi
+
+          bash scripts/verify-dmg-layout.sh "$DMG_PATH" "ClawPal.app"
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \(
+              -name "*.dmg" -o \
+              -name "*.deb" -o \
+              -name "*.AppImage" -o \
+              -name "*.msi" -o \
+              -name "*.exe" -o \
+              -name "*.rpm" \
+            \) -exec cp {} artifacts/ \; 2>/dev/null || true
+          fi
+
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            PORTABLE_CANDIDATES=(
+              "target/${{ matrix.target }}/release/clawpal.exe"
+              "src-tauri/target/${{ matrix.target }}/release/clawpal.exe"
+            )
+            for portable in "${PORTABLE_CANDIDATES[@]}"; do
+              if [ -f "$portable" ]; then
+                cp "$portable" "artifacts/ClawPal_portable.exe"
+                break
+              fi
+            done
+          fi
+
+          echo "### Collected artifacts:" >> "$GITHUB_STEP_SUMMARY"
+          if ls artifacts/* >/dev/null 2>&1; then
+            for file in artifacts/*; do
+              echo "- \\`$(basename "$file")\\`" >> "$GITHUB_STEP_SUMMARY"
+            done
+          else
+            echo "No artifacts found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawpal-${{ matrix.label }}
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Build summary
+        if: always()
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "## Artifact Download" >> "$GITHUB_STEP_SUMMARY"
+          echo "请在此 Action Summary 页面下方的 **Artifacts** 区域下载，当前为 repo 成员专用。" >> "$GITHUB_STEP_SUMMARY"
+          echo "(Artifacts are attached to this run and available at the same page.)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run details: ${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
