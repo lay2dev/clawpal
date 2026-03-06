@@ -1,8 +1,9 @@
 //! E2E test: Docker Ubuntu container with OpenClaw config → ClawPal SSH connect
 //! → profile sync → doctor check.
 //!
-//! This test spins up a Docker container running Ubuntu with SSH and the latest
-//! real `openclaw` CLI (installed via npm), seeds OpenClaw configuration files, then:
+//! This test spins up a Docker container running Ubuntu with SSH and a pinned,
+//! real `openclaw` CLI (installed from npm), seeds OpenClaw configuration files, then:
+//!
 //! 1. Connects via `SshConnectionPool` (password auth)
 //! 2. Reads the OpenClaw config from the container
 //! 3. Extracts model profiles from the config
@@ -27,7 +28,7 @@ const ROOT_PASSWORD: &str = "clawpal-e2e-pass";
 const TEST_ANTHROPIC_KEY: &str = "test-anthropic-profile-key";
 const TEST_OPENAI_KEY: &str = "test-openai-profile-key";
 
-/// Dockerfile: Ubuntu + openssh-server + Node.js + real openclaw CLI (latest from npm) + seeded OpenClaw config.
+/// Dockerfile: Ubuntu + openssh-server + Node.js + pinned real openclaw CLI + seeded OpenClaw config.
 const DOCKERFILE: &str = r#"
 FROM ubuntu:22.04
 
@@ -320,21 +321,13 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .pointer("/profiles/anthropic:default/token")
         .and_then(|v| v.as_str())
         .expect("anthropic:default token should exist");
-<<<<<<< HEAD
-    assert_eq!(anthropic_token, "e2e-anthropic-fake-key-00000000");
-=======
     assert_eq!(anthropic_token, TEST_ANTHROPIC_KEY);
->>>>>>> 0a991c5 (test: replace token-like literals with synthetic constants in e2e fixture)
 
     let openai_token = auth
         .pointer("/profiles/openai:default/token")
         .and_then(|v| v.as_str())
         .expect("openai:default token should exist");
-<<<<<<< HEAD
-    assert_eq!(openai_token, "e2e-openai-fake-key-11111111");
-=======
     assert_eq!(openai_token, TEST_OPENAI_KEY);
->>>>>>> 0a991c5 (test: replace token-like literals with synthetic constants in e2e fixture)
     eprintln!("[e2e] Auth store verified: 2 provider credentials found");
 
     // --- Step 4: Extract model profiles from config ---
@@ -417,11 +410,7 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .expect("should read env var");
     assert_eq!(
         env_result.stdout.trim(),
-<<<<<<< HEAD
-        "e2e-anthropic-fake-key-00000000",
-=======
         TEST_ANTHROPIC_KEY,
->>>>>>> 0a991c5 (test: replace token-like literals with synthetic constants in e2e fixture)
         "ANTHROPIC_API_KEY should be set in remote env"
     );
     eprintln!("[e2e] Remote env vars verified");
