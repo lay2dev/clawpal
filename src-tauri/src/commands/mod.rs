@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::access_discovery::probe_engine::{build_probe_plan_for_local, run_probe_with_redaction};
 use crate::access_discovery::store::AccessDiscoveryStore;
@@ -21,6 +21,9 @@ use crate::install::session_store::InstallSessionStore;
 use crate::install::types::InstallState;
 use crate::models::resolve_paths;
 use crate::ssh::{SftpEntry, SshConnectionPool, SshExecResult, SshHostConfig, SshTransferStats};
+use clawpal_core::ssh::diagnostic::{
+    from_any_error, SshDiagnosticReport, SshErrorCode, SshIntent, SshStage,
+};
 
 pub mod agent;
 pub mod backup;
@@ -436,6 +439,8 @@ pub struct StatusLight {
     pub active_agents: u32,
     pub global_default_model: Option<String>,
     pub fallback_models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_diagnostic: Option<SshDiagnosticReport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3217,6 +3222,19 @@ fn profile_to_model_value(profile: &ModelProfile) -> String {
 pub struct ResolvedApiKey {
     pub profile_id: String,
     pub masked_key: String,
+    pub credential_kind: ResolvedCredentialKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_ref: Option<String>,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedCredentialKind {
+    OAuth,
+    EnvRef,
+    Manual,
+    Unset,
 }
 
 fn truncate_error_text(input: &str, max_chars: usize) -> String {
@@ -3399,13 +3417,21 @@ fn resolve_profile_api_key_with_priority(
     base_dir: &Path,
 ) -> Option<(String, u8)> {
     resolve_profile_credential_with_priority(profile, base_dir)
-        .map(|(credential, priority)| (credential.secret, priority))
+        .map(|(credential, priority, _)| (credential.secret, priority))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InternalAuthKind {
     ApiKey,
     Authorization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedCredentialSource {
+    ExplicitAuthRef,
+    ManualApiKey,
+    ProviderFallbackAuthRef,
+    ProviderEnvVar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3456,10 +3482,69 @@ pub(crate) fn provider_env_var_candidates(provider: &str) -> Vec<String> {
     out
 }
 
+fn is_oauth_provider_alias(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "openai-codex" | "openai_codex" | "github-copilot" | "copilot"
+    )
+}
+
+fn is_oauth_auth_ref(provider: &str, auth_ref: &str) -> bool {
+    if !is_oauth_provider_alias(provider) {
+        return false;
+    }
+    let lower = auth_ref.trim().to_ascii_lowercase();
+    lower.starts_with("openai-codex:") || lower.starts_with("openai:")
+}
+
+pub(crate) fn infer_resolved_credential_kind(
+    profile: &ModelProfile,
+    source: Option<ResolvedCredentialSource>,
+) -> ResolvedCredentialKind {
+    let auth_ref = profile.auth_ref.trim();
+    match source {
+        Some(ResolvedCredentialSource::ManualApiKey) => ResolvedCredentialKind::Manual,
+        Some(ResolvedCredentialSource::ProviderEnvVar) => ResolvedCredentialKind::EnvRef,
+        Some(ResolvedCredentialSource::ExplicitAuthRef) => {
+            if is_oauth_auth_ref(&profile.provider, auth_ref) {
+                ResolvedCredentialKind::OAuth
+            } else {
+                ResolvedCredentialKind::EnvRef
+            }
+        }
+        Some(ResolvedCredentialSource::ProviderFallbackAuthRef) => {
+            let fallback_ref = format!("{}:default", profile.provider.trim().to_ascii_lowercase());
+            if is_oauth_auth_ref(&profile.provider, &fallback_ref) {
+                ResolvedCredentialKind::OAuth
+            } else {
+                ResolvedCredentialKind::EnvRef
+            }
+        }
+        None => {
+            if !auth_ref.is_empty() {
+                if is_oauth_auth_ref(&profile.provider, auth_ref) {
+                    ResolvedCredentialKind::OAuth
+                } else {
+                    ResolvedCredentialKind::EnvRef
+                }
+            } else if profile
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|v| !v.is_empty())
+            {
+                ResolvedCredentialKind::Manual
+            } else {
+                ResolvedCredentialKind::Unset
+            }
+        }
+    }
+}
+
 fn resolve_profile_credential_with_priority(
     profile: &ModelProfile,
     base_dir: &Path,
-) -> Option<(InternalProviderCredential, u8)> {
+) -> Option<(InternalProviderCredential, u8, ResolvedCredentialSource)> {
     // 1. Try explicit auth_ref (user-specified) as env var, then auth store.
     let auth_ref = profile.auth_ref.trim();
     let has_explicit_auth_ref = !auth_ref.is_empty();
@@ -3476,12 +3561,13 @@ fn resolve_profile_credential_with_priority(
                             kind,
                         },
                         40,
+                        ResolvedCredentialSource::ExplicitAuthRef,
                     ));
                 }
             }
         }
         if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, auth_ref) {
-            return Some((credential, 30));
+            return Some((credential, 30, ResolvedCredentialSource::ExplicitAuthRef));
         }
     }
 
@@ -3497,6 +3583,7 @@ fn resolve_profile_credential_with_priority(
                     kind,
                 },
                 20,
+                ResolvedCredentialSource::ManualApiKey,
             ));
         }
     }
@@ -3519,6 +3606,7 @@ fn resolve_profile_credential_with_priority(
                                 kind,
                             },
                             15,
+                            ResolvedCredentialSource::ProviderFallbackAuthRef,
                         ));
                     }
                 }
@@ -3526,7 +3614,11 @@ fn resolve_profile_credential_with_priority(
             if let Some(credential) =
                 resolve_credential_from_agent_auth_profiles(base_dir, &fallback_ref)
             {
-                return Some((credential, 15));
+                return Some((
+                    credential,
+                    15,
+                    ResolvedCredentialSource::ProviderFallbackAuthRef,
+                ));
             }
         }
     }
@@ -3548,6 +3640,7 @@ fn resolve_profile_credential_with_priority(
                         kind,
                     },
                     10,
+                    ResolvedCredentialSource::ProviderEnvVar,
                 ));
             }
         }
@@ -3583,7 +3676,7 @@ fn collect_provider_credentials_from_profiles(
 ) -> HashMap<String, InternalProviderCredential> {
     let mut out = HashMap::<String, (InternalProviderCredential, u8)>::new();
     for profile in profiles.iter().filter(|p| p.enabled) {
-        let Some((credential, priority)) =
+        let Some((credential, priority, _)) =
             resolve_profile_credential_with_priority(profile, base_dir)
         else {
             continue;
@@ -5568,6 +5661,73 @@ mod model_profile_upsert_tests {
             ]
         );
     }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_oauth_ref() {
+        let profile = mk_profile(
+            "p-oauth",
+            "openai-codex",
+            "gpt-5",
+            "openai-codex:default",
+            None,
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::OAuth
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_env_ref() {
+        let profile = mk_profile("p-env", "openai", "gpt-4o", "OPENAI_API_KEY", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_manual_and_unset() {
+        let manual = mk_profile(
+            "p-manual",
+            "openrouter",
+            "deepseek-v3",
+            "",
+            Some("sk-manual"),
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, Some(ResolvedCredentialSource::ManualApiKey)),
+            ResolvedCredentialKind::Manual
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, None),
+            ResolvedCredentialKind::Manual
+        );
+
+        let unset = mk_profile("p-unset", "openrouter", "deepseek-v3", "", None);
+        assert_eq!(
+            infer_resolved_credential_kind(&unset, None),
+            ResolvedCredentialKind::Unset
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_does_not_treat_plain_openai_as_oauth() {
+        let profile = mk_profile("p-openai", "openai", "gpt-4o", "openai:default", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6948,10 +7108,81 @@ pub fn delete_ssh_host(host_id: String) -> Result<bool, String> {
 // Task 4: SSH connect / disconnect / status
 // ---------------------------------------------------------------------------
 
+fn emit_ssh_diagnostic(app: &AppHandle, report: &SshDiagnosticReport) {
+    let code = report.error_code.map(|value| value.as_str().to_string());
+    let payload = json!({
+        "stage": report.stage,
+        "intent": report.intent,
+        "status": report.status,
+        "errorCode": code,
+        "summary": report.summary,
+        "repairPlan": report.repair_plan,
+        "confidence": report.confidence,
+    });
+    let _ = app.emit("ssh:diagnostic", payload.clone());
+    if !report.repair_plan.is_empty() {
+        let _ = app.emit("ssh:repair-suggested", payload.clone());
+    }
+    crate::logging::log_info(&format!("[ssh:diagnostic] {payload}"));
+}
+
+fn make_ssh_command_error(
+    app: &AppHandle,
+    stage: SshStage,
+    intent: SshIntent,
+    raw: impl Into<String>,
+) -> String {
+    let message = raw.into();
+    let diagnostic = from_any_error(stage, intent, message.clone());
+    emit_ssh_diagnostic(app, &diagnostic);
+    message
+}
+
+fn success_ssh_diagnostic(
+    app: &AppHandle,
+    stage: SshStage,
+    intent: SshIntent,
+    summary: impl Into<String>,
+) -> SshDiagnosticReport {
+    let report = SshDiagnosticReport::success(stage, intent, summary);
+    emit_ssh_diagnostic(app, &report);
+    report
+}
+
+fn ssh_stage_for_error_code(code: SshErrorCode) -> SshStage {
+    match code {
+        SshErrorCode::HostUnreachable | SshErrorCode::ConnectionRefused | SshErrorCode::Timeout => {
+            SshStage::TcpReachability
+        }
+        SshErrorCode::HostKeyFailed => SshStage::HostKeyVerification,
+        SshErrorCode::KeyfileMissing
+        | SshErrorCode::PassphraseRequired
+        | SshErrorCode::AuthFailed
+        | SshErrorCode::SftpPermissionDenied => SshStage::AuthNegotiation,
+        SshErrorCode::SessionStale => SshStage::SessionOpen,
+        SshErrorCode::RemoteCommandFailed => SshStage::RemoteExec,
+        SshErrorCode::Unknown => SshStage::TcpReachability,
+    }
+}
+
+fn ssh_stage_for_intent(intent: SshIntent) -> SshStage {
+    match intent {
+        SshIntent::Connect => SshStage::SessionOpen,
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => SshStage::RemoteExec,
+        SshIntent::SftpRead => SshStage::SftpRead,
+        SshIntent::SftpWrite => SshStage::SftpWrite,
+        SshIntent::SftpRemove => SshStage::SftpRemove,
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_connect(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
     crate::commands::logs::log_dev(format!("[dev][ssh_connect] begin host_id={host_id}"));
     // If already connected and handle is alive, reuse
@@ -6959,9 +7190,17 @@ pub async fn ssh_connect(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect] reuse existing connection host_id={host_id}"
         ));
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SessionOpen,
+            SshIntent::Connect,
+            "SSH session already connected",
+        );
         return Ok(true);
     }
-    let hosts = read_hosts_from_registry()?;
+    let hosts = read_hosts_from_registry().map_err(|error| {
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+    })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect] host registry is empty");
     }
@@ -6973,7 +7212,12 @@ pub async fn ssh_connect(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
         ));
-        format!("No SSH host config with id: {host_id}")
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
     })?;
     // If the host has a stored passphrase, use it directly
     let connect_result = if let Some(ref pp) = host.passphrase {
@@ -6993,9 +7237,25 @@ pub async fn ssh_connect(
             "[dev][ssh_connect] failed host_id={} host={} user={} port={} auth_method={} error={}",
             host_id, host.host, host.username, host.port, host.auth_method, error
         ));
-        return Err(format!("ssh connect failed: {error}"));
+        let message = format!("ssh connect failed: {error}");
+        let mut diagnostic = from_any_error(
+            SshStage::TcpReachability,
+            SshIntent::Connect,
+            message.clone(),
+        );
+        if let Some(code) = diagnostic.error_code {
+            diagnostic.stage = ssh_stage_for_error_code(code);
+        }
+        emit_ssh_diagnostic(&app, &diagnostic);
+        return Err(message);
     }
     crate::commands::logs::log_dev(format!("[dev][ssh_connect] success host_id={host_id}"));
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SessionOpen,
+        SshIntent::Connect,
+        "SSH connection established",
+    );
     Ok(true)
 }
 
@@ -7004,6 +7264,7 @@ pub async fn ssh_connect_with_passphrase(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     passphrase: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
     crate::commands::logs::log_dev(format!(
         "[dev][ssh_connect_with_passphrase] begin host_id={host_id}"
@@ -7012,9 +7273,17 @@ pub async fn ssh_connect_with_passphrase(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect_with_passphrase] reuse existing connection host_id={host_id}"
         ));
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SessionOpen,
+            SshIntent::Connect,
+            "SSH session already connected",
+        );
         return Ok(true);
     }
-    let hosts = read_hosts_from_registry()?;
+    let hosts = read_hosts_from_registry().map_err(|error| {
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+    })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
     }
@@ -7026,7 +7295,12 @@ pub async fn ssh_connect_with_passphrase(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
         ));
-        format!("No SSH host config with id: {host_id}")
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
     })?;
     if let Err(error) = pool
         .connect_with_passphrase(&host, Some(passphrase.as_str()))
@@ -7041,11 +7315,22 @@ pub async fn ssh_connect_with_passphrase(
             host.auth_method,
             error
         ));
-        return Err(format!("ssh connect failed: {error}"));
+        return Err(make_ssh_command_error(
+            &app,
+            SshStage::AuthNegotiation,
+            SshIntent::Connect,
+            format!("ssh connect failed: {error}"),
+        ));
     }
     crate::commands::logs::log_dev(format!(
         "[dev][ssh_connect_with_passphrase] success host_id={host_id}"
     ));
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SessionOpen,
+        SshIntent::Connect,
+        "SSH connection established",
+    );
     Ok(true)
 }
 
@@ -7087,8 +7372,20 @@ pub async fn ssh_exec(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     command: String,
+    app: AppHandle,
 ) -> Result<SshExecResult, String> {
-    pool.exec(&host_id, &command).await
+    pool.exec(&host_id, &command)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::RemoteExec,
+                SshIntent::Exec,
+                "Remote SSH command executed",
+            );
+            result
+        })
+        .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
 }
 
 #[tauri::command]
@@ -7096,8 +7393,22 @@ pub async fn sftp_read_file(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<String, String> {
-    pool.sftp_read(&host_id, &path).await
+    pool.sftp_read(&host_id, &path)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SftpRead,
+                SshIntent::SftpRead,
+                "SFTP read succeeded",
+            );
+            result
+        })
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -7106,8 +7417,19 @@ pub async fn sftp_write_file(
     host_id: String,
     path: String,
     content: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
-    pool.sftp_write(&host_id, &path, &content).await?;
+    pool.sftp_write(&host_id, &path, &content)
+        .await
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpWrite, SshIntent::SftpWrite, error)
+        })?;
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SftpWrite,
+        SshIntent::SftpWrite,
+        "SFTP write succeeded",
+    );
     Ok(true)
 }
 
@@ -7116,8 +7438,22 @@ pub async fn sftp_list_dir(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<Vec<SftpEntry>, String> {
-    pool.sftp_list(&host_id, &path).await
+    pool.sftp_list(&host_id, &path)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SftpRead,
+                SshIntent::SftpRead,
+                "SFTP list succeeded",
+            );
+            result
+        })
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -7125,9 +7461,106 @@ pub async fn sftp_remove_file(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
-    pool.sftp_remove(&host_id, &path).await?;
+    pool.sftp_remove(&host_id, &path).await.map_err(|error| {
+        make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
+    })?;
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SftpRemove,
+        SshIntent::SftpRemove,
+        "SFTP remove succeeded",
+    );
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn diagnose_ssh(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    intent: String,
+    app: AppHandle,
+) -> Result<SshDiagnosticReport, String> {
+    let intent = intent.parse::<SshIntent>().map_err(|_| {
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("Invalid SSH diagnostic intent: {intent}"),
+        )
+    })?;
+
+    let stage = ssh_stage_for_intent(intent);
+    if matches!(intent, SshIntent::Connect) {
+        if pool.is_connected(&host_id).await {
+            return Ok(success_ssh_diagnostic(
+                &app,
+                stage,
+                intent,
+                "SSH connection is healthy",
+            ));
+        }
+        let hosts = read_hosts_from_registry().map_err(|error| {
+            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+        })?;
+        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+            make_ssh_command_error(
+                &app,
+                SshStage::ResolveHostConfig,
+                SshIntent::Connect,
+                format!("No SSH host config with id: {host_id}"),
+            )
+        })?;
+        return Ok(match pool.connect(&host).await {
+            Ok(_) => success_ssh_diagnostic(
+                &app,
+                SshStage::SessionOpen,
+                SshIntent::Connect,
+                "SSH connect probe succeeded",
+            ),
+            Err(error) => {
+                let mut report =
+                    from_any_error(SshStage::TcpReachability, SshIntent::Connect, error);
+                if let Some(code) = report.error_code {
+                    report.stage = ssh_stage_for_error_code(code);
+                }
+                emit_ssh_diagnostic(&app, &report);
+                report
+            }
+        });
+    }
+
+    if !pool.is_connected(&host_id).await {
+        let report = from_any_error(stage, intent, format!("No connection for id: {host_id}"));
+        emit_ssh_diagnostic(&app, &report);
+        return Ok(report);
+    }
+
+    let report = match intent {
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => {
+            match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
+                Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
+                Err(error) => from_any_error(stage, intent, error),
+            }
+        }
+        SshIntent::SftpRead => match pool.sftp_list(&host_id, "~").await {
+            Ok(_) => SshDiagnosticReport::success(stage, intent, "SFTP read probe succeeded"),
+            Err(error) => from_any_error(stage, intent, error),
+        },
+        SshIntent::SftpWrite => {
+            SshDiagnosticReport::success(stage, intent, "SFTP write probe skipped (no-op)")
+        }
+        SshIntent::SftpRemove => {
+            SshDiagnosticReport::success(stage, intent, "SFTP remove probe skipped (no-op)")
+        }
+        SshIntent::Connect => unreachable!(),
+    };
+    emit_ssh_diagnostic(&app, &report);
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -7677,7 +8110,10 @@ impl RemoteAuthCache {
     }
 
     /// Resolve API key for a single profile using cached data.
-    fn resolve_for_profile(&self, profile: &ModelProfile) -> String {
+    fn resolve_for_profile_with_source(
+        &self,
+        profile: &ModelProfile,
+    ) -> Option<(String, ResolvedCredentialSource)> {
         let auth_ref = profile.auth_ref.trim();
         let has_explicit_auth_ref = !auth_ref.is_empty();
 
@@ -7685,11 +8121,11 @@ impl RemoteAuthCache {
         if has_explicit_auth_ref {
             if is_valid_env_var_name(auth_ref) {
                 if let Some(val) = self.env_vars.get(auth_ref) {
-                    return val.clone();
+                    return Some((val.clone(), ResolvedCredentialSource::ExplicitAuthRef));
                 }
             }
             if let Some(key) = self.find_in_auth_stores(auth_ref) {
-                return key;
+                return Some((key, ResolvedCredentialSource::ExplicitAuthRef));
             }
         }
 
@@ -7697,7 +8133,7 @@ impl RemoteAuthCache {
         if let Some(ref key) = profile.api_key {
             let trimmed = key.trim();
             if !trimmed.is_empty() {
-                return trimmed.to_string();
+                return Some((trimmed.to_string(), ResolvedCredentialSource::ManualApiKey));
             }
         }
 
@@ -7708,7 +8144,7 @@ impl RemoteAuthCache {
             let skip = has_explicit_auth_ref && auth_ref == fallback;
             if !skip {
                 if let Some(key) = self.find_in_auth_stores(&fallback) {
-                    return key;
+                    return Some((key, ResolvedCredentialSource::ProviderFallbackAuthRef));
                 }
             }
         }
@@ -7716,11 +8152,17 @@ impl RemoteAuthCache {
         // 4. Provider env var conventions.
         for env_name in provider_env_var_candidates(&profile.provider) {
             if let Some(val) = self.env_vars.get(&env_name) {
-                return val.clone();
+                return Some((val.clone(), ResolvedCredentialSource::ProviderEnvVar));
             }
         }
 
-        String::new()
+        None
+    }
+
+    fn resolve_for_profile(&self, profile: &ModelProfile) -> String {
+        self.resolve_for_profile_with_source(profile)
+            .map(|(key, _)| key)
+            .unwrap_or_default()
     }
 
     fn find_in_auth_stores(&self, auth_ref: &str) -> Option<String> {
