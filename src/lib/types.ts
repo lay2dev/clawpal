@@ -237,7 +237,7 @@ export interface SshTransferStats {
   updatedAtMs: number;
 }
 
-export type BugReportBackend = "sentry" | "glitchTip" | "customUrl";
+export type BugReportBackend = "sentry";
 export type BugReportSeverity = "info" | "warn" | "error" | "critical";
 
 export interface BugReportSettings {

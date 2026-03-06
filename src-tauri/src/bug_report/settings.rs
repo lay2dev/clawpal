@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_MAX_REPORTS_PER_HOUR: u32 = 20;
 const MIN_MAX_REPORTS_PER_HOUR: u32 = 1;
 const MAX_MAX_REPORTS_PER_HOUR: u32 = 1_000;
+const DEFAULT_SENTRY_DSN: &str = "https://0181564e407dbd5b571190741e763b27@o4510996590886912.ingest.de.sentry.io/4510996607467600";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +68,7 @@ impl Default for BugReportSettings {
         Self {
             enabled: default_enabled(),
             backend: BugReportBackend::default(),
-            endpoint: None,
+            endpoint: default_sentry_dsn(),
             severity_threshold: default_severity_threshold(),
             max_reports_per_hour: default_max_reports_per_hour(),
         }
@@ -86,6 +87,10 @@ fn default_max_reports_per_hour() -> u32 {
     DEFAULT_MAX_REPORTS_PER_HOUR
 }
 
+fn default_sentry_dsn() -> Option<String> {
+    built_in_sentry_dsn()
+}
+
 fn normalize_endpoint(value: Option<String>) -> Option<String> {
     value
         .map(|raw| raw.trim().to_string())
@@ -93,7 +98,8 @@ fn normalize_endpoint(value: Option<String>) -> Option<String> {
 }
 
 pub fn normalize_settings(mut settings: BugReportSettings) -> BugReportSettings {
-    settings.endpoint = normalize_endpoint(settings.endpoint);
+    settings.backend = BugReportBackend::Sentry;
+    settings.endpoint = normalize_endpoint(settings.endpoint).or_else(default_sentry_dsn);
     settings.max_reports_per_hour = settings
         .max_reports_per_hour
         .clamp(MIN_MAX_REPORTS_PER_HOUR, MAX_MAX_REPORTS_PER_HOUR);
@@ -104,6 +110,7 @@ pub fn built_in_sentry_dsn() -> Option<String> {
     option_env!("CLAWPAL_SENTRY_DSN")
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
+        .or_else(|| Some(DEFAULT_SENTRY_DSN.to_string()))
 }
 
 #[cfg(test)]
@@ -119,6 +126,7 @@ mod tests {
             severity_threshold: BugReportSeverity::Warn,
             max_reports_per_hour: 10_000,
         });
+        assert_eq!(settings.backend, BugReportBackend::Sentry);
         assert_eq!(
             settings.endpoint.as_deref(),
             Some("https://example.com/bug-report")
@@ -135,7 +143,8 @@ mod tests {
             severity_threshold: BugReportSeverity::Error,
             max_reports_per_hour: 0,
         });
-        assert_eq!(settings.endpoint, None);
+        assert_eq!(settings.backend, BugReportBackend::Sentry);
+        assert!(matches!(settings.endpoint, Some(value) if !value.is_empty()));
         assert_eq!(settings.max_reports_per_hour, MIN_MAX_REPORTS_PER_HOUR);
     }
 }

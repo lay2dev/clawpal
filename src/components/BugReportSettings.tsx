@@ -110,19 +110,7 @@ export function BugReportSettings() {
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>{t("settings.bugReportBackend")}</Label>
-                <Select
-                  value={settings.backend}
-                  onValueChange={(backend) => update({ backend: backend as BugReportSettingsModel["backend"] })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="sentry">Sentry</SelectItem>
-                    <SelectItem value="glitchTip">GlitchTip</SelectItem>
-                    <SelectItem value="customUrl">{t("settings.bugReportBackendCustom")}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <p className="text-sm text-muted-foreground">Sentry</p>
               </div>
 
               <div className="space-y-1.5">
@@ -144,24 +132,7 @@ export function BugReportSettings() {
               </div>
             </div>
 
-            {settings.backend !== "sentry" && (
-              <div className="space-y-1.5">
-                <Label>{t("settings.bugReportEndpoint")}</Label>
-                <Input
-                  value={settings.endpoint || ""}
-                  onChange={(event) => update({ endpoint: event.target.value || null })}
-                  placeholder={
-                    settings.backend === "customUrl"
-                      ? "https://example.com/bug-report"
-                      : "https://public-key@glitchtip.example.com/1"
-                  }
-                />
-              </div>
-            )}
-
-            {settings.backend === "sentry" && (
-              <p className="text-xs text-muted-foreground">{t("settings.bugReportSentryBuiltin")}</p>
-            )}
+            <p className="text-xs text-muted-foreground">{t("settings.bugReportSentryBuiltin")}</p>
 
             <div className="space-y-1.5 max-w-[220px]">
               <Label>{t("settings.bugReportRateLimit")}</Label>
@@ -206,4 +177,3 @@ export function BugReportSettings() {
     </Card>
   );
 }
-
