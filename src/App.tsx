@@ -41,6 +41,7 @@ import { Toaster } from "sonner";
 import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstance, GuidanceAction, InstallSession, PrecheckIssue, RegisteredInstance, SshHost, SshTransferStats } from "./lib/types";
 import { GuidanceCard } from "./components/GuidanceCard";
 import { SshFormWidget } from "./components/SshFormWidget";
+import { QuickDiagnoseDialog } from "./components/QuickDiagnoseDialog";
 import type { AgentGuidanceItem } from "./components/GuidanceCard";
 import { closeWorkspaceTab, shouldRenderGuidanceCard } from "@/lib/tabWorkspace";
 import {
@@ -410,6 +411,8 @@ export function App() {
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
   const [sshTransferStats, setSshTransferStats] = useState<SshTransferStats | null>(null);
   const [doctorNavPulse, setDoctorNavPulse] = useState(false);
+  const [quickDiagnoseOpen, setQuickDiagnoseOpen] = useState(false);
+  const [quickDiagnoseContext, setQuickDiagnoseContext] = useState<string | null>(null);
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
   const legacyMigrationDoneRef = useRef(false);
   const passphraseResolveRef = useRef<((value: string | null) => void) | null>(null);
@@ -776,6 +779,17 @@ export function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const openQuickDiagnose = useCallback((context?: string | null, instanceId?: string) => {
+    if (!showZeroclawDoctorFab) return;
+    const nextContext = (context || "").trim();
+    if (instanceId) {
+      setOpenTabIds((prev) => prev.includes(instanceId) ? prev : [...prev, instanceId]);
+      setActiveInstance(instanceId);
+    }
+    setQuickDiagnoseContext(nextContext || null);
+    setQuickDiagnoseOpen(true);
+  }, [showZeroclawDoctorFab]);
+
   const requestPassphrase = useCallback((hostLabel: string): Promise<string | null> => {
     setPassphraseHostLabel(hostLabel);
     setPassphraseInput("");
@@ -791,6 +805,20 @@ export function App() {
     passphraseResolveRef.current = null;
     if (resolve) resolve(value);
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!showZeroclawDoctorFab) return;
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        openQuickDiagnose(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openQuickDiagnose, showZeroclawDoctorFab]);
 
   const connectWithPassphraseFallback = useCallback(async (hostId: string) => {
     const host = sshHosts.find((h) => h.id === hostId);
@@ -1710,6 +1738,12 @@ export function App() {
               discoveredInstances={discoveredInstances}
               discoveringInstances={discoveringInstances}
               onConnectDiscovered={handleConnectDiscovered}
+              showQuickDiagnose={showZeroclawDoctorFab}
+              onQuickDiagnose={
+                showZeroclawDoctorFab
+                  ? (context, instanceId) => openQuickDiagnose(context, instanceId)
+                  : undefined
+              }
             />
           )}
           {inStart && startSection === "profiles" && (
@@ -1788,6 +1822,14 @@ export function App() {
           </Suspense>
         </div>
       </main>
+
+      {showZeroclawDoctorFab && (
+        <QuickDiagnoseDialog
+          open={quickDiagnoseOpen}
+          onOpenChange={setQuickDiagnoseOpen}
+          context={quickDiagnoseContext}
+        />
+      )}
 
       {/* ── Chat Panel (instance mode only) ── */}
       {!inStart && chatOpen && (

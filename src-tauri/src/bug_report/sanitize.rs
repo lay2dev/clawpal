@@ -143,9 +143,7 @@ mod tests {
         let output = sanitize_text(input);
         assert!(!output.contains("root@prod.internal"));
         assert!(!output.contains("10.24.1.88"));
-        assert!(
-            output.contains("<REDACTED_SSH_TARGET>") || output.contains("<REDACTED_EMAIL>")
-        );
+        assert!(output.contains("<REDACTED_SSH_TARGET>") || output.contains("<REDACTED_EMAIL>"));
         assert!(output.contains("<REDACTED_IP>"));
     }
 

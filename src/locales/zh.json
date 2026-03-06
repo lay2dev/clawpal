@@ -841,6 +841,10 @@
   "start.connected": "已连接 {{label}}",
   "start.fromContainer": "来自 Docker 容器",
   "start.fromDataDir": "来自数据目录",
+  "quickDiagnose.title": "快速诊断",
+  "quickDiagnose.placeholder": "请诊断当前问题并给出可执行的下一步。",
+  "quickDiagnose.buttonLabel": "快速诊断",
+  "quickDiagnose.diagnoseWithZeroclaw": "使用 Zeroclaw 诊断",
 
   "instance.close": "关闭标签页",
 
