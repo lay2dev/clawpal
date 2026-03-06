@@ -1,7 +1,6 @@
 name: Bump Version
 
 on:
-  create:
   workflow_dispatch:
     inputs:
       bump_type:
@@ -35,7 +34,6 @@ concurrency:
 
 jobs:
   prepare:
-    if: ${{ github.event_name != 'create' || (github.event.ref_type == 'branch' && startsWith(github.event.ref, 'rc/v')) }}
     runs-on: ubuntu-latest
     outputs:
       current_version: ${{ steps.version.outputs.current }}
