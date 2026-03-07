@@ -534,6 +534,9 @@ async fn collect_remote_profiles_from_openclaw(
 ) -> Result<(Vec<ModelProfile>, ExtractModelProfilesResult), String> {
     let (_config_path, _raw, cfg) =
         remote_read_openclaw_config_text_and_json(pool, host_id).await?;
+    // TODO(clawpal-profile-hub): keep seeding from remote ~/.clawpal/model-profiles.json
+    // for backward compatibility for now, but remove this once auto-sync imports only
+    // the profiles that are currently bound in remote OpenClaw config/auth state.
     let profiles_raw = read_remote_profiles_storage_text(pool, host_id).await?;
     let profiles = clawpal_core::profile::list_profiles_from_storage_json(&profiles_raw);
     let (next_profiles, result) = extract_profiles_from_openclaw_config(&cfg, profiles);
