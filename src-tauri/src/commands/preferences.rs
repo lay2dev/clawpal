@@ -459,11 +459,7 @@ mod tests {
     fn missing_log_visibility_preferences_default_to_hidden() {
         let (paths, root) = test_paths();
         let prefs_path = app_preferences_path(&paths);
-        std::fs::write(
-            &prefs_path,
-            r#"{"showSshTransferSpeedUi":true}"#,
-        )
-        .unwrap();
+        std::fs::write(&prefs_path, r#"{"showSshTransferSpeedUi":true}"#).unwrap();
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(app_prefs.show_ssh_transfer_speed_ui);
