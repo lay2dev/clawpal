@@ -370,47 +370,6 @@ jobs:
           mkdir -p ~/.private_keys
           echo "$APPLE_API_KEY_CONTENT" > ~/.private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
 
-      - name: Sign zeroclaw macOS sidecars (macOS only)
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.signing.outputs.should_sign == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KEYCHAIN_PATH="${{ steps.import_apple_cert.outputs.keychain_path }}"
-          IDENTITY="${{ steps.apple_identity.outputs.signing_identity }}"
-
-          if [ -z "$KEYCHAIN_PATH" ]; then
-            echo "::error::Missing keychain path from certificate import step"
-            exit 1
-          fi
-
-          if [ -z "$IDENTITY" ]; then
-            echo "::error::Missing resolved Apple signing identity"
-            exit 1
-          fi
-
-          bins=(
-            "src-tauri/resources/zeroclaw/darwin-aarch64/zeroclaw"
-            "src-tauri/resources/zeroclaw/darwin-x64/zeroclaw"
-          )
-
-          for bin in "${bins[@]}"; do
-            if [ ! -f "$bin" ]; then
-              echo "::error::Missing sidecar binary: $bin"
-              exit 1
-            fi
-
-            chmod +x "$bin"
-            codesign \
-              --force \
-              --timestamp \
-              --options runtime \
-              --sign "$IDENTITY" \
-              --keychain "$KEYCHAIN_PATH" \
-              "$bin"
-            codesign --verify --verbose=2 "$bin"
-          done
-
       - name: Install frontend dependencies
         run: npm ci
 
@@ -540,8 +499,6 @@ jobs:
 
           bins=(
             "$APP_PATH/Contents/MacOS/clawpal"
-            "$APP_PATH/Contents/Resources/resources/zeroclaw/darwin-aarch64/zeroclaw"
-            "$APP_PATH/Contents/Resources/resources/zeroclaw/darwin-x64/zeroclaw"
           )
 
           for bin in "${bins[@]}"; do
