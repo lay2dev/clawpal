@@ -9,6 +9,7 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 interface DoctorRecoveryOverviewProps {
   diagnosis: RescuePrimaryDiagnosisResult;
@@ -23,6 +24,21 @@ interface DoctorRecoveryOverviewProps {
 
 function itemBadgeVariant(status: RescuePrimarySectionItem["status"]) {
   return status === "error" ? "destructive" : "outline";
+}
+
+function statusBadgeClass(
+  status: RescuePrimaryDiagnosisResult["status"] | RescuePrimarySectionItem["status"],
+) {
+  if (status === "healthy" || status === "ok") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300";
+  }
+  if (status === "degraded" || status === "warn") {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300";
+  }
+  if (status === "inactive" || status === "info") {
+    return "border-border/60 bg-muted/30 text-muted-foreground";
+  }
+  return "";
 }
 
 export function DoctorRecoveryOverview({
@@ -72,7 +88,7 @@ export function DoctorRecoveryOverview({
             </div>
             <Badge
               variant={diagnosis.summary.status === "broken" ? "destructive" : "outline"}
-              className="shrink-0"
+              className={statusBadgeClass(diagnosis.summary.status)}
             >
               {translateStatus(diagnosis.summary.status)}
             </Badge>
@@ -119,74 +135,85 @@ export function DoctorRecoveryOverview({
       <div className="grid gap-3">
         {diagnosis.sections.map((section) => (
           <Card key={section.key} className="gap-2 py-4">
-            <CardHeader className="pb-0">
-              <div className="flex items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <CardTitle className="text-sm">{section.title}</CardTitle>
-                  <p className="text-sm text-muted-foreground">{section.summary}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={section.status === "broken" ? "destructive" : "outline"}
-                  >
-                    {translateStatus(section.status)}
-                  </Badge>
-                  <Button
-                    asChild
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <a
-                      href={section.docsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={`${section.title} docs`}
-                      title={`${section.title} docs`}
-                    >
-                      <ExternalLinkIcon className="size-3.5" />
-                    </a>
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-3">
-              <div className="grid gap-2">
-                {section.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-md border border-border/50 bg-background/70 p-2"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm">{item.label}</div>
-                        {item.detail ? (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {item.detail}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {item.autoFixable && item.issueId ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 px-2 text-[11px]"
-                            onClick={() => onRepairIssue(item.issueId!)}
-                            disabled={checkLoading || repairing}
-                          >
-                            {t("doctor.fix", { defaultValue: "Fix" })}
-                          </Button>
-                        ) : null}
-                        <Badge variant={itemBadgeVariant(item.status)} className="text-[10px]">
-                          {translateStatus(item.status)}
-                        </Badge>
-                      </div>
+            <details
+              open={section.status !== "healthy" ? true : undefined}
+              className="group"
+            >
+              <summary className="list-none cursor-pointer">
+                <CardHeader className="pb-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">{section.title}</CardTitle>
+                      <p className="text-sm text-muted-foreground">{section.summary}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={section.status === "broken" ? "destructive" : "outline"}
+                        className={statusBadgeClass(section.status)}
+                      >
+                        {translateStatus(section.status)}
+                      </Badge>
+                      <Button
+                        asChild
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <a
+                          href={section.docsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open ${section.title} docs`}
+                          title={`Open ${section.title} docs`}
+                        >
+                          <ExternalLinkIcon className="size-3.5" />
+                        </a>
+                      </Button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </CardContent>
+                </CardHeader>
+              </summary>
+              <CardContent className="pt-3">
+                <div className="grid gap-2">
+                  {section.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-md border border-border/50 bg-background/70 p-2"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm">{item.label}</div>
+                          {item.detail ? (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {item.detail}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {item.autoFixable && item.issueId ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => onRepairIssue(item.issueId!)}
+                              disabled={checkLoading || repairing}
+                            >
+                              {t("doctor.fix", { defaultValue: "Fix" })}
+                            </Button>
+                          ) : null}
+                          <Badge
+                            variant={itemBadgeVariant(item.status)}
+                            className={cn("text-[10px]", statusBadgeClass(item.status))}
+                          >
+                            {translateStatus(item.status)}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </details>
           </Card>
         ))}
       </div>

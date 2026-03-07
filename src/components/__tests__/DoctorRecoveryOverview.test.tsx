@@ -26,23 +26,6 @@ describe("DoctorRecoveryOverview", () => {
       },
       sections: [
         {
-          key: "gateway",
-          title: "Gateway",
-          status: "broken",
-          summary: "Gateway has 1 blocking finding",
-          docsUrl: "https://docs.openclaw.ai/gateway/security/index",
-          items: [
-            {
-              id: "primary.gateway.unhealthy",
-              label: "Primary gateway is not healthy",
-              status: "error",
-              detail: "gateway restart required",
-              autoFixable: false,
-              issueId: "primary.gateway.unhealthy",
-            },
-          ],
-        },
-        {
           key: "agents",
           title: "Agents",
           status: "degraded",
@@ -56,6 +39,23 @@ describe("DoctorRecoveryOverview", () => {
               detail: "Initialize agents.defaults.model",
               autoFixable: true,
               issueId: "field.agents",
+            },
+          ],
+        },
+        {
+          key: "gateway",
+          title: "Gateway",
+          status: "healthy",
+          summary: "Gateway checks look healthy",
+          docsUrl: "https://docs.openclaw.ai/gateway/security/index",
+          items: [
+            {
+              id: "field.gateway.port",
+              label: "Gateway port",
+              status: "ok",
+              detail: "Configured primary gateway port: 18789",
+              autoFixable: false,
+              issueId: null,
             },
           ],
         },
@@ -83,8 +83,12 @@ describe("DoctorRecoveryOverview", () => {
     expect(html).toContain("Gateway needs attention first");
     expect(html).toContain("Apply 1 safe fix and re-run recovery");
     expect(html).toContain("Fix 1 safe issue");
-    expect(html).toContain("Gateway");
     expect(html).toContain("Agents");
+    expect(html).toContain("Gateway");
     expect(html.match(/Fix 1 safe issue/g)?.length ?? 0).toBe(1);
+    expect(html).toContain("Open Gateway docs");
+    expect(html).toContain("text-emerald-700");
+    expect(html).toContain("<details open");
+    expect(html).toContain("<details");
   });
 });

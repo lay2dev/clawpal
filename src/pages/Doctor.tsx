@@ -32,7 +32,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInstance } from "@/lib/instance-context";
 import {
   buildStatusProgressLines,
@@ -182,42 +181,6 @@ function RescueStatusIndicator({
       aria-label={title}
     >
       <CircleDashedIcon className="size-4" />
-    </div>
-  );
-}
-
-function RescueOverviewSkeleton({ progressLine }: { progressLine: string | null }) {
-  return (
-    <div className="mt-4 space-y-4">
-      <Card className="border-border/60 bg-muted/20">
-        <CardContent className="space-y-3 py-4">
-          <div className="h-5 overflow-hidden text-sm text-muted-foreground">
-            <span
-              key={progressLine}
-              className="inline-block whitespace-nowrap transition-opacity duration-300 animate-pulse"
-            >
-              {progressLine ?? ""}
-            </span>
-          </div>
-          <Skeleton className="h-5 w-2/3" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-9 w-36" />
-        </CardContent>
-      </Card>
-      {Array.from({ length: 5 }).map((_, index) => (
-        <Card key={index} className="gap-2 py-4">
-          <CardHeader className="pb-0">
-            <Skeleton className="h-5 w-28" />
-            <Skeleton className="mt-2 h-4 w-3/4" />
-          </CardHeader>
-          <CardContent className="pt-3">
-            <div className="grid gap-2">
-              <Skeleton className="h-16 w-full" />
-              <Skeleton className="h-16 w-full" />
-            </div>
-          </CardContent>
-        </Card>
-      ))}
     </div>
   );
 }
@@ -742,8 +705,15 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
                 </Button>
               </div>
 
-              {primaryState.checkLoading ? (
-                <RescueOverviewSkeleton progressLine={checkProgress?.line ?? null} />
+              {primaryState.checkLoading && checkProgress?.line ? (
+                <div className="mt-4 h-5 overflow-hidden text-sm text-muted-foreground">
+                  <span
+                    key={checkProgress.line}
+                    className="inline-block whitespace-nowrap transition-opacity duration-300 animate-pulse"
+                  >
+                    {checkProgress.line}
+                  </span>
+                </div>
               ) : null}
 
               {primaryState.checkError ? (
