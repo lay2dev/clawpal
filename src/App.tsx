@@ -7,7 +7,6 @@ import {
   HashIcon,
   ClockIcon,
   HistoryIcon,
-  FileTextIcon,
   StethoscopeIcon,
   BookOpenIcon,
   KeyRoundIcon,
@@ -45,7 +44,6 @@ const Cook = lazy(() => import("./pages/Cook").then((m) => ({ default: m.Cook })
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 const Doctor = lazy(() => import("./pages/Doctor").then((m) => ({ default: m.Doctor })));
-const ClawpalLogs = lazy(() => import("./pages/ClawpalLogs").then((m) => ({ default: m.ClawpalLogs })));
 const OpenclawContext = lazy(() => import("./pages/OpenclawContext").then((m) => ({ default: m.OpenclawContext })));
 const Channels = lazy(() => import("./pages/Channels").then((m) => ({ default: m.Channels })));
 const Cron = lazy(() => import("./pages/Cron").then((m) => ({ default: m.Cron })));
@@ -59,7 +57,6 @@ const preloadRouteModules = () =>
     import("./pages/Recipes"),
     import("./pages/Cron"),
     import("./pages/Doctor"),
-    import("./pages/ClawpalLogs"),
     import("./pages/OpenclawContext"),
     import("./pages/History"),
     import("./components/Chat"),
@@ -72,7 +69,7 @@ const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
 const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
 const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
 
-type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "logs" | "context" | "orchestrator";
+type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "context" | "orchestrator";
 const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "context", "history"];
 const OPEN_TABS_STORAGE_KEY = "clawpal_open_tabs";
 const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
@@ -357,9 +354,6 @@ export function App() {
     instanceId: null,
   });
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
-  const [showClawpalLogsUi, setShowClawpalLogsUi] = useState(false);
-  const [showGatewayLogsUi, setShowGatewayLogsUi] = useState(false);
-  const [showOpenclawContextUi, setShowOpenclawContextUi] = useState(false);
   const [sshTransferStats, setSshTransferStats] = useState<SshTransferStats | null>(null);
   const [doctorNavPulse, setDoctorNavPulse] = useState(false);
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
@@ -497,17 +491,11 @@ export function App() {
         .then((prefs) => {
           if (!cancelled) {
             setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
-            setShowClawpalLogsUi(Boolean(prefs.showClawpalLogsUi));
-            setShowGatewayLogsUi(Boolean(prefs.showGatewayLogsUi));
-            setShowOpenclawContextUi(Boolean(prefs.showOpenclawContextUi));
           }
         })
         .catch(() => {
           if (!cancelled) {
             setShowSshTransferSpeedUi(false);
-            setShowClawpalLogsUi(false);
-            setShowGatewayLogsUi(false);
-            setShowOpenclawContextUi(false);
           }
         });
     };
@@ -520,18 +508,6 @@ export function App() {
       unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    if (route === "logs" && !showClawpalLogsUi) {
-      navigateRoute("home");
-    }
-  }, [navigateRoute, route, showClawpalLogsUi]);
-
-  useEffect(() => {
-    if (route === "context" && !showOpenclawContextUi) {
-      navigateRoute("home");
-    }
-  }, [navigateRoute, route, showOpenclawContextUi]);
 
   const ensureAccessForInstance = useCallback((instanceId: string) => {
       const transport = resolveInstanceTransport(instanceId);
@@ -1305,24 +1281,13 @@ export function App() {
           ? <span className="ml-auto h-2 w-2 rounded-full bg-primary animate-pulse" />
           : undefined,
       },
-      ...(showClawpalLogsUi
-        ? [{
-          key: "clawpal-logs",
-          active: route === "logs",
-          icon: <FileTextIcon className="size-4" />,
-          label: t("nav.clawpalLogs"),
-          onClick: () => navigateRoute("logs"),
-        }]
-        : []),
-      ...(showOpenclawContextUi
-        ? [{
-          key: "openclaw-context",
-          active: route === "context",
-          icon: <BookOpenIcon className="size-4" />,
-          label: t("nav.context"),
-          onClick: () => navigateRoute("context"),
-        }]
-        : []),
+      {
+        key: "openclaw-context",
+        active: route === "context",
+        icon: <BookOpenIcon className="size-4" />,
+        label: t("nav.context"),
+        onClick: () => navigateRoute("context"),
+      },
       {
         key: "history",
         active: route === "history",
@@ -1571,12 +1536,8 @@ export function App() {
           {!inStart && route === "cron" && <Cron />}
           {!inStart && route === "history" && <History key={`history-${configVersion}`} />}
           {!inStart && route === "doctor" && (
-            <Doctor
-              key={activeInstance}
-              showGatewayLogsUi={showGatewayLogsUi}
-            />
+            <Doctor key={activeInstance} />
           )}
-          {!inStart && route === "logs" && <ClawpalLogs />}
           {!inStart && route === "context" && <OpenclawContext />}
           {!inStart && route === "orchestrator" && <Orchestrator />}
           </Suspense>

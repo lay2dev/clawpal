@@ -694,6 +694,7 @@ export function useApi() {
       readErrorLog: dispatch(api.readErrorLog, api.remoteReadErrorLog),
       readGatewayLog: dispatch(api.readGatewayLog, api.remoteReadGatewayLog),
       readGatewayErrorLog: dispatch(api.readGatewayErrorLog, api.remoteReadGatewayErrorLog),
+      readHelperLog: dispatch(api.readHelperLog, api.remoteReadHelperLog),
 
       // Local-only (no remote equivalent needed)
       getAppPreferences: localGlobalCached(
@@ -721,18 +722,6 @@ export function useApi() {
       ),
       setSshTransferSpeedUiPreference: withGlobalInvalidation(
         api.setSshTransferSpeedUiPreference,
-        ["getAppPreferences"],
-      ),
-      setClawpalLogsUiPreference: withGlobalInvalidation(
-        api.setClawpalLogsUiPreference,
-        ["getAppPreferences"],
-      ),
-      setGatewayLogsUiPreference: withGlobalInvalidation(
-        api.setGatewayLogsUiPreference,
-        ["getAppPreferences"],
-      ),
-      setOpenclawContextUiPreference: withGlobalInvalidation(
-        api.setOpenclawContextUiPreference,
         ["getAppPreferences"],
       ),
       ensureAccessProfile: api.ensureAccessProfile,

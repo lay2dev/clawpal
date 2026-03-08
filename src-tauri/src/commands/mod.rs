@@ -1131,7 +1131,13 @@ pub async fn manage_rescue_bot(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let action_label = action.clone();
+    let profile_label = profile.clone().unwrap_or_else(|| "rescue".into());
+    crate::logging::log_helper(&format!(
+        "[local] manage_rescue_bot start action={} profile={}",
+        action_label, profile_label
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let action = RescueBotAction::parse(&action)?;
         let profile = profile
             .as_deref()
@@ -1233,7 +1239,20 @@ pub async fn manage_rescue_bot(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] manage_rescue_bot success action={} profile={} state={} configured={} active={}",
+            action_label, summary.profile, summary.runtime_state, summary.configured, summary.active
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] manage_rescue_bot failed action={} profile={} error={}",
+            action_label, profile_label, error
+        )),
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1241,13 +1260,35 @@ pub async fn diagnose_primary_via_rescue(
     target_profile: Option<String>,
     rescue_profile: Option<String>,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
+    let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+    crate::logging::log_helper(&format!(
+        "[local] diagnose_primary_via_rescue start target={} rescue={}",
+        target_label, rescue_label
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
         let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
         diagnose_primary_via_rescue_local(&target_profile, &rescue_profile)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] diagnose_primary_via_rescue success target={} rescue={} status={} issues={}",
+            summary.target_profile,
+            summary.rescue_profile,
+            summary.summary.status,
+            summary.issues.len()
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] diagnose_primary_via_rescue failed target={} rescue={} error={}",
+            target_label, rescue_label, error
+        )),
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1256,7 +1297,14 @@ pub async fn repair_primary_via_rescue(
     rescue_profile: Option<String>,
     issue_ids: Option<Vec<String>>,
 ) -> Result<RescuePrimaryRepairResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
+    let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+    let requested_issue_count = issue_ids.as_ref().map_or(0, Vec::len);
+    crate::logging::log_helper(&format!(
+        "[local] repair_primary_via_rescue start target={} rescue={} requested_issues={}",
+        target_label, rescue_label, requested_issue_count
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
         let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
         repair_primary_via_rescue_local(
@@ -1266,7 +1314,24 @@ pub async fn repair_primary_via_rescue(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] repair_primary_via_rescue success target={} rescue={} applied={} failed={} skipped={}",
+            summary.target_profile,
+            summary.rescue_profile,
+            summary.applied_issue_ids.len(),
+            summary.failed_issue_ids.len(),
+            summary.skipped_issue_ids.len()
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] repair_primary_via_rescue failed target={} rescue={} error={}",
+            target_label, rescue_label, error
+        )),
+    }
+
+    result
 }
 
 fn collect_model_summary(cfg: &Value) -> ModelSummary {
@@ -9359,6 +9424,11 @@ pub fn read_app_log(lines: Option<usize>) -> Result<String, String> {
 #[tauri::command]
 pub fn read_error_log(lines: Option<usize>) -> Result<String, String> {
     crate::logging::read_log_tail("error.log", clamp_log_lines(lines))
+}
+
+#[tauri::command]
+pub fn read_helper_log(lines: Option<usize>) -> Result<String, String> {
+    crate::logging::read_log_tail("helper.log", clamp_log_lines(lines))
 }
 
 #[tauri::command]

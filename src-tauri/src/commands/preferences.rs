@@ -14,12 +14,6 @@ use crate::models::{resolve_paths, OpenClawPaths};
 pub struct AppPreferences {
     #[serde(default)]
     pub show_ssh_transfer_speed_ui: bool,
-    #[serde(default)]
-    pub show_clawpal_logs_ui: bool,
-    #[serde(default)]
-    pub show_gateway_logs_ui: bool,
-    #[serde(default)]
-    pub show_openclaw_context_ui: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -44,9 +38,6 @@ fn app_preferences_path(paths: &OpenClawPaths) -> std::path::PathBuf {
 fn app_preferences_from_stored(stored: &StoredAppPreferences) -> AppPreferences {
     AppPreferences {
         show_ssh_transfer_speed_ui: stored.show_ssh_transfer_speed_ui,
-        show_clawpal_logs_ui: stored.show_clawpal_logs_ui,
-        show_gateway_logs_ui: stored.show_gateway_logs_ui,
-        show_openclaw_context_ui: stored.show_openclaw_context_ui,
     }
 }
 
@@ -76,9 +67,6 @@ fn save_app_preferences_from_paths(
 ) -> Result<(), String> {
     let mut stored = load_stored_preferences_from_paths(paths);
     stored.show_ssh_transfer_speed_ui = prefs.show_ssh_transfer_speed_ui;
-    stored.show_clawpal_logs_ui = prefs.show_clawpal_logs_ui;
-    stored.show_gateway_logs_ui = prefs.show_gateway_logs_ui;
-    stored.show_openclaw_context_ui = prefs.show_openclaw_context_ui;
     save_stored_preferences_from_paths(paths, &stored)
 }
 
@@ -120,33 +108,6 @@ pub fn set_ssh_transfer_speed_ui_preference(show_ui: bool) -> Result<AppPreferen
     let paths = resolve_paths();
     let mut prefs = load_app_preferences_from_paths(&paths);
     prefs.show_ssh_transfer_speed_ui = show_ui;
-    save_app_preferences_from_paths(&paths, &prefs)?;
-    Ok(prefs)
-}
-
-#[tauri::command]
-pub fn set_clawpal_logs_ui_preference(show_ui: bool) -> Result<AppPreferences, String> {
-    let paths = resolve_paths();
-    let mut prefs = load_app_preferences_from_paths(&paths);
-    prefs.show_clawpal_logs_ui = show_ui;
-    save_app_preferences_from_paths(&paths, &prefs)?;
-    Ok(prefs)
-}
-
-#[tauri::command]
-pub fn set_gateway_logs_ui_preference(show_ui: bool) -> Result<AppPreferences, String> {
-    let paths = resolve_paths();
-    let mut prefs = load_app_preferences_from_paths(&paths);
-    prefs.show_gateway_logs_ui = show_ui;
-    save_app_preferences_from_paths(&paths, &prefs)?;
-    Ok(prefs)
-}
-
-#[tauri::command]
-pub fn set_openclaw_context_ui_preference(show_ui: bool) -> Result<AppPreferences, String> {
-    let paths = resolve_paths();
-    let mut prefs = load_app_preferences_from_paths(&paths);
-    prefs.show_openclaw_context_ui = show_ui;
     save_app_preferences_from_paths(&paths, &prefs)?;
     Ok(prefs)
 }
@@ -239,9 +200,6 @@ mod tests {
             &paths,
             &AppPreferences {
                 show_ssh_transfer_speed_ui: false,
-                show_clawpal_logs_ui: true,
-                show_gateway_logs_ui: false,
-                show_openclaw_context_ui: true,
             },
         )
         .unwrap();
@@ -265,9 +223,6 @@ mod tests {
             &paths,
             &AppPreferences {
                 show_ssh_transfer_speed_ui: true,
-                show_clawpal_logs_ui: true,
-                show_gateway_logs_ui: true,
-                show_openclaw_context_ui: true,
             },
         )
         .unwrap();
@@ -286,23 +241,17 @@ mod tests {
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(app_prefs.show_ssh_transfer_speed_ui);
-        assert!(app_prefs.show_clawpal_logs_ui);
-        assert!(app_prefs.show_gateway_logs_ui);
-        assert!(app_prefs.show_openclaw_context_ui);
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn missing_log_visibility_preferences_default_to_hidden() {
+    fn missing_removed_ui_preferences_still_load_cleanly() {
         let (paths, root) = test_paths();
         let prefs_path = app_preferences_path(&paths);
         std::fs::write(&prefs_path, r#"{"showSshTransferSpeedUi":true}"#).unwrap();
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(app_prefs.show_ssh_transfer_speed_ui);
-        assert!(!app_prefs.show_clawpal_logs_ui);
-        assert!(!app_prefs.show_gateway_logs_ui);
-        assert!(!app_prefs.show_openclaw_context_ui);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -323,9 +272,6 @@ mod tests {
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(!app_prefs.show_ssh_transfer_speed_ui);
-        assert!(!app_prefs.show_clawpal_logs_ui);
-        assert!(app_prefs.show_gateway_logs_ui);
-        assert!(!app_prefs.show_openclaw_context_ui);
         let _ = std::fs::remove_dir_all(root);
     }
 }

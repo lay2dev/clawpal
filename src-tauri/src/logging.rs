@@ -49,6 +49,10 @@ pub fn log_error(msg: &str) {
     crate::bug_report::collector::capture_error(msg);
 }
 
+pub fn log_helper(msg: &str) {
+    append_line("helper.log", msg);
+}
+
 pub fn read_log_tail(filename: &str, lines: usize) -> Result<String, String> {
     // Prevent path traversal
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {

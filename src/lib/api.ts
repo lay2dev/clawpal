@@ -20,12 +20,6 @@ export const api = {
     invoke("capture_frontend_error", { message, stack, level }),
   setSshTransferSpeedUiPreference: (showUi: boolean): Promise<AppPreferences> =>
     invoke("set_ssh_transfer_speed_ui_preference", { showUi }),
-  setClawpalLogsUiPreference: (showUi: boolean): Promise<AppPreferences> =>
-    invoke("set_clawpal_logs_ui_preference", { showUi }),
-  setGatewayLogsUiPreference: (showUi: boolean): Promise<AppPreferences> =>
-    invoke("set_gateway_logs_ui_preference", { showUi }),
-  setOpenclawContextUiPreference: (showUi: boolean): Promise<AppPreferences> =>
-    invoke("set_openclaw_context_ui_preference", { showUi }),
   explainOperationError: (
     instanceId: string,
     operation: string,
@@ -400,4 +394,8 @@ export const api = {
     invoke("remote_read_gateway_log", { hostId, lines }),
   remoteReadGatewayErrorLog: (hostId: string, lines?: number): Promise<string> =>
     invoke("remote_read_gateway_error_log", { hostId, lines }),
+  readHelperLog: (lines?: number): Promise<string> =>
+    invoke("read_helper_log", { lines }),
+  remoteReadHelperLog: (hostId: string, lines?: number): Promise<string> =>
+    invoke("remote_read_helper_log", { hostId, lines }),
 };

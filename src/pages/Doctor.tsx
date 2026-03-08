@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   CircleDashedIcon,
-  DownloadIcon,
   FileTextIcon,
   LoaderCircleIcon,
   MoreHorizontalIcon,
@@ -17,16 +16,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { DoctorLogsDialog } from "@/components/DoctorLogsDialog";
 import { DoctorRecoveryOverview } from "@/components/DoctorRecoveryOverview";
 import { RescueAsciiHeader } from "@/components/RescueAsciiHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Popover,
   PopoverContent,
@@ -76,7 +70,6 @@ interface PrimaryRecoveryState {
 }
 
 interface DoctorProps {
-  showGatewayLogsUi?: boolean;
 }
 
 const createInitialRescueUiState = (): RescueUiState => ({
@@ -187,17 +180,13 @@ function RescueStatusIndicator({
   );
 }
 
-export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
+export function Doctor(_: DoctorProps) {
   const { t } = useTranslation();
   const ua = useApi();
   const { isRemote, isConnected } = useInstance();
 
   const [logsOpen, setLogsOpen] = useState(false);
-  const [logsTab, setLogsTab] = useState<"app" | "error">("app");
-  const [logsContent, setLogsContent] = useState("");
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState("");
-  const logsContentRef = useRef<HTMLPreElement>(null);
+  const [logsSource, setLogsSource] = useState<"clawpal" | "gateway" | "helper">("gateway");
 
   const [rescueState, setRescueState] = useState<RescueUiState>(createInitialRescueUiState);
   const [primaryState, setPrimaryState] = useState<PrimaryRecoveryState>(
@@ -226,57 +215,10 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
     }
   }, []);
 
-  const fetchLog = useCallback((which: "app" | "error") => {
-    setLogsLoading(true);
-    setLogsError("");
-    const fn = which === "app" ? ua.readGatewayLog : ua.readGatewayErrorLog;
-    fn(200)
-      .then((text) => {
-        setLogsContent(text.trim() ? text : t("doctor.noLogs"));
-        setTimeout(() => {
-          if (logsContentRef.current) {
-            logsContentRef.current.scrollTop = logsContentRef.current.scrollHeight;
-          }
-        }, 50);
-      })
-      .catch((error) => {
-        const text = error instanceof Error ? error.message : String(error);
-        setLogsContent("");
-        setLogsError(text || t("doctor.noLogs"));
-      })
-      .finally(() => setLogsLoading(false));
-  }, [t, ua]);
-
-  const openLogs = () => {
-    setLogsTab("app");
-    setLogsContent("");
-    setLogsError("");
+  const openLogs = useCallback((source: "clawpal" | "gateway" | "helper" = "gateway") => {
+    setLogsSource(source);
     setLogsOpen(true);
-  };
-
-  const exportLogs = () => {
-    try {
-      const content = logsContent || logsError || t("doctor.noLogs");
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `gateway-${logsTab}-${timestamp}.log`;
-      const blob = new Blob([content], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.style.display = "none";
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 0);
-      toast.success(t("doctor.exportLogsSuccess", { filename }));
-    } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
-      toast.error(t("doctor.exportLogsFailed", { error: text }));
-    }
-  };
+  }, []);
 
   const refreshRescueStatus = useCallback(async (isCancelled?: () => boolean) => {
     const cancelled = () => isCancelled?.() ?? false;
@@ -484,12 +426,6 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
     };
   }, [isConnected, isRemote, refreshRescueStatus]);
 
-  useEffect(() => {
-    if (logsOpen) {
-      fetchLog(logsTab);
-    }
-  }, [fetchLog, logsOpen, logsTab]);
-
   const visibleRuntimeState: RescueBotRuntimeState =
     rescueState.pendingAction || rescueState.statusChecking
       ? "checking"
@@ -641,18 +577,16 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
                   </div>
                 </PopoverContent>
               </Popover>
-              {showGatewayLogsUi ? (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={openLogs}
-                  aria-label={t("doctor.gatewayLogs")}
-                  title={t("doctor.gatewayLogs")}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <FileTextIcon className="size-3.5" />
-                </Button>
-              ) : null}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => openLogs("gateway")}
+                aria-label={t("doctor.openLogs", { defaultValue: "Open logs" })}
+                title={t("doctor.openLogs", { defaultValue: "Open logs" })}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <FileTextIcon className="size-3.5" />
+              </Button>
             </div>
             <div className="max-w-md text-sm text-muted-foreground">
               {t("doctor.rescueBotHint", {
@@ -666,15 +600,13 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
           {rescueState.error ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <div>{rescueState.error}</div>
-              {showGatewayLogsUi ? (
-                <div className="mt-2">
-                  <Button variant="outline" size="sm" onClick={openLogs}>
-                    {t("doctor.viewGatewayLogs", {
-                      defaultValue: "View Gateway Logs",
-                    })}
-                  </Button>
-                </div>
-              ) : null}
+              <div className="mt-2">
+                <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
+                  {t("doctor.viewGatewayLogs", {
+                    defaultValue: "View Gateway Logs",
+                  })}
+                </Button>
+              </div>
             </div>
           ) : null}
 
@@ -723,15 +655,13 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
               {primaryState.checkError ? (
                 <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   <div>{primaryState.checkError}</div>
-                  {showGatewayLogsUi ? (
-                    <div className="mt-2">
-                      <Button variant="outline" size="sm" onClick={openLogs}>
-                        {t("doctor.viewGatewayLogs", {
-                          defaultValue: "View Gateway Logs",
-                        })}
-                      </Button>
-                    </div>
-                  ) : null}
+                  <div className="mt-2">
+                    <Button variant="outline" size="sm" onClick={() => openLogs("gateway")}>
+                      {t("doctor.viewGatewayLogs", {
+                        defaultValue: "View Gateway Logs",
+                      })}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
 
@@ -758,57 +688,12 @@ export function Doctor({ showGatewayLogsUi = false }: DoctorProps) {
         </CardContent>
       </Card>
 
-      <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>{t("doctor.gatewayLogs")}</DialogTitle>
-          </DialogHeader>
-          <div className="mb-2 flex items-center gap-2 flex-wrap">
-            <Button
-              variant={logsTab === "app" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setLogsTab("app")}
-            >
-              {t("doctor.appLog")}
-            </Button>
-            <Button
-              variant={logsTab === "error" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setLogsTab("error")}
-            >
-              {t("doctor.errorLog")}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => fetchLog(logsTab)}
-              disabled={logsLoading}
-            >
-              {t("doctor.refreshLogs")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportLogs}
-              disabled={logsLoading}
-            >
-              <DownloadIcon className="mr-1.5 h-3.5 w-3.5" />
-              {t("doctor.exportLogs")}
-            </Button>
-          </div>
-          {logsError ? (
-            <p className="mb-2 text-xs text-destructive">
-              {t("doctor.logReadFailed", { error: logsError })}
-            </p>
-          ) : null}
-          <pre
-            ref={logsContentRef}
-            className="flex-1 min-h-[300px] max-h-[60vh] overflow-auto rounded-md border bg-muted p-3 text-xs font-mono whitespace-pre-wrap break-all"
-          >
-            {logsContent || t("doctor.noLogs")}
-          </pre>
-        </DialogContent>
-      </Dialog>
+      <DoctorLogsDialog
+        open={logsOpen}
+        onOpenChange={setLogsOpen}
+        source={logsSource}
+        onSourceChange={setLogsSource}
+      />
     </section>
   );
 }

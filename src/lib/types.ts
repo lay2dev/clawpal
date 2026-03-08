@@ -216,9 +216,6 @@ export interface RelatedSecretPushResult {
 
 export interface AppPreferences {
   showSshTransferSpeedUi: boolean;
-  showClawpalLogsUi: boolean;
-  showGatewayLogsUi: boolean;
-  showOpenclawContextUi: boolean;
 }
 
 export interface SshTransferStats {

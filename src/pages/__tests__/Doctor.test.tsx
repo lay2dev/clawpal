@@ -36,6 +36,7 @@ describe("Doctor page rescue header", () => {
     expect(html).toContain("flex flex-col items-center");
     expect(html).toContain("data-led-bot=\"wide-console\"");
     expect(html).toContain("More options");
+    expect(html).toContain("aria-label=\"Open logs\"");
     expect(html).toContain("aria-label=\"Play\"");
     expect(html).not.toContain(">Enable<");
     expect(html).not.toContain("Port");

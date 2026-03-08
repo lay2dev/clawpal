@@ -281,9 +281,6 @@ export function Settings({
   const [importingLocalProfiles, setImportingLocalProfiles] = useState(false);
   const [importingRemoteProfiles, setImportingRemoteProfiles] = useState(false);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
-  const [showClawpalLogsUi, setShowClawpalLogsUi] = useState(false);
-  const [showGatewayLogsUi, setShowGatewayLogsUi] = useState(false);
-  const [showOpenclawContextUi, setShowOpenclawContextUi] = useState(false);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -454,9 +451,6 @@ export function Settings({
     ua.getAppPreferences()
       .then((prefs) => {
         setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
-        setShowClawpalLogsUi(Boolean(prefs.showClawpalLogsUi));
-        setShowGatewayLogsUi(Boolean(prefs.showGatewayLogsUi));
-        setShowOpenclawContextUi(Boolean(prefs.showOpenclawContextUi));
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
@@ -856,45 +850,6 @@ export function Settings({
       });
   }, [t, ua]);
 
-  const handleClawpalLogsUiToggle = useCallback((nextChecked: boolean) => {
-    setShowClawpalLogsUi(nextChecked);
-    ua.setClawpalLogsUiPreference(nextChecked)
-      .then((prefs) => {
-        setShowClawpalLogsUi(Boolean(prefs.showClawpalLogsUi));
-      })
-      .catch((e) => {
-        setShowClawpalLogsUi((current) => !current);
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.clawpalLogsUiSaveFailed", { error: errorText }));
-      });
-  }, [t, ua]);
-
-  const handleGatewayLogsUiToggle = useCallback((nextChecked: boolean) => {
-    setShowGatewayLogsUi(nextChecked);
-    ua.setGatewayLogsUiPreference(nextChecked)
-      .then((prefs) => {
-        setShowGatewayLogsUi(Boolean(prefs.showGatewayLogsUi));
-      })
-      .catch((e) => {
-        setShowGatewayLogsUi((current) => !current);
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.gatewayLogsUiSaveFailed", { error: errorText }));
-      });
-  }, [t, ua]);
-
-  const handleOpenclawContextUiToggle = useCallback((nextChecked: boolean) => {
-    setShowOpenclawContextUi(nextChecked);
-    ua.setOpenclawContextUiPreference(nextChecked)
-      .then((prefs) => {
-        setShowOpenclawContextUi(Boolean(prefs.showOpenclawContextUi));
-      })
-      .catch((e) => {
-        setShowOpenclawContextUi((current) => !current);
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.openclawContextUiSaveFailed", { error: errorText }));
-      });
-  }, [t, ua]);
-
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
@@ -1168,13 +1123,7 @@ export function Settings({
             {showPreferences && (
               <SettingsAlphaFeaturesCard
                 showSshTransferSpeedUi={showSshTransferSpeedUi}
-                showClawpalLogsUi={showClawpalLogsUi}
-                showGatewayLogsUi={showGatewayLogsUi}
-                showOpenclawContextUi={showOpenclawContextUi}
                 onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
-                onClawpalLogsUiToggle={handleClawpalLogsUiToggle}
-                onGatewayLogsUiToggle={handleGatewayLogsUiToggle}
-                onOpenclawContextUiToggle={handleOpenclawContextUiToggle}
               />
             )}
 

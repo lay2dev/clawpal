@@ -7,8 +7,8 @@ import i18n from "@/i18n";
 import { OpenclawContext } from "../OpenclawContext";
 
 describe("OpenclawContext", () => {
-  test("renders collapsed sessions and backups sections", async () => {
-    await i18n.changeLanguage("en");
+  test("renders a localized title with collapsed sessions and backups sections", async () => {
+    await i18n.changeLanguage("zh");
 
     const html = renderToStaticMarkup(
       React.createElement(I18nextProvider, {
@@ -17,9 +17,9 @@ describe("OpenclawContext", () => {
       }),
     );
 
-    expect(html).toContain(">Context<");
-    expect(html).toContain(">Sessions<");
-    expect(html).toContain(">Backups<");
+    expect(html).toContain(">上下文<");
+    expect(html).toContain(">会话<");
+    expect(html).toContain(">备份<");
     expect(html).toContain("<details");
   });
 });
