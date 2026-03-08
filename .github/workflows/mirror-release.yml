@@ -1,0 +1,47 @@
+name: Mirror Release to GitLab
+on:
+  release:
+    types: [published]
+
+jobs:
+  mirror-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync release assets to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          BODY=$(echo '${{ toJSON(github.event.release.body) }}')
+
+          # Create GitLab release
+          curl --fail-with-body -X POST \
+            "https://gitlab.com/api/v4/projects/${GITLAB_PROJECT_ID}/releases" \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"${TAG}\", \"description\": ${BODY}}" || true
+
+          # Download GitHub release assets
+          mkdir -p /tmp/assets
+          gh release download "$TAG" -D /tmp/assets -R "${{ github.repository }}" || exit 0
+
+          # Upload each asset to GitLab
+          for file in /tmp/assets/*; do
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+
+            # Upload file
+            upload_url=$(curl --fail-with-body -X POST \
+              "https://gitlab.com/api/v4/projects/${GITLAB_PROJECT_ID}/uploads" \
+              -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+              -F "file=@${file}" | jq -r '.full_path')
+
+            # Link to release
+            curl --fail-with-body -X POST \
+              "https://gitlab.com/api/v4/projects/${GITLAB_PROJECT_ID}/releases/${TAG}/assets/links" \
+              -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\": \"${filename}\", \"url\": \"https://gitlab.com${upload_url}\"}"
+          done
