@@ -14,22 +14,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.release.tag_name }}"
+          BODY=$(echo '${{ toJSON(github.event.release.body) }}')
 
-          # Get release body from GitHub API (avoids shell escaping issues)
-          BODY=$(gh release view "$TAG" -R "${{ github.repository }}" --json body -q .body)
-
-          # Create GitLab release with proper JSON escaping via jq
+          # Create GitLab release
           curl --fail-with-body -X POST \
             "https://gitlab.com/api/v4/projects/${GITLAB_PROJECT_ID}/releases" \
             -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg tag "$TAG" --arg desc "$BODY" '{tag_name: $tag, description: $desc}')" || true
+            -d "{\"tag_name\": \"${TAG}\", \"description\": ${BODY}}" || true
 
           # Download GitHub release assets
           mkdir -p /tmp/assets
           gh release download "$TAG" -D /tmp/assets -R "${{ github.repository }}" || exit 0
 
-          # Upload each asset to GitLab (skip .sig and latest.json)
+          # Upload each asset to GitLab (skip .sig, latest.json, and files >50MB)
           for file in /tmp/assets/*; do
             [ -f "$file" ] || continue
             filename=$(basename "$file")
@@ -38,10 +36,16 @@ jobs:
               *.sig|latest.json) echo "Skip: $filename"; continue ;;
             esac
 
+            filesize=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+            if [ "$filesize" -gt 52428800 ]; then
+              echo "Skip (>50MB): $filename"
+              continue
+            fi
+
             echo "Uploading: $filename ..."
 
-            # Upload file (force HTTP/1.1 for large file stability)
-            upload_url=$(curl --http1.1 --fail-with-body -X POST \
+            # Upload file
+            upload_url=$(curl --fail-with-body -X POST \
               "https://gitlab.com/api/v4/projects/${GITLAB_PROJECT_ID}/uploads" \
               -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
               -F "file=@${file}" | jq -r '.full_path')
