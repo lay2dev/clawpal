@@ -2,6 +2,7 @@ import { Suspense, lazy, startTransition, useCallback, useEffect, useMemo, useRe
 import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import {
   HomeIcon,
   HashIcon,
@@ -19,24 +20,34 @@ import logoUrl from "./assets/logo.png";
 import { InstanceTabBar } from "./components/InstanceTabBar";
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
-import { buildCacheKey, invalidateGlobalReadCache, subscribeToCacheKey } from "./lib/use-api";
+import { buildCacheKey, invalidateGlobalReadCache, prewarmRemoteInstanceReadCache, subscribeToCacheKey } from "./lib/use-api";
 import { explainAndBuildGuidanceError, withGuidance } from "./lib/guidance";
+import {
+  clearRemotePersistenceScope,
+  ensureRemotePersistenceScope,
+  readRemotePersistenceScope,
+} from "./lib/instance-persistence";
+import {
+  shouldEnableInstanceLiveReads,
+  shouldEnableLocalInstanceScope,
+} from "./lib/instance-availability";
+import { readPersistedReadCache, writePersistedReadCache } from "./lib/persistent-read-cache";
 import { useFont } from "./lib/use-font";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
-import { Toaster } from "sonner";
-import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstance, GuidanceAction, InstallSession, PrecheckIssue, RegisteredInstance, SshHost } from "./lib/types";
-import { GuidanceCard } from "./components/GuidanceCard";
+import { cn, formatBytes } from "@/lib/utils";
+import { toast, Toaster } from "sonner";
+import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstance, InstallSession, PrecheckIssue, RegisteredInstance, SshHost, SshTransferStats } from "./lib/types";
 import { SshFormWidget } from "./components/SshFormWidget";
-import type { AgentGuidanceItem } from "./components/GuidanceCard";
+import { closeWorkspaceTab } from "@/lib/tabWorkspace";
 import {
   SSH_PASSPHRASE_RETRY_HINT,
   buildSshPassphraseCancelMessage,
   buildSshPassphraseConnectErrorMessage,
 } from "@/lib/sshConnectErrors";
+import { buildFriendlySshError, extractErrorText } from "@/lib/sshDiagnostic";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -44,6 +55,7 @@ const Cook = lazy(() => import("./pages/Cook").then((m) => ({ default: m.Cook })
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 const Doctor = lazy(() => import("./pages/Doctor").then((m) => ({ default: m.Doctor })));
+const OpenclawContext = lazy(() => import("./pages/OpenclawContext").then((m) => ({ default: m.OpenclawContext })));
 const Channels = lazy(() => import("./pages/Channels").then((m) => ({ default: m.Channels })));
 const Cron = lazy(() => import("./pages/Cron").then((m) => ({ default: m.Cron })));
 const Orchestrator = lazy(() => import("./pages/Orchestrator").then((m) => ({ default: m.Orchestrator })));
@@ -56,6 +68,7 @@ const preloadRouteModules = () =>
     import("./pages/Recipes"),
     import("./pages/Cron"),
     import("./pages/Doctor"),
+    import("./pages/OpenclawContext"),
     import("./pages/History"),
     import("./components/Chat"),
     import("./components/PendingChangesBar"),
@@ -67,18 +80,10 @@ const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
 const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
 const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
 
-type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "orchestrator";
-const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "history"];
+type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "context" | "orchestrator";
+const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "context", "history"];
 const OPEN_TABS_STORAGE_KEY = "clawpal_open_tabs";
-const WATCHDOG_LATE_GRACE_MS = 5 * 60 * 1000;
 const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
-
-interface ToastItem {
-  id: number;
-  message: string;
-  type: "success" | "error";
-}
-
 interface ProfileSyncStatus {
   phase: "idle" | "syncing" | "success" | "error";
   message: string;
@@ -93,29 +98,6 @@ function logDevException(label: string, detail: unknown): void {
 function logDevIgnoredError(context: string, detail: unknown): void {
   if (!import.meta.env.DEV) return;
   console.warn(`[dev ignored error] ${context}`, detail);
-}
-
-// AgentGuidanceItem is imported from ./components/GuidanceCard
-
-let toastIdCounter = 0;
-
-const SSH_ERROR_MAP: Array<[RegExp, string]> = [
-  [/connection refused/i, "ssh.errorConnectionRefused"],
-  [/no such file/i, "ssh.errorNoSuchFile"],
-  [/name or service not known|nodename nor servname provided|temporary failure in name resolution|no address associated with hostname|getaddrinfo|failed to lookup address information|unknown host|hostname was not found/i, "ssh.errorHostUnreachable"],
-  [/passphrase|sign_and_send_pubkey|agent refused operation|can't open \/dev\/tty|authentication agent/i, "ssh.errorPassphrase"],
-  [/permission denied/i, "ssh.errorPermissionDenied"],
-  [/host key verification failed/i, "ssh.errorHostKey"],
-  [/timed?\s*out/i, "ssh.errorTimeout"],
-];
-
-function friendlySshError(raw: string, t: (key: string, opts?: Record<string, string>) => string): string {
-  for (const [pattern, key] of SSH_ERROR_MAP) {
-    if (pattern.test(raw)) {
-      return `${t(key)}\n(${raw})`;
-    }
-  }
-  return t('config.sshFailed', { error: raw });
 }
 
 function sanitizeDockerPathSuffix(raw: string): string {
@@ -152,16 +134,6 @@ function deriveDockerLabel(instanceId: string): string {
   return suffix.startsWith("docker-") ? suffix : `docker-${suffix}`;
 }
 
-function fallbackInstanceLabel(instanceId: string, t: (key: string) => string): string {
-  if (instanceId === "local") return t("instance.local");
-  if (instanceId.startsWith("docker:")) return deriveDockerLabel(instanceId);
-  if (instanceId.startsWith("ssh:")) {
-    const suffix = instanceId.slice("ssh:".length);
-    return suffix || instanceId;
-  }
-  return instanceId;
-}
-
 function hashInstanceToken(raw: string): number {
   let hash = 2166136261;
   for (let i = 0; i < raw.length; i += 1) {
@@ -169,16 +141,6 @@ function hashInstanceToken(raw: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
-}
-
-function watchdogJobLikelyLate(job: { lastScheduledAt?: string; lastRunAt?: string | null } | undefined): boolean {
-  if (!job?.lastScheduledAt) return false;
-  const scheduledAt = Date.parse(job.lastScheduledAt);
-  if (!Number.isFinite(scheduledAt)) return false;
-  const runAt = job.lastRunAt ? Date.parse(job.lastRunAt) : Number.NaN;
-  const missedThisSchedule = !Number.isFinite(runAt) || runAt + 1000 < scheduledAt;
-  const overdue = Date.now() - scheduledAt > WATCHDOG_LATE_GRACE_MS;
-  return missedThisSchedule && overdue;
 }
 
 function normalizeDockerInstance(instance: DockerInstance): DockerInstance {
@@ -202,7 +164,6 @@ export function App() {
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [discordChannelsLoading, setDiscordChannelsLoading] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [lastInstanceRoute, setLastInstanceRoute] = useState<Route>("home");
   const [startSection, setStartSection] = useState<"overview" | "profiles" | "settings">("overview");
   const [inStart, setInStart] = useState(true);
 
@@ -369,7 +330,6 @@ export function App() {
   }, []);
 
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
-  const [hasEscalatedCron, setHasEscalatedCron] = useState(false);
   const [appVersion, setAppVersion] = useState("");
 
   // Startup: check for updates + analytics ping
@@ -399,19 +359,16 @@ export function App() {
 
   }, []);
 
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [profileSyncStatus, setProfileSyncStatus] = useState<ProfileSyncStatus>({
     phase: "idle",
     message: "",
     instanceId: null,
   });
-  const [agentGuidanceByInstance, setAgentGuidanceByInstance] = useState<Record<string, AgentGuidanceItem>>({});
-  const [doctorLaunchByInstance, setDoctorLaunchByInstance] = useState<Record<string, AgentGuidanceItem | null>>({});
-  const [agentGuidanceOpen, setAgentGuidanceOpen] = useState(false);
-  const [unreadGuidance, setUnreadGuidance] = useState(false);
-  const [showZeroclawDoctorFab, setShowZeroclawDoctorFab] = useState(false);
+  const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
+  const [sshTransferStats, setSshTransferStats] = useState<SshTransferStats | null>(null);
   const [doctorNavPulse, setDoctorNavPulse] = useState(false);
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
+  const doctorSshAutohealMuteUntilRef = useRef<Record<string, number>>({});
   const legacyMigrationDoneRef = useRef(false);
   const passphraseResolveRef = useRef<((value: string | null) => void) | null>(null);
   const [passphraseHostLabel, setPassphraseHostLabel] = useState<string>("");
@@ -420,7 +377,6 @@ export function App() {
   const remoteAuthSyncAtRef = useRef<Record<string, number>>({});
   const accessProbeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAccessProbeAtRef = useRef<Record<string, number>>({});
-  const profileBootstrapGuidanceSigRef = useRef("");
 
   // Persist open tabs
   useEffect(() => {
@@ -428,11 +384,11 @@ export function App() {
   }, [openTabIds]);
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
-    const id = ++toastIdCounter;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, type === "error" ? 5000 : 3000);
+    if (type === "error") {
+      toast.error(message, { duration: 5000 });
+      return;
+    }
+    toast.success(message, { duration: 3000 });
   }, []);
 
   const handleSshEditSave = useCallback(async (host: SshHost) => {
@@ -487,106 +443,6 @@ export function App() {
     });
   }, [showToast, t]);
 
-  useEffect(() => {
-    const onGuidance = (event: Event) => {
-      const custom = event as CustomEvent<AgentGuidanceItem>;
-      if (!custom.detail) return;
-      setAgentGuidanceByInstance((prev) => ({
-        ...prev,
-        [custom.detail.instanceId]: custom.detail,
-      }));
-      setAgentGuidanceOpen(true);
-      setUnreadGuidance(true);
-    };
-    window.addEventListener("clawpal:agent-guidance", onGuidance as EventListener);
-    return () => {
-      window.removeEventListener("clawpal:agent-guidance", onGuidance as EventListener);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const before = await api.listModelProfiles();
-          if (cancelled || before.some((p) => p.enabled)) return;
-
-          await api.extractModelProfilesFromConfig().catch((error) => {
-            logDevIgnoredError("bootstrap extractModelProfilesFromConfig", error);
-            return null;
-          });
-          const after = await api.listModelProfiles();
-          if (cancelled || after.some((p) => p.enabled)) return;
-
-          const hasConnectableInstance =
-            registeredInstances.some((inst) => inst.id !== "local")
-            || discoveredInstances.length > 0;
-          const signature = hasConnectableInstance ? "with-instance" : "no-instance";
-          if (profileBootstrapGuidanceSigRef.current === signature) return;
-          profileBootstrapGuidanceSigRef.current = signature;
-
-          const actions = hasConnectableInstance
-            ? [
-              t("onboarding.actionSyncProfiles"),
-              t("onboarding.actionAddProfile"),
-            ]
-            : [
-              t("onboarding.actionConnectInstanceFirst"),
-              t("onboarding.actionOpenConnectEntry"),
-            ];
-          window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
-            detail: {
-              message: t("onboarding.noProfilesSummary"),
-              summary: t("onboarding.noProfilesSummary"),
-              actions,
-              source: "onboarding",
-              operation: "profiles.bootstrap.missing",
-              instanceId: "local",
-              transport: "local",
-              rawError: hasConnectableInstance
-                ? "No model profiles detected after auto extraction"
-                : "No model profiles detected and no connectable instances found",
-              createdAt: Date.now(),
-            },
-          }));
-        } catch {
-          // ignore bootstrap guidance failures
-        }
-      })();
-    }, 1200);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [discoveredInstances.length, registeredInstances, t]);
-
-  const agentGuidance = agentGuidanceByInstance[activeInstance] || null;
-  const resolveGuidanceForInstance = useCallback((instanceId: string) => {
-    setAgentGuidanceByInstance((prev) => {
-      if (!prev[instanceId]) return prev;
-      const next = { ...prev };
-      delete next[instanceId];
-      return next;
-    });
-    setDoctorLaunchByInstance((prev) => {
-      if (!(instanceId in prev)) return prev;
-      const next = { ...prev };
-      delete next[instanceId];
-      return next;
-    });
-    if (instanceId === activeInstance) {
-      setAgentGuidanceOpen(false);
-      setUnreadGuidance(false);
-    }
-  }, [activeInstance]);
-
-  useEffect(() => {
-    if (!agentGuidance) {
-      setAgentGuidanceOpen(false);
-    }
-  }, [activeInstance, agentGuidance]);
-
   const resolveInstanceTransport = useCallback((instanceId: string) => {
     if (instanceId === "local") return "local";
     const registered = registeredInstances.find((item) => item.id === instanceId);
@@ -613,6 +469,13 @@ export function App() {
         rawError: reason,
         emitEvent: true,
       });
+      void api.captureFrontendError(
+        typeof reason === "string" ? reason : String(reason),
+        undefined,
+        "error",
+      ).catch(() => {
+        // ignore
+      });
     };
 
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
@@ -635,22 +498,22 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadZeroclawDoctorFabPreference = () => {
+    const loadUiPreferences = () => {
       api.getAppPreferences()
         .then((prefs) => {
           if (!cancelled) {
-            setShowZeroclawDoctorFab(Boolean(prefs.showZeroclawDoctorUi));
+            setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
           }
         })
         .catch(() => {
           if (!cancelled) {
-            setShowZeroclawDoctorFab(false);
+            setShowSshTransferSpeedUi(false);
           }
         });
     };
 
-    loadZeroclawDoctorFabPreference();
-    const unsubscribe = subscribeToCacheKey(APP_PREFERENCES_CACHE_KEY, loadZeroclawDoctorFabPreference);
+    loadUiPreferences();
+    const unsubscribe = subscribeToCacheKey(APP_PREFERENCES_CACHE_KEY, loadUiPreferences);
 
     return () => {
       cancelled = true;
@@ -771,10 +634,6 @@ export function App() {
       });
   }, [readLegacyDockerInstances, readLegacyOpenTabs, refreshRegisteredInstances, refreshHosts]);
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
   const requestPassphrase = useCallback((hostLabel: string): Promise<string | null> => {
     setPassphraseHostLabel(hostLabel);
     setPassphraseInput("");
@@ -796,9 +655,16 @@ export function App() {
     const hostLabel = host?.label || host?.host || hostId;
     try {
       await api.sshConnect(hostId);
+      if (host) {
+        const nextScope = ensureRemotePersistenceScope(host);
+        if (hostId === activeInstance) {
+          setPersistenceScope(nextScope);
+          setPersistenceResolved(true);
+        }
+      }
       return;
     } catch (err) {
-      const raw = String(err);
+      const raw = extractErrorText(err);
       // When host is not yet in sshHosts state (e.g. just added via upsertSshHost
       // and state hasn't refreshed), assume non-password auth so the passphrase
       // dialog is still shown instead of falling through to a misleading error.
@@ -826,9 +692,16 @@ export function App() {
               hostId,
               "remote_ssh",
             );
+            if (host) {
+              const nextScope = ensureRemotePersistenceScope(host);
+              if (hostId === activeInstance) {
+                setPersistenceScope(nextScope);
+                setPersistenceResolved(true);
+              }
+            }
             return;
           } catch (passphraseErr) {
-            const passphraseRaw = String(passphraseErr);
+            const passphraseRaw = extractErrorText(passphraseErr);
             const fallbackMessage = buildSshPassphraseConnectErrorMessage(
               passphraseRaw, hostLabel, t, { passphraseWasSubmitted: true },
             );
@@ -857,7 +730,7 @@ export function App() {
         rawError: err,
       });
     }
-  }, [requestPassphrase, sshHosts, t]);
+  }, [activeInstance, requestPassphrase, sshHosts, t]);
 
   const syncRemoteAuthAfterConnect = useCallback(async (hostId: string) => {
     const now = Date.now();
@@ -937,19 +810,19 @@ export function App() {
   }, [navigateRoute]);
 
   const closeTab = useCallback((id: string) => {
-    setOpenTabIds((prev) => {
-      const next = prev.filter((t) => t !== id);
-      if (activeInstance === id) {
-        if (next.length === 0) {
-          setInStart(true);
-          setStartSection("overview");
-        } else {
-          setActiveInstance(next[next.length - 1]);
-        }
-      }
-      return next;
+    setOpenTabIds((prevOpenTabIds) => {
+      const nextState = closeWorkspaceTab({
+        openTabIds: prevOpenTabIds,
+        activeInstance,
+        inStart,
+        startSection,
+      }, id);
+      setActiveInstance(nextState.activeInstance);
+      setInStart(nextState.inStart);
+      setStartSection(nextState.startSection);
+      return nextState.openTabIds;
     });
-  }, [activeInstance]);
+  }, [activeInstance, inStart, startSection]);
 
   const handleInstanceSelect = useCallback((id: string) => {
     if (id === activeInstance && !inStart) {
@@ -1040,8 +913,7 @@ export function App() {
           })
           .catch((e2) => {
             setConnectionStatus((prev) => ({ ...prev, [id]: "error" }));
-            const raw = String(e2);
-            const friendly = friendlySshError(raw, t);
+            const friendly = buildFriendlySshError(e2, t);
             showToast(friendly, "error");
           });
       });
@@ -1049,6 +921,8 @@ export function App() {
 
   const [configVersion, setConfigVersion] = useState(0);
   const [instanceToken, setInstanceToken] = useState(0);
+  const [persistenceScope, setPersistenceScope] = useState<string | null>("local");
+  const [persistenceResolved, setPersistenceResolved] = useState(true);
 
   const isDocker = registeredInstances.some((item) => item.id === activeInstance && item.instanceType === "docker")
     || dockerInstances.some((item) => item.id === activeInstance);
@@ -1058,8 +932,106 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const activeRegistered = registeredInstances.find((item) => item.id === activeInstance);
+
+    const resolvePersistence = async () => {
+      if (isRemote) {
+        const host = sshHosts.find((item) => item.id === activeInstance) || null;
+        setPersistenceScope(host ? readRemotePersistenceScope(host) : null);
+        setPersistenceResolved(true);
+        return;
+      }
+
+      let openclawHome: string | null = null;
+      if (activeInstance === "local") {
+        openclawHome = "~";
+      } else if (isDocker) {
+        const instance = dockerInstances.find((item) => item.id === activeInstance);
+        const fallback = deriveDockerPaths(activeInstance);
+        openclawHome = instance?.openclawHome || fallback.openclawHome;
+      } else if (activeRegistered?.instanceType === "local" && activeRegistered.openclawHome) {
+        openclawHome = activeRegistered.openclawHome;
+      }
+
+      if (!openclawHome) {
+        setPersistenceScope(null);
+        setPersistenceResolved(true);
+        return;
+      }
+
+      setPersistenceResolved(false);
+      setPersistenceScope(null);
+      try {
+        const [exists, cliAvailable] = await Promise.all([
+          api.localOpenclawConfigExists(openclawHome),
+          api.localOpenclawCliAvailable(),
+        ]);
+        if (cancelled) return;
+        setPersistenceScope(
+          shouldEnableLocalInstanceScope({
+            configExists: exists,
+            cliAvailable,
+          }) ? activeInstance : null,
+        );
+      } catch (error) {
+        logDevIgnoredError("localOpenclawConfigExists", error);
+        if (cancelled) return;
+        setPersistenceScope(null);
+      } finally {
+        if (!cancelled) {
+          setPersistenceResolved(true);
+        }
+      }
+    };
+
+    void resolvePersistence();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeInstance, dockerInstances, isDocker, isRemote, registeredInstances, sshHosts]);
+
+  useEffect(() => {
+    if (!isRemote || !isConnected) return;
+    const host = sshHosts.find((item) => item.id === activeInstance);
+    if (!host) return;
+    const nextScope = ensureRemotePersistenceScope(host);
+    if (persistenceScope !== nextScope) {
+      setPersistenceScope(nextScope);
+    }
+    if (!persistenceResolved) {
+      setPersistenceResolved(true);
+    }
+  }, [activeInstance, isConnected, isRemote, persistenceResolved, persistenceScope, sshHosts]);
+
+  useEffect(() => {
+    if (!showSshTransferSpeedUi || !isRemote || !isConnected) {
+      setSshTransferStats(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () => {
+      api.getSshTransferStats(activeInstance)
+        .then((stats) => {
+          if (!cancelled) setSshTransferStats(stats);
+        })
+        .catch((error) => {
+          logDevIgnoredError("getSshTransferStats", error);
+          if (!cancelled) setSshTransferStats(null);
+        });
+    };
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeInstance, isConnected, isRemote, showSshTransferSpeedUi]);
+
+  useEffect(() => {
+    let cancelled = false;
     let nextHome: string | null = null;
     let nextDataDir: string | null = null;
+    setInstanceToken(0);
     const activeRegistered = registeredInstances.find((item) => item.id === activeInstance);
     if (activeInstance === "local" || isRemote) {
       nextHome = null;
@@ -1099,6 +1071,11 @@ export function App() {
     };
   }, [activeInstance, isDocker, isRemote, dockerInstances, registeredInstances]);
 
+  useEffect(() => {
+    if (!isRemote || !isConnected || !instanceToken) return;
+    prewarmRemoteInstanceReadCache(activeInstance, instanceToken, persistenceScope);
+  }, [activeInstance, instanceToken, isConnected, isRemote, persistenceScope]);
+
   // Keep active remote instance self-healed: detect dropped SSH and reconnect.
   useEffect(() => {
     if (!isRemote) return;
@@ -1106,7 +1083,6 @@ export function App() {
     let inFlight = false;
     const hostId = activeInstance;
     const reportAutoHealFailure = (rawError: unknown) => {
-      const errorText = String(rawError);
       void explainAndBuildGuidanceError({
         method: "sshConnect",
         instanceId: hostId,
@@ -1116,10 +1092,15 @@ export function App() {
       }).catch((error) => {
         logDevIgnoredError("autoheal explainAndBuildGuidanceError", error);
       });
-      showToast(friendlySshError(errorText, t), "error");
+      showToast(buildFriendlySshError(rawError, t), "error");
     };
     const markFailure = (rawError: unknown) => {
       if (cancelled) return;
+      const mutedUntil = doctorSshAutohealMuteUntilRef.current[hostId] || 0;
+      if (Date.now() < mutedUntil) {
+        logDevIgnoredError("ssh autoheal muted during doctor flow", rawError);
+        return;
+      }
       const streak = (sshHealthFailStreakRef.current[hostId] || 0) + 1;
       sshHealthFailStreakRef.current[hostId] = streak;
       // Avoid flipping UI to disconnected/error on a single transient failure.
@@ -1167,13 +1148,40 @@ export function App() {
     };
   }, [activeInstance, isRemote, showToast, t]);
 
+  useEffect(() => {
+    if (!isRemote) return;
+    let disposed = false;
+    const currentHostId = activeInstance;
+    const unlistenPromise = listen<{ phase?: string }>("doctor:assistant-progress", (event) => {
+      if (disposed) return;
+      const phase = event.payload?.phase || "";
+      const cooldownMs = phase === "cleanup" ? 45_000 : 30_000;
+      doctorSshAutohealMuteUntilRef.current[currentHostId] = Date.now() + cooldownMs;
+    });
+    return () => {
+      disposed = true;
+      void unlistenPromise.then((unlisten) => unlisten()).catch((error) => {
+        logDevIgnoredError("doctor progress unlisten", error);
+      });
+    };
+  }, [activeInstance, isRemote]);
+
   // Clear cached channel data only when switching instance.
   // Avoid clearing on transient connection-status changes, which causes
   // Channels page to flicker between "loading" and loaded data.
   useEffect(() => {
-    setChannelNodes(null);
-    setDiscordGuildChannels(null);
-  }, [activeInstance]);
+    if (!persistenceResolved || !persistenceScope) {
+      setChannelNodes(null);
+      setDiscordGuildChannels(null);
+      return;
+    }
+    setChannelNodes(
+      readPersistedReadCache<ChannelNode[]>(persistenceScope, "listChannelsMinimal", []) ?? null,
+    );
+    setDiscordGuildChannels(
+      readPersistedReadCache<DiscordGuildChannel[]>(persistenceScope, "listDiscordGuildChannels", []) ?? null,
+    );
+  }, [activeInstance, persistenceResolved, persistenceScope]);
 
   const refreshChannelNodesCache = useCallback(async () => {
     setChannelsLoading(true);
@@ -1182,11 +1190,14 @@ export function App() {
         ? await api.remoteListChannelsMinimal(activeInstance)
         : await api.listChannelsMinimal();
       setChannelNodes(nodes);
+      if (persistenceScope) {
+        writePersistedReadCache(persistenceScope, "listChannelsMinimal", [], nodes);
+      }
       return nodes;
     } finally {
       setChannelsLoading(false);
     }
-  }, [activeInstance, isRemote]);
+  }, [activeInstance, isRemote, persistenceScope]);
 
   const refreshDiscordChannelsCache = useCallback(async () => {
     setDiscordChannelsLoading(true);
@@ -1195,54 +1206,39 @@ export function App() {
         ? await api.remoteListDiscordGuildChannels(activeInstance)
         : await api.listDiscordGuildChannels();
       setDiscordGuildChannels(channels);
+      if (persistenceScope) {
+        writePersistedReadCache(persistenceScope, "listDiscordGuildChannels", [], channels);
+      }
       return channels;
     } finally {
       setDiscordChannelsLoading(false);
     }
-  }, [activeInstance, isRemote]);
+  }, [activeInstance, isRemote, persistenceScope]);
 
   // Load unified channel cache lazily when Channels tab is active.
   useEffect(() => {
-    if (route !== "channels") return;
+    if (route !== "channels" || !persistenceResolved) return;
     if (isRemote && !isConnected) return;
+    if (!shouldEnableInstanceLiveReads({
+      instanceToken,
+      persistenceResolved,
+      persistenceScope,
+      isRemote,
+    })) return;
     void Promise.allSettled([
       refreshChannelNodesCache(),
       refreshDiscordChannelsCache(),
     ]);
   }, [
     route,
+    instanceToken,
+    persistenceResolved,
+    persistenceScope,
     isRemote,
     isConnected,
     refreshChannelNodesCache,
     refreshDiscordChannelsCache,
   ]);
-
-  // Poll watchdog status for escalated cron jobs (red dot badge)
-  useEffect(() => {
-    const check = () => {
-      const p = isRemote
-        ? api.remoteGetWatchdogStatus(activeInstance)
-        : api.getWatchdogStatus();
-      p.then((status: any) => {
-        if (status?.jobs) {
-          const hasLikelyLateJob = Object.values(status.jobs).some((j: any) => watchdogJobLikelyLate(j));
-          setHasEscalatedCron(hasLikelyLateJob);
-        } else {
-          setHasEscalatedCron(false);
-        }
-      }).catch((error) => {
-        logDevIgnoredError("watchdog status fetch", error);
-        setHasEscalatedCron(false);
-      });
-    };
-    const initialDelayMs = isRemote ? 5000 : 500;
-    const initial = setTimeout(check, initialDelayMs);
-    const interval = setInterval(check, 30000);
-    return () => {
-      clearTimeout(initial);
-      clearInterval(interval);
-    };
-  }, [activeInstance, isRemote]);
 
   const bumpConfigVersion = useCallback(() => {
     setConfigVersion((v) => v + 1);
@@ -1261,12 +1257,6 @@ export function App() {
       setDoctorNavPulse(false);
     }, 1400);
   }, [navigateRoute]);
-
-  useEffect(() => {
-    if (INSTANCE_ROUTES.includes(route)) {
-      setLastInstanceRoute(route);
-    }
-  }, [route]);
 
   const showSidebar = true;
 
@@ -1364,7 +1354,7 @@ export function App() {
             setInStart(true);
             setStartSection("overview");
           }
-          const reason = friendlySshError(String(err), t);
+          const reason = buildFriendlySshError(err, t);
           showToast(reason, "error");
         }
       } else {
@@ -1431,7 +1421,6 @@ export function App() {
         active: route === "cron",
         icon: <ClockIcon className="size-4" />,
         label: t("nav.cron"),
-        badge: hasEscalatedCron ? <span className="ml-auto w-2 h-2 rounded-full bg-red-500 animate-pulse" /> : undefined,
         onClick: () => navigateRoute("cron"),
       },
       {
@@ -1445,6 +1434,13 @@ export function App() {
         badge: doctorNavPulse
           ? <span className="ml-auto h-2 w-2 rounded-full bg-primary animate-pulse" />
           : undefined,
+      },
+      {
+        key: "openclaw-context",
+        active: route === "context",
+        icon: <BookOpenIcon className="size-4" />,
+        label: t("nav.context"),
+        onClick: () => navigateRoute("context"),
       },
       {
         key: "history",
@@ -1470,7 +1466,10 @@ export function App() {
       />
       <InstanceContext.Provider value={{
         instanceId: activeInstance,
+        instanceViewToken: activeInstance,
         instanceToken,
+        persistenceScope,
+        persistenceResolved,
         isRemote,
         isDocker,
         isConnected,
@@ -1515,23 +1514,6 @@ export function App() {
 
         </nav>
 
-        <div className="px-5 pb-3 flex items-center gap-2 text-xs text-muted-foreground/70">
-          <a
-            href="#"
-            className="hover:text-foreground transition-colors duration-200"
-            onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.xyz"); }}
-          >
-            {t('nav.website')}
-          </a>
-          <span className="text-border">·</span>
-          <a
-            href="#"
-            className="hover:text-foreground transition-colors duration-200"
-            onClick={(e) => { e.preventDefault(); api.openUrl("https://x.com/zhixianio"); }}
-          >
-            @zhixian
-          </a>
-        </div>
         <div className="px-5 pb-3 text-[11px] text-muted-foreground/80">
           <div className="flex items-center gap-1.5">
             <span
@@ -1559,9 +1541,19 @@ export function App() {
                       })}
             </span>
           </div>
-          {profileSyncStatus.message && (
-            <div className="mt-1 break-words text-muted-foreground/70" title={profileSyncStatus.message}>
-              {profileSyncStatus.message}
+          {showSshTransferSpeedUi && isRemote && isConnected && (
+            <div className="mt-2 border-t border-border/40 pt-2 text-muted-foreground/75">
+              <div className="text-[10px] uppercase tracking-wide">{t("doctor.sshTransferSpeedTitle")}</div>
+              <div className="mt-0.5">
+                {t("doctor.sshTransferSpeedDown", {
+                  speed: `${formatBytes(Math.max(0, Math.round(sshTransferStats?.downloadBytesPerSec ?? 0)))} /s`,
+                })}
+              </div>
+              <div>
+                {t("doctor.sshTransferSpeedUp", {
+                  speed: `${formatBytes(Math.max(0, Math.round(sshTransferStats?.uploadBytesPerSec ?? 0)))} /s`,
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -1571,9 +1563,27 @@ export function App() {
             <PendingChangesBar
               showToast={showToast}
               onApplied={bumpConfigVersion}
+              onDiscarded={bumpConfigVersion}
             />
           </Suspense>
         )}
+        <div className="px-5 pb-3 pt-2 flex items-center gap-2 text-xs text-muted-foreground/70">
+          <a
+            href="#"
+            className="hover:text-foreground transition-colors duration-200"
+            onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.xyz"); }}
+          >
+            {t('nav.website')}
+          </a>
+          <span className="text-border">·</span>
+          <a
+            href="#"
+            className="hover:text-foreground transition-colors duration-200"
+            onClick={(e) => { e.preventDefault(); api.openUrl("https://x.com/zhixianio"); }}
+          >
+            @zhixian
+          </a>
+        </div>
       </aside>
       )}
 
@@ -1610,6 +1620,7 @@ export function App() {
                   hostId,
                   "remote_ssh",
                 ).then(() => {
+                  clearRemotePersistenceScope(hostId);
                   closeTab(hostId);
                   refreshHosts();
                   refreshRegisteredInstances();
@@ -1643,14 +1654,13 @@ export function App() {
               onDataChange={bumpConfigVersion}
               hasAppUpdate={appUpdateAvailable}
               onAppUpdateSeen={() => setAppUpdateAvailable(false)}
-              onNavigateToProfiles={() => setStartSection("profiles")}
             />
           )}
 
           {/* ── Instance mode content ── */}
           {!inStart && route === "home" && (
             <Home
-              key={`home-${configVersion}`}
+              key={`home-${activeInstance}-${configVersion}-${persistenceResolved ? "ready" : "pending"}-${persistenceScope ?? "none"}`}
               instanceLabel={openTabs.find((t) => t.id === activeInstance)?.label || activeInstance}
               showToast={showToast}
               onNavigate={(r) => navigateRoute(r as Route)}
@@ -1677,27 +1687,17 @@ export function App() {
           {!inStart && route === "cook" && !recipeId && <p>{t('config.noRecipeSelected')}</p>}
           {!inStart && route === "channels" && (
             <Channels
-              key={`channels-${configVersion}`}
+              key={`channels-${activeInstance}-${configVersion}-${persistenceResolved ? "ready" : "pending"}-${persistenceScope ?? "none"}`}
               showToast={showToast}
             />
           )}
-          {!inStart && route === "cron" && <Cron />}
-          {!inStart && route === "history" && <History key={`history-${configVersion}`} />}
+          {!inStart && route === "cron" && <Cron key={`cron-${activeInstance}-${configVersion}-${persistenceResolved ? "ready" : "pending"}-${persistenceScope ?? "none"}`} />}
+          {!inStart && route === "history" && <History key={`history-${activeInstance}-${configVersion}`} />}
           {!inStart && route === "doctor" && (
-            <Doctor
-              key={activeInstance}
-              active
-              connectRemoteHost={connectWithPassphraseFallback}
-              launchGuidance={doctorLaunchByInstance[activeInstance] || null}
-              onLaunchGuidanceConsumed={(instanceId) => {
-                setDoctorLaunchByInstance((prev) => ({
-                  ...prev,
-                  [instanceId]: null,
-                }));
-              }}
-            />
+            <Doctor key={activeInstance} />
           )}
-          {!inStart && route === "orchestrator" && <Orchestrator />}
+          {!inStart && route === "context" && <OpenclawContext key={`context-${activeInstance}`} />}
+          {!inStart && route === "orchestrator" && <Orchestrator key={`orchestrator-${activeInstance}`} />}
           </Suspense>
         </div>
       </main>
@@ -1725,111 +1725,6 @@ export function App() {
       </div>
       </InstanceContext.Provider>
     </div>
-
-    {/* ── Toast Stack ── */}
-    {toasts.length > 0 && (
-      <div className="fixed bottom-5 right-5 z-50 flex flex-col-reverse gap-2.5">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={cn(
-              "flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium animate-in fade-in slide-in-from-bottom-3 duration-300",
-              toast.type === "success"
-                ? "bg-green-500/10 text-green-700 border border-green-500/20 shadow-sm dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/20"
-                : "bg-red-500/10 text-red-700 border border-red-500/20 shadow-sm dark:bg-red-500/15 dark:text-red-400 dark:border-red-500/20"
-            )}
-          >
-            <span className="flex-1">{toast.message}</span>
-            <button
-              className="opacity-50 hover:opacity-100 transition-opacity ml-1 cursor-pointer"
-              onClick={() => dismissToast(toast.id)}
-            >
-              <XIcon className="size-3.5" />
-            </button>
-          </div>
-        ))}
-      </div>
-    )}
-
-    {showZeroclawDoctorFab && (
-      <div className="fixed bottom-5 right-5 z-[60] flex flex-col items-end gap-2">
-        {agentGuidanceOpen && (
-          <GuidanceCard
-            guidance={agentGuidance}
-            instanceLabel={
-              openTabs.find((tab) => tab.id === agentGuidance.instanceId)?.label
-              || fallbackInstanceLabel(agentGuidance.instanceId, t)
-            }
-            onClose={() => setAgentGuidanceOpen(false)}
-            onDismiss={() => { setAgentGuidanceOpen(false); setUnreadGuidance(false); }}
-            onResolve={() => resolveGuidanceForInstance(agentGuidance.instanceId)}
-            onDoctorHandoff={(context) => {
-              setAgentGuidanceOpen(false);
-              setDoctorLaunchByInstance((prev) => ({
-                ...prev,
-                [agentGuidance.instanceId]: {
-                  ...agentGuidance,
-                  rawError: context || agentGuidance.rawError,
-                },
-              }));
-              // Ensure the correct instance tab is active so Doctor
-              // runs commands against the right target.
-              const gid = agentGuidance.instanceId;
-              setOpenTabIds((prev) => prev.includes(gid) ? prev : [...prev, gid]);
-              setActiveInstance(gid);
-              setInStart(false);
-              navigateRoute("doctor");
-            }}
-            onInlineFix={async (sa) => {
-              try {
-                if (sa.tool === "clawpal" && sa.args?.includes("ssh connect")) {
-                  const hostId = agentGuidance.instanceId;
-                  showToast(t("doctor.reconnectSsh"), "success");
-                  await connectWithPassphraseFallback(hostId);
-                  showToast(t("doctor.reconnectSshSuccess"), "success");
-                  resolveGuidanceForInstance(hostId);
-                } else {
-                  setAgentGuidanceOpen(false);
-                  setDoctorLaunchByInstance((prev) => ({
-                    ...prev,
-                    [agentGuidance.instanceId]: {
-                      ...agentGuidance,
-                      rawError: sa.context || agentGuidance.rawError,
-                    },
-                  }));
-                  const gid = agentGuidance.instanceId;
-                  setOpenTabIds((prev) => prev.includes(gid) ? prev : [...prev, gid]);
-                  setActiveInstance(gid);
-                  setInStart(false);
-                  navigateRoute("doctor");
-                }
-              } catch (e) {
-                showToast(t("doctor.guidanceActionFailed", {
-                  action: sa.label,
-                  error: String(e),
-                }), "error");
-              }
-            }}
-          />
-        )}
-        <Button
-          className="rounded-full shadow-md relative"
-          size="sm"
-          variant={agentGuidanceOpen ? "secondary" : "default"}
-          onClick={() => {
-            if (!agentGuidance) return;
-            setAgentGuidanceOpen((v) => !v);
-            setUnreadGuidance(false);
-          }}
-        >
-          {t("doctor.agentSource")}
-          {unreadGuidance && !agentGuidanceOpen && (
-            <span className="absolute -top-1 -right-1 size-2.5 rounded-full bg-destructive" />
-          )}
-        </Button>
-      </div>
-    )}
-
     <Dialog
       open={passphraseOpen}
       onOpenChange={(open) => {

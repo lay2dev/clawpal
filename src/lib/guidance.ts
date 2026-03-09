@@ -1,5 +1,6 @@
 import { api } from "./api";
 import i18n from "../i18n";
+import { extractErrorText, parseSshCommandError } from "./sshDiagnostic";
 
 // ── Throttle / filter logic (shared by withGuidance and use-api dispatch) ──
 
@@ -120,7 +121,7 @@ export async function explainAndBuildGuidanceError({
   rawError,
   emitEvent = true,
 }: ExplainGuidanceInput): Promise<Error> {
-  const original = String(rawError);
+  const original = extractErrorText(rawError);
   if (
     isSshCooldownProtectionError(original)
     || isTransientSshChannelError(original)
@@ -153,6 +154,7 @@ export async function explainAndBuildGuidanceError({
             instanceId,
             transport,
             rawError: original,
+            sshDiagnostic: parseSshCommandError(rawError)?.diagnostic ?? null,
             createdAt: Date.now(),
           },
         }),
@@ -177,7 +179,7 @@ export async function explainAndBuildGuidanceError({
 // ── withGuidance wrapper for App-level lifecycle calls ──
 
 /**
- * Wraps an async operation with zeroclaw guidance emission on failure.
+ * Wraps an async operation with built-in guidance emission on failure.
  * Use this for App-level lifecycle calls (SSH connect, instance listing, etc.)
  * that bypass the useApi() dispatch() wrapper.
  *

@@ -7,18 +7,21 @@ use thiserror::Error;
 
 use crate::instance::{Instance, InstanceType};
 use crate::openclaw::{parse_json_output, CliOutput, OpenclawCli};
+use crate::ssh::diagnostic::{from_any_error, SshDiagnosticReport, SshIntent, SshStage};
 
 const HEALTH_SSH_CONNECT_TIMEOUT_SECS: u64 = 10;
 const HEALTH_SSH_SERVER_ALIVE_INTERVAL_SECS: u64 = 10;
 const HEALTH_SSH_SERVER_ALIVE_COUNT_MAX: u64 = 2;
 const HEALTH_REMOTE_COMMAND_TIMEOUT_SECS: u64 = 20;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthStatus {
     pub healthy: bool,
     pub active_agents: u32,
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_diagnostic: Option<SshDiagnosticReport>,
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +74,7 @@ fn check_local_or_docker(instance: &Instance, cli: &OpenclawCli) -> Result<Healt
         healthy: agents_output.exit_code == 0,
         active_agents,
         version,
+        ssh_diagnostic: None,
     })
 }
 
@@ -114,6 +118,25 @@ fn check_remote_ssh(instance: &Instance) -> Result<HealthStatus> {
     let mut agents_args = base_args.clone();
     agents_args.push(wrap_remote_health_command(&agents_command));
     let agents_output = run_ssh_command(&agents_args)?;
+    let ssh_diagnostic = if agents_output.exit_code != 0 {
+        let mut err_string = agents_output.stderr.trim().to_string();
+        if err_string.is_empty() {
+            err_string = agents_output.stdout.trim().to_string();
+        }
+        if err_string.is_empty() {
+            err_string = format!(
+                "ssh health check failed with exit code {}",
+                agents_output.exit_code
+            );
+        }
+        Some(from_any_error(
+            SshStage::RemoteExec,
+            SshIntent::HealthCheck,
+            &err_string,
+        ))
+    } else {
+        None
+    };
     let active_agents = parse_active_agents(&agents_output)?;
 
     let version_command = if let Some(home) = &instance.openclaw_home {
@@ -134,6 +157,7 @@ fn check_remote_ssh(instance: &Instance) -> Result<HealthStatus> {
         healthy: agents_output.exit_code == 0,
         active_agents,
         version,
+        ssh_diagnostic,
     })
 }
 
@@ -397,6 +421,78 @@ mod tests {
         assert!(status.healthy);
         assert_eq!(status.active_agents, 1);
         assert_eq!(status.version.as_deref(), Some("openclaw 2.0.0"));
+
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_ssh_failure_populates_ssh_diagnostic() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!("clawpal-core-health-diag-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let ssh_bin = dir.join("ssh");
+        std::fs::write(
+            &ssh_bin,
+            "#!/bin/sh\necho 'connection refused' >&2\nexit 1\n",
+        )
+        .expect("write fake ssh");
+        std::fs::set_permissions(&ssh_bin, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake ssh");
+
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                dir.display(),
+                original_path
+                    .as_ref()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default()
+            ),
+        );
+
+        let instance = Instance {
+            id: "ssh:diag-test".to_string(),
+            instance_type: InstanceType::RemoteSsh,
+            label: "Diag Test".to_string(),
+            openclaw_home: None,
+            clawpal_data_dir: None,
+            ssh_host_config: Some(SshHostConfig {
+                id: "ssh:diag-test".to_string(),
+                label: "Diag Test".to_string(),
+                host: "vm1".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_method: "key".to_string(),
+                key_path: None,
+                password: None,
+                passphrase: None,
+            }),
+        };
+
+        let status =
+            check_instance(&instance).expect("should return HealthStatus even on SSH failure");
+
+        assert!(!status.healthy, "status must be unhealthy");
+        let diag = status
+            .ssh_diagnostic
+            .expect("ssh_diagnostic must be populated on SSH failure");
+        assert_eq!(
+            diag.error_code,
+            Some(crate::ssh::diagnostic::SshErrorCode::ConnectionRefused),
+            "error code should be classified from stderr"
+        );
 
         if let Some(path) = original_path {
             std::env::set_var("PATH", path);

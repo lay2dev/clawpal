@@ -40,11 +40,26 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/watchdog.js", "resources/zeroclaw/*"],
+    "resources": ["resources/watchdog.js"],
     "targets": "all",
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "signingIdentity": "Developer ID Application: UNIPASS TECH PTE. LTD. (X53M8444K4)"
+      "signingIdentity": "Developer ID Application: UNIPASS TECH PTE. LTD. (X53M8444K4)",
+      "dmg": {
+        "background": ".generated/dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 219
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 219
+        }
+      }
     },
     "windows": {
       "certificateThumbprint": null,

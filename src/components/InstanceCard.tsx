@@ -7,6 +7,17 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SshConnectionProfile, SshConnectionBottleneckStage } from "@/lib/types";
+import {
+  getConnectionQualityLabel,
+  getConnectionStageLabel,
+  getSshDotClass,
+} from "./instance-card-helpers";
+import {
+  formatSshConnectionLatency,
+  getSshConnectionFailureSummary,
+  getSshConnectionProbeStatus,
+  getSshConnectionStageMetrics,
+} from "@/lib/sshConnectionProfile";
 
 type InstanceType = "local" | "docker" | "ssh" | "wsl2";
 
@@ -17,8 +28,10 @@ interface InstanceCardProps {
   healthy: boolean | null; // null = unknown/loading
   agentCount: number;
   opened: boolean; // whether this instance is currently open in tab bar
+  notInstalled?: boolean;
   checked?: boolean; // whether health has been checked (SSH only)
   checking?: boolean; // whether a check is in progress (SSH only)
+  checkingLabel?: string;
   onCheck?: () => void; // trigger manual health check (SSH only)
   onClick: () => void;
   onRename?: () => void;
@@ -52,86 +65,83 @@ function HealthDot({ healthy, offline }: { healthy: boolean | null; offline: boo
   );
 }
 
-function formatLatency(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "-";
-  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
-  return `${Math.round(ms)} ms`;
-}
-
-function getConnectionQualityLabel(quality: string, t: TFunction): string {
-  switch (quality) {
-    case "excellent":
-      return t("start.sshQualityExcellent");
-    case "good":
-      return t("start.sshQualityGood");
-    case "fair":
-      return t("start.sshQualityFair");
-    case "poor":
-      return t("start.sshQualityPoor");
-    default:
-      return t("start.sshQualityUnknown");
-  }
-}
-
-function getConnectionStageLabel(stage: SshConnectionBottleneckStage, t: TFunction): string {
-  switch (stage) {
-    case "connect":
-      return t("start.sshStage.connect");
-    case "gateway":
-      return t("start.sshStage.gateway");
-    case "config":
-      return t("start.sshStage.config");
-    case "version":
-      return t("start.sshStage.version");
-    default:
-      return t("start.sshStage.other");
-  }
-}
-
-function getSshDotClass(quality: string): string {
-  switch (quality) {
-    case "excellent":
-      return "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.45)]";
-    case "good":
-      return "bg-lime-500 shadow-[0_0_12px_rgba(132,204,22,0.45)]";
-    case "fair":
-      return "bg-amber-500 shadow-[0_0_12px_rgba(217,119,6,0.45)]";
-    case "poor":
-      return "bg-red-500 shadow-[0_0_12px_rgba(220,38,38,0.45)]";
-    default:
-      return "bg-muted-foreground/40";
-  }
-}
-
 function SshConnectionDot({ profile, t }: { profile: SshConnectionProfile; t: TFunction }) {
+  const probeStatus = getSshConnectionProbeStatus(profile);
   const qualityText = getConnectionQualityLabel(profile.quality, t);
-  const qualityClass = getSshDotClass(profile.quality);
+  const qualityClass = probeStatus === "failed" ? getSshDotClass("poor") : getSshDotClass(profile.quality);
+  const triggerLabel = probeStatus === "failed" ? t("start.unreachable") : qualityText;
   const bottleneckStageLabel = getConnectionStageLabel(profile.bottleneck.stage, t);
-  const bottleneckLatencyText = formatLatency(profile.bottleneck.latencyMs);
-  const totalLatencyText = formatLatency(profile.totalLatencyMs);
+  const bottleneckLatencyText = formatSshConnectionLatency(profile.bottleneck.latencyMs);
+  const totalLatencyText = formatSshConnectionLatency(profile.totalLatencyMs);
+  const stages = getSshConnectionStageMetrics(profile);
+  const failureSummary = getSshConnectionFailureSummary(profile);
 
   return (
-    <span className="relative inline-flex items-center justify-center group/ssh-dot">
-      <span
-        tabIndex={0}
-        className={cn(
-          "size-2 rounded-full shrink-0 animate-ssh-dot-jitter",
-          qualityClass,
-        )}
-      />
-      <span className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 w-max max-w-56 -translate-x-1/2 rounded-md border border-border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-[0_8px_24px_rgba(0,0,0,0.18)] opacity-0 invisible transition-all duration-150 group-hover/ssh-dot:opacity-100 group-hover/ssh-dot:visible group-focus-within/ssh-dot:opacity-100 group-focus-within/ssh-dot:visible">
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="-m-2 inline-flex items-center gap-1.5 rounded-md p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-label={triggerLabel}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span
+            className={cn(
+              "size-2 rounded-full shrink-0 animate-ssh-dot-jitter",
+              qualityClass,
+            )}
+          />
+          <span className="leading-none text-muted-foreground">{triggerLabel}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        forceMount
+        align="start"
+        side="bottom"
+        sideOffset={8}
+        className="w-60 p-3 text-xs"
+        onClick={(e) => e.stopPropagation()}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         <p className="font-semibold text-[12px] mb-1">{t("start.sshConnectionMetrics")}</p>
-        <p>
-          {t("start.sshSpeed")}: {totalLatencyText}
-        </p>
-        <p>
-          {t("start.sshQualityLabel")}: {qualityText} ({profile.qualityScore})
-        </p>
-        <p>
-          {t("start.sshBottleneck")}: {bottleneckStageLabel} ({bottleneckLatencyText})
-        </p>
-      </span>
-    </span>
+        {probeStatus === "failed" ? (
+          <p className="mb-2 text-destructive">{failureSummary ?? t("start.unreachable")}</p>
+        ) : (
+          <>
+            <p>
+              {t("start.sshSpeed")}: {totalLatencyText}
+            </p>
+            <p>
+              {t("start.sshQualityLabel")}: {qualityText} ({profile.qualityScore})
+            </p>
+            <p>
+              {t("start.sshBottleneck")}: {bottleneckStageLabel} ({bottleneckLatencyText})
+            </p>
+          </>
+        )}
+        <div className="mt-2 space-y-1">
+          {stages.map((stage) => {
+            const label = getConnectionStageLabel(stage.key, t);
+            const timing = stage.status === "reused"
+              ? stage.note ?? t("start.sshStageReused")
+              : stage.status === "not_run"
+                ? t("start.sshStageNotRun")
+                : formatSshConnectionLatency(stage.latencyMs);
+            return (
+              <div key={stage.key} className="flex items-start justify-between gap-3">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="text-right">
+                  {timing}
+                  {stage.status === "failed" && stage.note ? (
+                    <span className="block text-[11px] text-destructive">{stage.note}</span>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -141,8 +151,10 @@ export function InstanceCard({
   healthy,
   agentCount,
   opened,
+  notInstalled = false,
   checked,
   checking,
+  checkingLabel,
   onCheck,
   onClick,
   onRename,
@@ -151,6 +163,7 @@ export function InstanceCard({
   discovered,
   discoveredSource,
   onConnect,
+  onQuickDiagnose,
   sshConnectionProfile,
 }: InstanceCardProps) {
   const { t } = useTranslation();
@@ -167,10 +180,6 @@ export function InstanceCard({
   // SSH instances that haven't been checked yet: no status to show
   const needsCheck = type === "ssh" && !checked && !checking;
   const showSshConnectionProfile = type === "ssh" && checked === true && !!sshConnectionProfile;
-  const sshConnectionQualityText = sshConnectionProfile
-    ? getConnectionQualityLabel(sshConnectionProfile.quality, t)
-    : undefined;
-
   return (
     <Card
       className={cn(
@@ -196,7 +205,7 @@ export function InstanceCard({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-7"
+                  className="size-7 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                   onClick={(e) => { e.stopPropagation(); onQuickDiagnose(); }}
                   aria-label={t("quickDiagnose.buttonLabel")}
                 >
@@ -262,7 +271,9 @@ export function InstanceCard({
         {/* Bottom row: health + agent count */}
         {!discovered && (
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            {needsCheck ? (
+            {notInstalled ? (
+              <span>{t("start.notInstalled")}</span>
+            ) : needsCheck ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -273,37 +284,30 @@ export function InstanceCard({
                 {t("start.check")}
               </Button>
             ) : checking ? (
-              <span className="flex items-center gap-1.5">
-                <RefreshCwIcon className="size-3 animate-spin" />
-                {t("start.checking")}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <RefreshCwIcon className="size-3 shrink-0 animate-spin" />
+                <span className="truncate">{checkingLabel ?? t("start.checking")}</span>
               </span>
             ) : (
               <>
-                <span className="flex items-center gap-1.5">
-                  {type === "ssh" && showSshConnectionProfile && sshConnectionProfile ? (
-                    <SshConnectionDot profile={sshConnectionProfile} t={t} />
-                  ) : (
+                {type === "ssh" && showSshConnectionProfile && sshConnectionProfile ? (
+                  <SshConnectionDot profile={sshConnectionProfile} t={t} />
+                ) : (
+                  <span className="flex items-center gap-1.5">
                     <HealthDot healthy={healthy} offline={checked === true && healthy === null} />
-                  )}
-                  {checked === true && healthy === null
-                    ? t("start.unreachable")
-                    : showSshConnectionProfile && sshConnectionProfile
-                      ? sshConnectionQualityText
+                    {checked === true && healthy === null
+                      ? t("start.unreachable")
                       : healthy === true
                         ? t("start.healthy")
                         : healthy === false
                           ? t("start.unhealthy")
                           : t("start.checking")}
-                </span>
+                  </span>
+                )}
                 <Badge variant="secondary" className="text-xs">
                   {t("start.agents", { count: agentCount })}
                 </Badge>
               </>
-            )}
-            {opened && (
-              <Badge variant="outline" className="text-xs">
-                {t("start.opened")}
-              </Badge>
             )}
           </div>
         )}

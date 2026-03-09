@@ -10,21 +10,22 @@ import { isAlreadyExplainedGuidanceError } from "@/lib/guidance";
 import { useTheme } from "@/lib/use-theme";
 import { useFont } from "@/lib/use-font";
 import type { UiFont } from "@/lib/use-font";
-import { profileToModelValue } from "@/lib/model-value";
+import { resolveProfileCredentialView } from "@/lib/profile-credential";
 import type {
   ModelCatalogProvider,
   ModelProfile,
   ProviderAuthSuggestion,
   ResolvedApiKey,
-  ZeroclawRuntimeTarget,
-  ZeroclawUsageStats,
 } from "@/lib/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { BugReportSettings } from "@/components/BugReportSettings";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SettingsAlphaFeaturesCard } from "@/components/SettingsAlphaFeaturesCard";
+import { getSettingsProfileUiState } from "./settings-profile-ui";
 import {
   Select,
   SelectContent,
@@ -55,43 +56,104 @@ type ProfileForm = {
   id: string;
   provider: string;
   model: string;
+  authRef: string;
   apiKey: string;
   useCustomUrl: boolean;
   baseUrl: string;
   enabled: boolean;
 };
 
+type CredentialSource = "oauth" | "env" | "manual";
+
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
-const ENABLE_PROFILE_TEST_BUTTON = true;
-const ZEROCLAW_SUPPORTED_PROVIDERS = new Set([
-  "openrouter",
+let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
+let profilesExtractedOnce = false;
+const PROVIDER_FALLBACK_OPTIONS = [
   "openai",
   "openai-codex",
   "anthropic",
-  "github-copilot",
-  "copilot",
-  "gemini",
-  "google",
-  "google-vertex",
-  "google-gemini-cli",
-  "google-antigravity",
-  "moonshot",
-  "kimi-code",
-  "kimi-coding",
-]);
-let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
-let profilesExtractedOnce = false;
+  "openrouter",
+  "ollama",
+  "lmstudio",
+  "localai",
+  "vllm",
+];
 
 function emptyForm(): ProfileForm {
   return {
     id: "",
     provider: "",
     model: "",
+    authRef: "",
     apiKey: "",
     useCustomUrl: false,
     baseUrl: "",
     enabled: true,
   };
+}
+
+function normalizeOauthProvider(provider: string): string {
+  const lower = provider.trim().toLowerCase();
+  if (lower === "openai_codex" || lower === "github-copilot" || lower === "copilot") {
+    return "openai-codex";
+  }
+  return lower;
+}
+
+function providerUsesOAuthAuth(provider: string): boolean {
+  return normalizeOauthProvider(provider) === "openai-codex";
+}
+
+function defaultOauthAuthRef(provider: string): string {
+  const normalized = normalizeOauthProvider(provider);
+  if (normalized === "openai-codex") {
+    return "openai-codex:default";
+  }
+  return "";
+}
+
+function isEnvVarLikeAuthRef(authRef: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef.trim());
+}
+
+function defaultEnvAuthRef(provider: string): string {
+  const normalized = normalizeOauthProvider(provider);
+  if (!normalized) return "";
+  if (normalized === "openai-codex") {
+    return "OPENAI_CODEX_TOKEN";
+  }
+  const providerEnv = normalized
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+  return providerEnv ? `${providerEnv}_API_KEY` : "";
+}
+
+function inferCredentialSource(provider: string, authRef: string): CredentialSource {
+  const trimmed = authRef.trim();
+  if (!trimmed) {
+    return providerUsesOAuthAuth(provider) ? "oauth" : "manual";
+  }
+  if (providerUsesOAuthAuth(provider) && trimmed.toLowerCase().startsWith("openai-codex:")) {
+    return "oauth";
+  }
+  return "env";
+}
+
+function providerSupportsOptionalApiKey(provider: string): boolean {
+  if (providerUsesOAuthAuth(provider)) {
+    return true;
+  }
+  const lower = provider.trim().toLowerCase();
+  return [
+    "ollama",
+    "lmstudio",
+    "lm-studio",
+    "localai",
+    "vllm",
+    "llamacpp",
+    "llama.cpp",
+  ].includes(lower);
 }
 
 function AutocompleteField({
@@ -172,7 +234,6 @@ export function Settings({
   globalMode = false,
   section = "all",
   onOpenDoctor,
-  onNavigateToProfiles,
 }: {
   onDataChange?: () => void;
   hasAppUpdate?: boolean;
@@ -180,7 +241,6 @@ export function Settings({
   globalMode?: boolean;
   section?: "all" | "profiles" | "preferences";
   onOpenDoctor?: () => void;
-  onNavigateToProfiles?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const ua = useApi();
@@ -190,19 +250,12 @@ export function Settings({
   const [catalog, setCatalog] = useState<ModelCatalogProvider[]>([]);
   const [apiKeys, setApiKeys] = useState<ResolvedApiKey[]>([]);
   const [form, setForm] = useState<ProfileForm>(emptyForm());
+  const [credentialSource, setCredentialSource] = useState<CredentialSource>("manual");
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
-  const [zeroclawModel, setZeroclawModel] = useState("");
-  const [zeroclawSaving, setZeroclawSaving] = useState(false);
-  const [zeroclawUsage, setZeroclawUsage] = useState<ZeroclawUsageStats | null>(null);
-  const [zeroclawUsageLoading, setZeroclawUsageLoading] = useState(true);
-  const [zeroclawTarget, setZeroclawTarget] = useState<ZeroclawRuntimeTarget | null>(null);
-  const [zeroclawTargetLoading, setZeroclawTargetLoading] = useState(true);
-  const [showZeroclawDoctorUi, setShowZeroclawDoctorUi] = useState(false);
-  const zeroclawPrefsLoadedRef = useRef(false);
-  const zeroclawLastSavedRef = useRef("");
+  const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -305,62 +358,10 @@ export function Settings({
   useEffect(() => {
     ua.getAppPreferences()
       .then((prefs) => {
-        const value = prefs.zeroclawModel || "";
-        setZeroclawModel(value);
-        zeroclawLastSavedRef.current = value.trim();
-        zeroclawPrefsLoadedRef.current = true;
-
-        const nextShowZeroclawUi = Boolean(prefs.showZeroclawDoctorUi);
-        setShowZeroclawDoctorUi(nextShowZeroclawUi);
+        setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadStats = () => {
-      setZeroclawUsageLoading(true);
-      setZeroclawTargetLoading(true);
-      ua.getZeroclawUsageStats()
-        .then((stats) => {
-          if (!cancelled) setZeroclawUsage(stats);
-        })
-        .catch(() => {
-          if (!cancelled) setZeroclawUsage(null);
-        })
-        .finally(() => {
-          if (!cancelled) setZeroclawUsageLoading(false);
-        });
-      ua.getZeroclawRuntimeTarget()
-        .then((target) => {
-          if (!cancelled) setZeroclawTarget(target);
-        })
-        .catch(() => {
-          if (!cancelled) setZeroclawTarget(null);
-        })
-        .finally(() => {
-          if (!cancelled) setZeroclawTargetLoading(false);
-        });
-    };
-    loadStats();
-    const timer = window.setInterval(loadStats, 4_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [ua]);
-
-  const zeroclawTargetText = useMemo(() => {
-    if (zeroclawTargetLoading) return t("settings.zeroclawEffectiveModelLoading");
-    const provider = zeroclawTarget?.provider?.trim();
-    if (!provider) return t("settings.zeroclawEffectiveModelUnavailable");
-    const model = zeroclawTarget?.model?.trim();
-    const modelLabel = model ? `${provider}/${model}` : provider;
-    if (zeroclawTarget?.source === "preferred") {
-      return t("settings.zeroclawEffectiveModelPreferred", { model: modelLabel });
-    }
-    return t("settings.zeroclawEffectiveModelAuto", { model: modelLabel });
-  }, [zeroclawTargetLoading, zeroclawTarget, t]);
 
   // Load catalog on mount
   useEffect(() => {
@@ -395,10 +396,10 @@ export function Settings({
     }).catch((e) => console.error("Failed to refresh model catalog:", e));
   };
 
-  const maskedKeyMap = useMemo(() => {
-    const map = new Map<string, string>();
+  const resolvedCredentialMap = useMemo(() => {
+    const map = new Map<string, ResolvedApiKey>();
     for (const entry of apiKeys) {
-      map.set(entry.profileId, entry.maskedKey);
+      map.set(entry.profileId, entry);
     }
     return map;
   }, [apiKeys]);
@@ -412,13 +413,21 @@ export function Settings({
     if (ua.isRemote) {
       // For remote: infer from existing profiles
       const existing = (profiles || []).find(
-        (p) => p.provider === form.provider && maskedKeyMap.has(p.id) && maskedKeyMap.get(p.id) !== "..."
+        (p) => {
+          if (p.provider !== form.provider) return false;
+          const credential = resolveProfileCredentialView(p, resolvedCredentialMap.get(p.id));
+          return credential.resolved;
+        }
       );
       if (existing) {
+        const credential = resolveProfileCredentialView(
+          existing,
+          resolvedCredentialMap.get(existing.id),
+        );
         setAuthSuggestion({
           hasKey: true,
           source: `existing profile (${existing.provider}/${existing.model})`,
-          authRef: existing.authRef || "",
+          authRef: credential.authRef || existing.authRef || "",
         });
       } else {
         setAuthSuggestion(null);
@@ -428,59 +437,96 @@ export function Settings({
         .then(setAuthSuggestion)
         .catch((e) => { console.error("Failed to resolve provider auth:", e); setAuthSuggestion(null); });
     }
-  }, [form.provider, form.id, ua, profiles, maskedKeyMap]);
+  }, [form.provider, form.id, ua, profiles, resolvedCredentialMap]);
+
+  useEffect(() => {
+    if (!providerUsesOAuthAuth(form.provider) && credentialSource === "oauth") {
+      setCredentialSource("env");
+    }
+  }, [form.provider, credentialSource]);
 
   const modelCandidates = useMemo(() => {
     const found = catalog.find((c) => c.provider === form.provider);
     return found?.models || [];
   }, [catalog, form.provider]);
 
-  const zeroclawModelCandidates = useMemo(() => {
-    const fromProfiles = (profiles || [])
-      .filter((profile) => profile.enabled)
-      .filter((profile) =>
-        ZEROCLAW_SUPPORTED_PROVIDERS.has(profile.provider.trim().toLowerCase()),
-      )
-      .map((profile) => profileToModelValue(profile));
-    return Array.from(new Set(fromProfiles)).sort((a, b) => a.localeCompare(b));
-  }, [profiles]);
+  const providerCandidates = useMemo(() => {
+    const set = new Set<string>();
+    for (const provider of PROVIDER_FALLBACK_OPTIONS) {
+      if (provider.trim()) set.add(provider);
+    }
+    for (const item of catalog) {
+      const provider = item.provider.trim();
+      if (provider) set.add(provider);
+    }
+    for (const profile of profiles || []) {
+      const provider = profile.provider.trim();
+      if (provider) set.add(provider);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [catalog, profiles]);
 
-  const upsert = (event: FormEvent) => {
-    event.preventDefault();
+  const saveProfile = async (authRefOverride?: string): Promise<boolean> => {
     if (!form.provider || !form.model) {
       setMessage(t('settings.providerModelRequired'));
-      return;
+      return false;
     }
-    if (!ua.isRemote && !form.apiKey && !form.id && !authSuggestion?.hasKey) {
+    const apiKeyOptional = form.useCustomUrl || providerSupportsOptionalApiKey(form.provider);
+    const oauthSource = credentialSource === "oauth" && providerUsesOAuthAuth(form.provider);
+    const envSource = credentialSource === "env";
+    const manualSource = credentialSource === "manual";
+    if (!ua.isRemote && manualSource && !form.apiKey && !form.id && !apiKeyOptional) {
       setMessage(t('settings.apiKeyRequired'));
-      return;
+      return false;
     }
+    const overrideAuthRef = (authRefOverride || "").trim();
+    const explicitAuthRef = form.authRef.trim();
+    const oauthFallbackAuthRef = defaultOauthAuthRef(form.provider);
+    const resolvedAuthRef = oauthSource
+      ? (overrideAuthRef || explicitAuthRef || oauthFallbackAuthRef)
+      : envSource
+        ? (
+          overrideAuthRef
+          || explicitAuthRef
+          || ((!form.apiKey && authSuggestion?.authRef) ? authSuggestion.authRef : "")
+        )
+        : "";
     const profileData: ModelProfile = {
       id: form.id || "",
       name: `${form.provider}/${form.model}`,
       provider: form.provider,
       model: form.model,
-      authRef: (!form.apiKey && authSuggestion?.authRef) ? authSuggestion.authRef : "",
+      authRef: resolvedAuthRef,
       apiKey: form.apiKey || undefined,
       baseUrl: form.useCustomUrl && form.baseUrl ? form.baseUrl : undefined,
       enabled: form.enabled,
     };
-    ua.upsertModelProfile(profileData)
-      .then(() => {
-        setMessage(t('settings.profileSaved'));
-        setForm(emptyForm());
-        setProfileDialogOpen(false);
-        refreshProfiles();
-        onDataChange?.();
-      })
-      .catch((e) => setMessage(t('settings.saveFailed', { error: String(e) })));
+    try {
+      await ua.upsertModelProfile(profileData);
+      setMessage(t('settings.profileSaved'));
+      setForm(emptyForm());
+      setProfileDialogOpen(false);
+      refreshProfiles();
+      onDataChange?.();
+      return true;
+    } catch (e) {
+      setMessage(t('settings.saveFailed', { error: String(e) }));
+      return false;
+    }
+  };
+
+  const upsert = (event: FormEvent) => {
+    event.preventDefault();
+    void saveProfile();
   };
 
   const editProfile = (profile: ModelProfile) => {
+    setCredentialSource(inferCredentialSource(profile.provider, profile.authRef || ""));
     setForm({
       id: profile.id,
       provider: profile.provider,
       model: profile.model,
+      authRef: profile.authRef || "",
       apiKey: "",
       useCustomUrl: !!profile.baseUrl,
       baseUrl: profile.baseUrl || "",
@@ -490,6 +536,7 @@ export function Settings({
   };
 
   const openAddProfile = () => {
+    setCredentialSource("manual");
     setForm(emptyForm());
     setProfileDialogOpen(true);
   };
@@ -592,41 +639,18 @@ export function Settings({
   const showProfiles = section !== "preferences";
   const showPreferences = section !== "profiles";
 
-  const handleZeroclawDoctorUiToggle = useCallback((nextChecked: boolean) => {
-    setShowZeroclawDoctorUi(nextChecked);
-    ua.setZeroclawDoctorUiPreference(nextChecked)
+  const handleSshTransferSpeedUiToggle = useCallback((nextChecked: boolean) => {
+    setShowSshTransferSpeedUi(nextChecked);
+    ua.setSshTransferSpeedUiPreference(nextChecked)
       .then((prefs) => {
-        setShowZeroclawDoctorUi(Boolean(prefs.showZeroclawDoctorUi));
+        setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
       })
       .catch((e) => {
-        setShowZeroclawDoctorUi((current) => !current);
+        setShowSshTransferSpeedUi((current) => !current);
         const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.zeroclawDoctorUiSaveFailed", { error: errorText }));
+        toast.error(t("settings.sshTransferSpeedUiSaveFailed", { error: errorText }));
       });
   }, [t, ua]);
-
-  useEffect(() => {
-    if (!zeroclawPrefsLoadedRef.current) return;
-    const next = zeroclawModel.trim();
-    if (next === zeroclawLastSavedRef.current) return;
-    const timer = window.setTimeout(() => {
-      setZeroclawSaving(true);
-      ua.setZeroclawModelPreference(next.length > 0 ? next : null)
-        .then((prefs) => {
-          const persisted = prefs.zeroclawModel || "";
-          zeroclawLastSavedRef.current = persisted.trim();
-          if (persisted !== zeroclawModel) {
-            setZeroclawModel(persisted);
-          }
-        })
-        .catch((e) => {
-          const errorText = e instanceof Error ? e.message : String(e);
-          toast.error(t("settings.zeroclawModelSaveFailed", { error: errorText }));
-        })
-        .finally(() => setZeroclawSaving(false));
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [ua, zeroclawModel, t]);
 
   return (
     <section>
@@ -636,10 +660,6 @@ export function Settings({
       {showProfiles && !ua.isRemote && (
         <p className="text-sm text-muted-foreground mb-4">
           {t('settings.oauthHint')}
-          <code className="mx-1 px-1.5 py-0.5 bg-muted rounded text-xs">openclaw models auth login</code>
-          {t('settings.or')}
-          <code className="mx-1 px-1.5 py-0.5 bg-muted rounded text-xs">openclaw models auth login-github-copilot</code>.
-          {t('settings.oauthHintSuffix')}
         </p>
       )}
 
@@ -741,81 +761,6 @@ export function Settings({
                   </div>
                 </div>
 
-                <div className="h-px bg-border" />
-
-                {showZeroclawDoctorUi && (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <Label className="text-sm font-semibold shrink-0">{t("settings.zeroclawModel")}</Label>
-                    <div className="w-[320px] max-w-full">
-                      <Select
-                        value={zeroclawModel ? (zeroclawModelCandidates.includes(zeroclawModel) ? zeroclawModel : "__raw__") : "__none__"}
-                        onValueChange={(val) => {
-                          if (val === "__raw__") return;
-                          setZeroclawModel(val === "__none__" ? "" : val);
-                        }}
-                        disabled={zeroclawSaving}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("settings.zeroclawModelPlaceholder")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">
-                            <span className="text-muted-foreground">{t("home.notSet")}</span>
-                          </SelectItem>
-                          {zeroclawModel && !zeroclawModelCandidates.includes(zeroclawModel) && (
-                            <SelectItem value="__raw__">{zeroclawModel}</SelectItem>
-                          )}
-                          {zeroclawModelCandidates.map((model) => (
-                            <SelectItem key={model} value={model}>
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {zeroclawSaving && (
-                      <span className="text-xs text-muted-foreground">{t("settings.saving")}</span>
-                    )}
-                    {zeroclawModelCandidates.length === 0 && !zeroclawSaving && (
-                      <p className="text-xs text-muted-foreground basis-full mt-1">
-                        {onNavigateToProfiles ? (
-                          <button
-                            type="button"
-                            className="underline hover:text-foreground transition-colors"
-                            onClick={onNavigateToProfiles}
-                          >
-                            {t("settings.zeroclawNoProfilesLink")}
-                          </button>
-                        ) : (
-                          t("settings.zeroclawNoProfiles")
-                        )}
-                      </p>
-                    )}
-                    <div className="ml-auto text-right text-xs text-muted-foreground min-w-[240px]">
-                      {zeroclawUsageLoading ? (
-                        <div>{t("settings.zeroclawUsageLoading")}</div>
-                      ) : (
-                        <>
-                          <div>
-                            {t("settings.zeroclawUsageTotalTokens", {
-                              count: zeroclawUsage?.totalTokens || 0,
-                            })}
-                          </div>
-                          <div>
-                            {t("settings.zeroclawUsageCalls", {
-                              count: zeroclawUsage?.totalCalls || 0,
-                            })}
-                          </div>
-                        </>
-                      )}
-                      <div>
-                        {t("settings.zeroclawEffectiveModelLabel", {
-                          model: zeroclawTargetText,
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </CardContent>
             </Card>
             )}
@@ -824,9 +769,11 @@ export function Settings({
             {showProfiles && (
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <CardTitle>{t('settings.modelProfiles')}</CardTitle>
-                  <Button size="sm" onClick={openAddProfile}>{t('settings.addProfile')}</Button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" onClick={openAddProfile}>{t('settings.addProfile')}</Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -836,119 +783,110 @@ export function Settings({
                   <p className="text-muted-foreground">{t('settings.noProfiles')}</p>
                 ) : null}
                 <div className="grid gap-2">
-                  {(profiles || []).map((profile) => (
-                    <div
-                      key={profile.id}
-                      className="border border-border p-2.5 rounded-lg"
-                    >
-                      <div className="flex justify-between items-center">
-                        <strong>{profile.provider}/{profile.model}</strong>
-                        {profile.enabled ? (
-                          <Badge className="bg-blue-500/10 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
-                            {t('settings.enabled')}
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400">
-                            {t('settings.disabled')}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-sm text-muted-foreground mt-1">
-                        {t('settings.apiKey')}: {maskedKeyMap.get(profile.id) || "..."}
-                      </div>
-                      {profile.baseUrl && (
-                        <div className="text-sm text-muted-foreground mt-0.5">
-                          URL: {profile.baseUrl}
+                  {(profiles || []).map((profile) => {
+                    const profileUi = getSettingsProfileUiState(profile);
+                    const credential = resolveProfileCredentialView(
+                      profile,
+                      resolvedCredentialMap.get(profile.id),
+                    );
+                    const statusLower = credential.status.trim().toLowerCase();
+                    const credentialStatusText =
+                      credential.kind === "oauth" && statusLower !== "..."
+                        ? (credential.resolved
+                          ? t("settings.credentialStatusOauthReady")
+                          : credential.status)
+                        : credential.status;
+                    const showCredentialRef = credential.kind === "env_ref";
+                    const showCredentialStatus = credential.kind !== "env_ref";
+                    return (
+                      <div
+                        key={profile.id}
+                        className="border border-border p-2.5 rounded-lg"
+                      >
+                        <div className="flex justify-between items-center">
+                          <strong>{profile.provider}/{profile.model}</strong>
+                          {profileUi.showEnabledBadge && profile.enabled ? (
+                            <Badge className="bg-blue-500/10 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
+                              {t('settings.enabled')}
+                            </Badge>
+                          ) : profileUi.showEnabledBadge ? (
+                            <Badge className="bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400">
+                              {t('settings.disabled')}
+                            </Badge>
+                          ) : null}
                         </div>
-                      )}
-                      <div className="flex gap-1.5 mt-1.5">
-                        {ENABLE_PROFILE_TEST_BUTTON && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            type="button"
-                            onClick={() => testProfile(profile)}
-                            disabled={testingProfileId === profile.id}
-                          >
-                            {testingProfileId === profile.id ? t('settings.testing') : t('settings.test')}
-                          </Button>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          {t('settings.credential')}: {t(`settings.credentialKind.${credential.kind}`)}
+                        </div>
+                        {showCredentialRef && (
+                          <div className="text-sm text-muted-foreground mt-0.5">
+                            {t("settings.credentialRef")}: {credential.authRef || "-"}
+                          </div>
                         )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          type="button"
-                          onClick={() => toggleProfileEnabled(profile)}
-                        >
-                          {profile.enabled ? t('settings.disable') : t('settings.enable')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          type="button"
-                          onClick={() => editProfile(profile)}
-                        >
-                          {t('settings.edit')}
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="destructive" type="button">
-                              {t('settings.delete')}
+                        {showCredentialStatus && (
+                          <div className="text-sm text-muted-foreground mt-0.5">
+                            {t("settings.credentialStatus")}: {credentialStatusText}
+                          </div>
+                        )}
+                        {profile.baseUrl && (
+                          <div className="text-sm text-muted-foreground mt-0.5">
+                            URL: {profile.baseUrl}
+                          </div>
+                        )}
+                        <div className="flex gap-1.5 mt-1.5">
+                          {profileUi.actions.includes("edit") ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              type="button"
+                              onClick={() => editProfile(profile)}
+                            >
+                              {t('settings.edit')}
                             </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>{t('settings.deleteProfileTitle')}</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                {t('settings.deleteProfileDescription', { name: `${profile.provider}/${profile.model}` })}
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>{t('settings.cancel')}</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                onClick={() => deleteProfile(profile.id)}
-                              >
-                                {t('settings.delete')}
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                          ) : null}
+                          {profileUi.actions.includes("delete") ? (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button size="sm" variant="destructive" type="button">
+                                  {t('settings.delete')}
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>{t('settings.deleteProfileTitle')}</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    {t('settings.deleteProfileDescription', { name: `${profile.provider}/${profile.model}` })}
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>{t('settings.cancel')}</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    onClick={() => deleteProfile(profile.id)}
+                                  >
+                                    {t('settings.delete')}
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
             )}
 
             {showPreferences && (
-              <Card>
-                <CardContent>
-                  <details className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-                    <summary className="cursor-pointer text-sm font-semibold text-foreground">
-                      {t("settings.alphaFeatures")}
-                    </summary>
-                    <div className="mt-3 space-y-3">
-                      <p className="text-xs text-muted-foreground">
-                        {t("settings.alphaFeaturesDescription")}
-                      </p>
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <Label className="text-sm font-medium">{t("settings.alphaEnableZeroclawUi")}</Label>
-                        <Checkbox
-                          checked={showZeroclawDoctorUi}
-                          onCheckedChange={(checked) => handleZeroclawDoctorUiToggle(checked === true)}
-                          aria-label={t("settings.alphaEnableZeroclawUi")}
-                          className="h-5 w-5"
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {t("settings.alphaEnableZeroclawUiHint")}
-                      </p>
-                    </div>
-                  </details>
-                </CardContent>
-              </Card>
+              <SettingsAlphaFeaturesCard
+                showSshTransferSpeedUi={showSshTransferSpeedUi}
+                onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
+              />
             )}
+
+            {showPreferences && <BugReportSettings />}
           </div>
 
       {message && (
@@ -958,7 +896,10 @@ export function Settings({
       {/* Add / Edit Profile Dialog */}
       <Dialog open={profileDialogOpen} onOpenChange={(open) => {
         setProfileDialogOpen(open);
-        if (!open) setForm(emptyForm());
+        if (!open) {
+          setCredentialSource("manual");
+          setForm(emptyForm());
+        }
       }}>
         <DialogContent>
           <DialogHeader>
@@ -969,13 +910,26 @@ export function Settings({
               <Label>{t('settings.provider')}</Label>
               <AutocompleteField
                 value={form.provider}
-                onChange={(val) =>
-                  setForm((p) => ({ ...p, provider: val, model: "" }))
-                }
+                onChange={(val) => {
+                  const nextSource: CredentialSource = providerUsesOAuthAuth(val)
+                    ? (credentialSource === "manual" ? "manual" : "oauth")
+                    : (credentialSource === "oauth" ? "env" : credentialSource);
+                  setCredentialSource(nextSource);
+                  setForm((p) => ({
+                    ...p,
+                    provider: val,
+                    model: "",
+                    authRef: p.id
+                      ? p.authRef
+                      : providerUsesOAuthAuth(val)
+                        ? defaultOauthAuthRef(val)
+                        : (nextSource === "env" ? (p.authRef || defaultEnvAuthRef(val)) : p.authRef),
+                  }));
+                }}
                 onFocus={ensureCatalog}
-                options={catalog.map((c) => ({
-                  value: c.provider,
-                  label: c.provider,
+                options={providerCandidates.map((provider) => ({
+                  value: provider,
+                  label: provider,
                 }))}
                 placeholder="e.g. openai"
               />
@@ -998,21 +952,95 @@ export function Settings({
             </div>
 
             <div className="space-y-1.5">
-              <Label>{t('settings.apiKey')}</Label>
-              <Input
-                type="password"
-                placeholder={form.id ? t('settings.apiKeyUnchanged') : authSuggestion?.hasKey ? t('settings.apiKeyOptional') : t('settings.apiKeyPlaceholder')}
-                value={form.apiKey}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, apiKey: e.target.value }))
-                }
-              />
-              {!form.id && authSuggestion?.hasKey && (
-                <p className="text-xs text-muted-foreground">
-                  {t('settings.keyAvailable', { source: authSuggestion.source })}
-                </p>
-              )}
+              <Label>{t('settings.credentialSource')}</Label>
+              <Select
+                value={credentialSource}
+                onValueChange={(val) => {
+                  const next = val as CredentialSource;
+                  if (next === "oauth" && !providerUsesOAuthAuth(form.provider)) {
+                    return;
+                  }
+                  setCredentialSource(next);
+                  setForm((p) => {
+                    if (next === "oauth") {
+                      const oauthRef = p.authRef.trim();
+                      return {
+                        ...p,
+                        apiKey: "",
+                        authRef: oauthRef && !isEnvVarLikeAuthRef(oauthRef)
+                          ? oauthRef
+                          : defaultOauthAuthRef(p.provider),
+                      };
+                    }
+                    if (next === "env") {
+                      const currentRef = p.authRef.trim();
+                      return {
+                        ...p,
+                        authRef: currentRef || defaultEnvAuthRef(p.provider),
+                      };
+                    }
+                    return p;
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {providerUsesOAuthAuth(form.provider) && (
+                    <SelectItem value="oauth">{t("settings.credentialSourceOauth")}</SelectItem>
+                  )}
+                  <SelectItem value="env">{t("settings.credentialSourceEnv")}</SelectItem>
+                  <SelectItem value="manual">{t("settings.credentialSourceManual")}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+
+            {credentialSource === "oauth" && providerUsesOAuthAuth(form.provider) && (
+              <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground space-y-2">
+                <p>{t("settings.oauthProviderHint", { provider: normalizeOauthProvider(form.provider) })}</p>
+                <p>{t("settings.oauthManualHint")}</p>
+              </div>
+            )}
+
+            {credentialSource === "env" && (
+              <div className="space-y-1.5">
+                <Label>{t('settings.authRef')}</Label>
+                <Input
+                  placeholder={defaultEnvAuthRef(form.provider) || "OPENAI_API_KEY"}
+                  value={form.authRef}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, authRef: e.target.value }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.credentialSourceEnvHint")}
+                </p>
+              </div>
+            )}
+
+            {credentialSource === "manual" && (
+              <div className="space-y-1.5">
+                <Label>{t('settings.apiKey')}</Label>
+                <Input
+                  type="password"
+                  placeholder={form.id
+                    ? t('settings.apiKeyUnchanged')
+                    : (authSuggestion?.hasKey || form.useCustomUrl || providerSupportsOptionalApiKey(form.provider))
+                      ? t('settings.apiKeyOptional')
+                      : t('settings.apiKeyPlaceholder')}
+                  value={form.apiKey}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, apiKey: e.target.value }))
+                  }
+                />
+                {!form.id && authSuggestion?.hasKey && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('settings.keyAvailable', { source: authSuggestion.source })}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center gap-2">
               <Checkbox
@@ -1037,17 +1065,6 @@ export function Settings({
                 />
               </div>
             )}
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="profile-enabled"
-                checked={form.enabled}
-                onCheckedChange={(checked) =>
-                  setForm((p) => ({ ...p, enabled: checked === true }))
-                }
-              />
-              <Label htmlFor="profile-enabled">{t('settings.profileEnabled')}</Label>
-            </div>
 
             <DialogFooter>
               {form.id && (

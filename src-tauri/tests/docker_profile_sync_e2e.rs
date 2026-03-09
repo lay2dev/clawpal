@@ -1,8 +1,9 @@
 //! E2E test: Docker Ubuntu container with OpenClaw config → ClawPal SSH connect
 //! → profile sync → doctor check.
 //!
-//! This test spins up a Docker container running Ubuntu with SSH and a fake
-//! `openclaw` CLI, seeds OpenClaw configuration files, then:
+//! This test spins up a Docker container running Ubuntu with SSH and a pinned,
+//! real `openclaw` CLI (installed from npm), seeds OpenClaw configuration files, then:
+//!
 //! 1. Connects via `SshConnectionPool` (password auth)
 //! 2. Reads the OpenClaw config from the container
 //! 3. Extracts model profiles from the config
@@ -27,7 +28,7 @@ const ROOT_PASSWORD: &str = "clawpal-e2e-pass";
 const TEST_ANTHROPIC_KEY: &str = "test-anthropic-profile-key";
 const TEST_OPENAI_KEY: &str = "test-openai-profile-key";
 
-/// Dockerfile content: Ubuntu + openssh-server + seeded OpenClaw config + fake openclaw CLI.
+/// Dockerfile: Ubuntu + openssh-server + Node.js + pinned real openclaw CLI + seeded OpenClaw config.
 const DOCKERFILE: &str = r#"
 FROM ubuntu:22.04
 
@@ -94,61 +95,19 @@ RUN cat > /root/.openclaw/agents/main/agent/auth-profiles.json <<'AUTHEOF'
 }
 AUTHEOF
 
-# Fake openclaw CLI that supports --version and doctor --json
-RUN cat > /usr/local/bin/openclaw <<'CLIEOF'
-#!/bin/bash
-case "$1" in
-  --version)
-    echo "openclaw 0.42.0-e2e-test"
-    ;;
-  doctor)
-    if echo "$@" | grep -q -- '--json'; then
-      cat <<'JSON'
-{
-  "ok": true,
-  "score": 100,
-  "issues": [],
-  "checks": [
-    {"id": "gateway", "label": "Gateway", "status": "ok"},
-    {"id": "config", "label": "Configuration", "status": "ok"},
-    {"id": "agents", "label": "Agents", "status": "ok"}
-  ]
-}
-JSON
-    else
-      echo "openclaw doctor: all checks passed"
-    fi
-    ;;
-  config)
-    if [ "$2" = "get" ] && [ "$3" = "agents" ] && echo "$@" | grep -q -- '--json'; then
-      cat <<'JSON'
-{
-  "list": [
-    {"id": "main", "model": "anthropic/claude-sonnet-4-20250514"}
-  ],
-  "defaults": {
-    "model": "anthropic/claude-sonnet-4-20250514"
-  }
-}
-JSON
-    else
-      echo "{}"
-    fi
-    ;;
-  agents)
-    if [ "$2" = "list" ] && echo "$@" | grep -q -- '--json'; then
-      echo '[{"id":"main","status":"active"}]'
-    else
-      echo "main (active)"
-    fi
-    ;;
-  *)
-    echo "openclaw: unknown command '$1'" >&2
-    exit 1
-    ;;
-esac
-CLIEOF
-RUN chmod +x /usr/local/bin/openclaw
+# Install Node.js (pinned) + openclaw CLI (pinned) for reproducible builds.
+# Node: official binary tarball — no apt source or remote script execution.
+# openclaw: exact published version — no floating @latest tag.
+ARG NODE_VERSION=24.13.0
+ARG OPENCLAW_VERSION=2026.3.2
+RUN apt-get update && \
+    apt-get install -y curl ca-certificates xz-utils && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      -o /tmp/node.tar.xz && \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.xz && \
+    npm install -g "openclaw@${OPENCLAW_VERSION}"
 
 # Set env vars that ClawPal profile sync checks
 RUN echo "export ANTHROPIC_API_KEY=ANTHROPIC_KEY" >> /root/.bashrc && \
@@ -396,9 +355,15 @@ async fn e2e_docker_profile_sync_and_doctor() {
         .await
         .expect("openclaw --version should succeed");
     assert_eq!(version_result.exit_code, 0);
+    // Version string comes from the real openclaw binary; just verify it's non-empty
+    // and looks like a semver or calver (e.g. "2026.3.2" or "1.2.3").
     assert!(
-        version_result.stdout.contains("0.42.0-e2e-test"),
-        "version output should contain expected version: {}",
+        !version_result.stdout.trim().is_empty(),
+        "openclaw --version should produce non-empty output"
+    );
+    assert!(
+        version_result.stdout.chars().any(|c| c.is_ascii_digit()),
+        "version output should contain a version number: {}",
         version_result.stdout.trim()
     );
     eprintln!("[e2e] OpenClaw version: {}", version_result.stdout.trim());

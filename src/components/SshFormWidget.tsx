@@ -10,6 +10,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { SshConfigHostSuggestion, SshHost } from "@/lib/types";
+import {
+  applySshConfigSuggestionToForm,
+  buildSshFormSubmission,
+  dedupeAndSortSshConfigHosts,
+  formatSshConfigSuggestionLabel,
+  resolveSshConfigPresetSelection,
+  SSH_CONFIG_MANUAL_ALIAS,
+  submitSshForm,
+} from "./ssh-form-helpers";
 
 interface SshFormWidgetProps {
   invokeId: string;
@@ -18,8 +27,15 @@ interface SshFormWidgetProps {
   onSubmit: (invokeId: string, host: SshHost) => void;
   onCancel: (invokeId: string) => void;
 }
-
-const SSH_CONFIG_MANUAL_ALIAS = "__manual__";
+export {
+  applySshConfigSuggestionToForm,
+  buildSshFormSubmission,
+  dedupeAndSortSshConfigHosts,
+  formatSshConfigSuggestionLabel,
+  resolveSshConfigPresetSelection,
+  SSH_CONFIG_MANUAL_ALIAS,
+  submitSshForm,
+};
 
 export function SshFormWidget({
   invokeId,
@@ -43,66 +59,45 @@ export function SshFormWidget({
     SSH_CONFIG_MANUAL_ALIAS,
   );
 
-  const filteredSshConfigHosts = useMemo(() => {
-    const seen = new Set<string>();
-    const sorted = [...sshConfigSuggestions]
-      .filter((item) => {
-        const key = item.hostAlias.trim();
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => a.hostAlias.localeCompare(b.hostAlias, undefined, { sensitivity: "base" }));
-    return sorted;
-  }, [sshConfigSuggestions]);
-
-  const applySshConfigSuggestion = (alias: string) => {
-    if (alias === SSH_CONFIG_MANUAL_ALIAS) {
-      setSelectedSshConfigAlias(SSH_CONFIG_MANUAL_ALIAS);
-      return;
-    }
-    const preset = filteredSshConfigHosts.find((item) => item.hostAlias === alias);
-    if (!preset) {
-      setSelectedSshConfigAlias(SSH_CONFIG_MANUAL_ALIAS);
-      return;
-    }
-    setSelectedSshConfigAlias(alias);
-    setHost(preset.hostAlias);
-    setUsername(preset.user ?? "");
-    setPort(String(preset.port ?? 22));
-    setKeyPath(preset.identityFile ?? "");
-    setPassword("");
-    setPassphrase("");
-    setAuthMethod("ssh_config");
-    setLabel(preset.hostAlias);
-  };
+  const filteredSshConfigHosts = useMemo(
+    () => dedupeAndSortSshConfigHosts(sshConfigSuggestions),
+    [sshConfigSuggestions],
+  );
 
   const isValid = host.trim().length > 0 && (authMethod !== "password" || password.length > 0);
-
-  const handleSubmit = () => {
-    if (!isValid) return;
-    onSubmit(invokeId, {
-      id: "",
-      label: label.trim() || host.trim(),
-      host: host.trim(),
-      port: parseInt(port, 10) || 22,
-      username: username.trim(),
-      authMethod,
-      keyPath: authMethod === "key" ? keyPath.trim() : undefined,
-      password: authMethod === "password" ? password : undefined,
-      passphrase: authMethod !== "password" && passphrase ? passphrase : undefined,
-    });
+  const suggestionSetters = {
+    setSelectedSshConfigAlias,
+    setHost,
+    setUsername,
+    setPort,
+    setKeyPath,
+    setPassword,
+    setPassphrase,
+    setAuthMethod,
+    setLabel,
+  } as const;
+  const submitParams = {
+    invokeId,
+    host,
+    port,
+    username,
+    authMethod,
+    keyPath,
+    password,
+    passphrase,
+    label,
+    onSubmit,
   };
 
   return (
-    <div className="rounded-lg border p-3 space-y-3 bg-[oklch(0.96_0_0)] dark:bg-muted/50">
+    <div className="min-w-0 rounded-lg border p-3 space-y-3 bg-[oklch(0.96_0_0)] dark:bg-muted/50">
       <div className="text-xs font-medium">{t("installChat.sshFormTitle")}</div>
       {filteredSshConfigHosts.length > 0 && (
         <div className="space-y-1">
           <label className="text-xs font-medium">{t("installChat.sshConfigPreset")}</label>
           <Select
             value={selectedSshConfigAlias}
-            onValueChange={applySshConfigSuggestion}
+            onValueChange={(alias) => applySshConfigSuggestionToForm(alias, filteredSshConfigHosts, suggestionSetters)}
           >
             <SelectTrigger className="h-8 text-sm">
               <SelectValue placeholder={t("installChat.sshConfigPresetPlaceholder")} />
@@ -113,10 +108,7 @@ export function SshFormWidget({
               </SelectItem>
               {filteredSshConfigHosts.map((item) => (
                 <SelectItem key={item.hostAlias} value={item.hostAlias}>
-                  {item.hostAlias}
-                  {item.hostName ? ` (${item.hostName})` : ""}
-                  {item.user ? ` • ${item.user}` : ""}
-                  {item.port && item.port !== 22 ? `:${item.port}` : ""}
+                  {formatSshConfigSuggestionLabel(item)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -124,8 +116,8 @@ export function SshFormWidget({
           <p className="text-xs text-muted-foreground">{t("installChat.sshConfigPresetHint")}</p>
         </div>
       )}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="col-span-2 space-y-1">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="min-w-0 space-y-1 sm:col-span-2">
           <label className="text-xs font-medium">{t("installChat.sshHost")}</label>
           <Input
             value={host}
@@ -134,7 +126,7 @@ export function SshFormWidget({
             className="h-8 text-sm"
           />
         </div>
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <label className="text-xs font-medium">{t("installChat.sshPort")}</label>
           <Input
             value={port}
@@ -214,7 +206,7 @@ export function SshFormWidget({
         />
       </div>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={handleSubmit} disabled={!isValid}>
+        <Button size="sm" onClick={() => submitSshForm(submitParams)} disabled={!isValid}>
           {t("installChat.submit")}
         </Button>
         <Button size="sm" variant="outline" onClick={() => onCancel(invokeId)}>

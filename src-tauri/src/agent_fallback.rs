@@ -1,7 +1,8 @@
+#[cfg(test)]
 use crate::json_util::extract_json_objects;
-use crate::runtime::zeroclaw::process::run_zeroclaw_message;
 use crate::ssh::SshConnectionPool;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use tauri::State;
 
@@ -41,6 +42,7 @@ struct OpenclawProbe {
     probe_error: Option<String>,
 }
 
+#[cfg(test)]
 fn parse_guidance_json(raw: &str) -> Option<GuidanceBody> {
     for cand in extract_json_objects(raw) {
         let Ok(v) = serde_json::from_str::<Value>(&cand) else {
@@ -98,10 +100,10 @@ fn rules_fallback(
                     .to_string(),
             actions: vec![
                 "重新进入该实例并等待 1-2 秒后自动刷新。".to_string(),
-                "若仍失败，打开 Doctor 让 Agent继续执行更细粒度修复。".to_string(),
+                "若仍失败，打开 Help 页面查看恢复建议并继续处理。".to_string(),
             ],
             structured_actions: vec![GuidanceAction {
-                label: "让小龙虾修复".to_string(),
+                label: "让 AI 继续排查".to_string(),
                 action_type: "doctor_handoff".to_string(),
                 tool: None,
                 args: None,
@@ -124,7 +126,7 @@ fn rules_fallback(
                 "如需更换密钥，前往能力档案页面更新对应的 Provider 配置。".to_string(),
             ],
             structured_actions: vec![GuidanceAction {
-                label: "让小龙虾修复".to_string(),
+                label: "让 AI 继续排查".to_string(),
                 action_type: "doctor_handoff".to_string(),
                 tool: None,
                 args: None,
@@ -143,10 +145,10 @@ fn rules_fallback(
             summary: "实例对应的 Docker 容器已不存在，可能已被手动删除。".to_string(),
             actions: vec![
                 "重新安装该实例，或从实例列表中移除。".to_string(),
-                "打开 Doctor 页面让小龙虾诊断并修复。".to_string(),
+                "打开 Help 页面查看恢复建议并继续处理。".to_string(),
             ],
             structured_actions: vec![GuidanceAction {
-                label: "让小龙虾修复".to_string(),
+                label: "让 AI 继续排查".to_string(),
                 action_type: "doctor_handoff".to_string(),
                 tool: None,
                 args: None,
@@ -183,12 +185,12 @@ fn rules_fallback(
             actions.push("在目标实例执行 openclaw 安装/修复脚本，并重新登录 shell。".to_string());
             actions.push("确认 `command -v openclaw` 可返回路径后，再重试当前操作。".to_string());
         }
-        actions.push("进入 Doctor 页面并点击诊断，让内置 Agent 继续自动排查。".to_string());
+        actions.push("进入 Help 页面查看恢复建议并继续排查。".to_string());
         return GuidanceBody {
             summary,
             actions,
             structured_actions: vec![GuidanceAction {
-                label: "让小龙虾修复".to_string(),
+                label: "让 AI 继续排查".to_string(),
                 action_type: "doctor_handoff".to_string(),
                 tool: None,
                 args: None,
@@ -204,10 +206,10 @@ fn rules_fallback(
                 "确认 ~/.ssh/config 里的 User 与目标实例实际登录用户一致（例如 root 账号通常被禁用）。".to_string(),
                 "确认对应 IdentityFile 的公钥已写入远端 ~/.ssh/authorized_keys。".to_string(),
                 "可先在终端运行 `ssh <alias>` 验证后再返回重试。".to_string(),
-                "若仍失败，请先打开 Doctor 页面执行自动诊断并按建议修复。".to_string(),
+                "若仍失败，请先打开 Help 页面查看恢复建议并继续处理。".to_string(),
             ],
             structured_actions: vec![GuidanceAction {
-                label: "让小龙虾修复".to_string(),
+                label: "让 AI 继续排查".to_string(),
                 action_type: "doctor_handoff".to_string(),
                 tool: None,
                 args: None,
@@ -216,6 +218,35 @@ fn rules_fallback(
             }],
         };
     }
+    if lower.contains("russh exec timed out") || lower.contains("exec timed out after") {
+        return GuidanceBody {
+            summary: "远程修复命令执行超时，ClawPal 暂时无法确认最终结果。".to_string(),
+            actions: vec![
+                "先打开 Gateway Logs，查看最近一次修复是否已经完成。".to_string(),
+                "再检查主配置文件和 gateway status，确认 Gateway 是否已恢复健康。".to_string(),
+                "如果仍未恢复，再把 ClawPal / Helper / Gateway 日志交给开发者分析。".to_string(),
+            ],
+            structured_actions: vec![
+                GuidanceAction {
+                    label: "查看 Gateway Logs".to_string(),
+                    action_type: "view_logs".to_string(),
+                    tool: None,
+                    args: None,
+                    invoke_type: None,
+                    context: Some("remote repair timeout".to_string()),
+                },
+                GuidanceAction {
+                    label: "让 AI 继续排查".to_string(),
+                    action_type: "doctor_handoff".to_string(),
+                    tool: None,
+                    args: None,
+                    invoke_type: None,
+                    context: Some("Remote repair command timed out".to_string()),
+                },
+            ],
+        };
+    }
+
     if lower.contains("not connected to remote")
         || lower.contains("ssh")
         || lower.contains("connection refused")
@@ -241,7 +272,7 @@ fn rules_fallback(
             actions: vec![
                 format!("先在实例页重连 {target_hint} 的 SSH 并确认网络可达。"),
                 "执行一次健康检查，确认网关和配置目录可访问。".to_string(),
-                "若仍失败，请先打开 Doctor 页面执行自动诊断并按建议修复。".to_string(),
+                "若仍失败，请先打开 Help 页面查看恢复建议并继续处理。".to_string(),
             ],
             structured_actions: vec![
                 GuidanceAction {
@@ -253,7 +284,7 @@ fn rules_fallback(
                     context: None,
                 },
                 GuidanceAction {
-                    label: "让小龙虾修复".to_string(),
+                    label: "让 AI 继续排查".to_string(),
                     action_type: "doctor_handoff".to_string(),
                     tool: None,
                     args: None,
@@ -264,14 +295,39 @@ fn rules_fallback(
         };
     }
 
+    if operation == "diagnoseDoctorAssistant" || operation == "repairDoctorAssistant" {
+        let verb = if operation == "repairDoctorAssistant" {
+            "修复"
+        } else {
+            "诊断"
+        };
+        return GuidanceBody {
+            summary: format!(
+                "Doctor 页面{verb}在 `{transport}` 环境执行失败，请打开日志并交给开发者分析。"
+            ),
+            actions: vec![
+                "打开 Gateway Logs，查看最近一次启动或修复失败输出。".to_string(),
+                "一并收集 ClawPal / Helper / Gateway 日志，交给开发者分析。".to_string(),
+            ],
+            structured_actions: vec![GuidanceAction {
+                label: "让 AI 继续排查".to_string(),
+                action_type: "doctor_handoff".to_string(),
+                tool: None,
+                args: None,
+                invoke_type: None,
+                context: Some(format!("Doctor 页面{verb}失败: {transport}")),
+            }],
+        };
+    }
+
     GuidanceBody {
         summary: format!("操作 `{operation}` 在 `{transport}` 环境执行失败，建议先做诊断再继续。"),
         actions: vec![
-            "打开 Doctor 页面运行诊断，获取可执行修复步骤。".to_string(),
+            "打开 Help 页面查看恢复建议，获取可执行修复步骤。".to_string(),
             "按诊断结果优先处理阻塞项后，再重试当前操作。".to_string(),
         ],
         structured_actions: vec![GuidanceAction {
-            label: "让小龙虾修复".to_string(),
+            label: "让 AI 继续排查".to_string(),
             action_type: "doctor_handoff".to_string(),
             tool: None,
             args: None,
@@ -282,7 +338,7 @@ fn rules_fallback(
 }
 
 /// Deterministic guidance for when openclaw is not installed locally.
-/// This avoids sending the error to zeroclaw (which itself requires the binary)
+/// This avoids cascading into extra runtime dependencies when local OpenClaw is absent.
 /// and prevents hallucinated diagnoses like REGISTRY_CORRUPT.
 fn local_openclaw_not_installed_guidance(operation: &str) -> GuidanceBody {
     GuidanceBody {
@@ -371,10 +427,8 @@ pub async fn explain_operation_error(
 ) -> Result<ErrorGuidance, String> {
     let lower_error = error.to_lowercase();
 
-    // Fast path: when openclaw is not installed locally, skip the LLM call
-    // entirely and return deterministic guidance. Without the binary, zeroclaw
-    // cannot run either, so the LLM would hallucinate a wrong diagnosis
-    // (e.g. REGISTRY_CORRUPT).
+    // Fast path: when openclaw is not installed locally, return deterministic
+    // guidance immediately instead of depending on any extra assistant runtime.
     if transport != "remote_ssh" && looks_like_openclaw_binary_missing(&lower_error) {
         let guidance = local_openclaw_not_installed_guidance(&operation);
         let message = compose_message(&guidance.summary, &guidance.actions);
@@ -394,41 +448,8 @@ pub async fn explain_operation_error(
     } else {
         None
     };
-    let language = language.unwrap_or_else(|| "en".to_string());
-    let prefer_zh = language.to_lowercase().starts_with("zh");
-    let language_rule = if prefer_zh {
-        "Simplified Chinese (简体中文)"
-    } else {
-        "English"
-    };
-    let template = crate::prompt_templates::error_guidance_operation_fallback();
-    let probe_json = serde_json::to_string(&probe).unwrap_or_else(|_| "null".to_string());
-    let prompt = crate::prompt_templates::render_template(
-        &template,
-        &[
-            ("{{language_rule}}", language_rule),
-            ("{{instance_id}}", &instance_id),
-            ("{{transport}}", &transport),
-            ("{{operation}}", &operation),
-            ("{{error}}", &error),
-            ("{{probe}}", &probe_json),
-            ("{{language}}", &language),
-        ],
-    );
-
-    let fallback_scope = format!("fallback-{}", uuid::Uuid::new_v4());
-    let from_agent = run_zeroclaw_message(&prompt, &instance_id, &fallback_scope)
-        .ok()
-        .and_then(|raw| parse_guidance_json(&raw));
-
-    let (guidance, source) = if let Some(parsed) = from_agent {
-        (parsed, "zeroclaw".to_string())
-    } else {
-        (
-            rules_fallback(&error, &transport, &operation, probe.as_ref()),
-            "rules".to_string(),
-        )
-    };
+    let _language = language.unwrap_or_else(|| "en".to_string());
+    let guidance = rules_fallback(&error, &transport, &operation, probe.as_ref());
 
     let message = compose_message(&guidance.summary, &guidance.actions);
     Ok(ErrorGuidance {
@@ -436,13 +457,16 @@ pub async fn explain_operation_error(
         summary: guidance.summary,
         actions: guidance.actions,
         structured_actions: guidance.structured_actions,
-        source,
+        source: "rules".to_string(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_guidance_json, rules_fallback, GuidanceAction, OpenclawProbe};
+    use super::{
+        local_openclaw_not_installed_guidance, parse_guidance_json, rules_fallback, GuidanceAction,
+        OpenclawProbe,
+    };
 
     #[test]
     fn parse_guidance_json_accepts_embedded_json() {
@@ -470,7 +494,7 @@ mod tests {
     #[test]
     fn guidance_action_serializes_doctor_handoff() {
         let action = GuidanceAction {
-            label: "让小龙虾修复".to_string(),
+            label: "让 AI 继续排查".to_string(),
             action_type: "doctor_handoff".to_string(),
             tool: None,
             args: None,

@@ -2,15 +2,11 @@ use clawpal::cli_runner::set_active_clawpal_data_override;
 use clawpal::cli_runner::set_active_openclaw_home_override;
 use clawpal::install::commands::{
     create_session_for_test, failed_state_for_test, get_session_for_test, list_methods_for_test,
-    orchestrator_next_for_test, orchestrator_next_with_sidecar_for_test,
-    run_local_precheck_for_test, run_step_for_test,
+    orchestrator_next_for_test, run_local_precheck_for_test, run_step_for_test,
 };
 use clawpal::install::runners::docker::docker_verify_compose_command_for_test;
 use clawpal::install::types::InstallSession;
 use clawpal::models::resolve_paths;
-use std::sync::Mutex;
-
-static DECIDER_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn install_session_serialization_roundtrip() {
@@ -105,68 +101,36 @@ async fn list_methods_returns_all_four_methods() {
 }
 
 #[tokio::test]
-async fn orchestrator_next_returns_error_without_decider() {
-    std::env::remove_var("CLAWPAL_ZEROCLAW_DECIDER");
+async fn orchestrator_next_uses_builtin_rules() {
     let session = create_session_for_test("docker")
         .await
         .expect("create session should succeed");
     let decision = orchestrator_next_for_test(&session.id, "install:docker")
         .await
         .expect("orchestrator next should succeed");
-    assert_eq!(decision.source, "error");
-    assert!(decision.step.is_none());
-    assert!(decision.error_code.is_some());
-    assert!(decision.action_hint.is_some());
+    assert_eq!(decision.source, "builtin-rules");
+    assert_eq!(decision.step.as_deref(), Some("precheck"));
+    assert!(decision.error_code.is_none());
+    assert!(decision.action_hint.is_none());
 }
 
-#[cfg(not(target_os = "windows"))]
 #[tokio::test]
-async fn orchestrator_sidecar_timeout_returns_error_decision() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let _guard = DECIDER_ENV_LOCK.lock().expect("lock env guard");
-    let session = create_session_for_test("docker")
+async fn orchestrator_next_keeps_current_running_step() {
+    let session = create_session_for_test("local")
         .await
         .expect("create session should succeed");
-
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("clawpal-install-timeout-{suffix}"));
-    fs::create_dir_all(&dir).expect("create temp dir");
-    let script_path = dir.join("slow-decider.sh");
-    fs::write(
-        &script_path,
-        "#!/bin/sh\nsleep 2\necho '{\"step\":\"precheck\",\"reason\":\"slow\"}'\n",
-    )
-    .expect("write script");
-    let mut perms = fs::metadata(&script_path)
-        .expect("stat script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod script");
-
-    std::env::set_var("CLAWPAL_ZEROCLAW_DECIDER", &script_path);
-    std::env::set_var("CLAWPAL_ZEROCLAW_TIMEOUT_SECS", "1");
-    let decision = orchestrator_next_with_sidecar_for_test(&session.id, "install:docker")
+    let _ = run_step_for_test(&session.id, "precheck")
         .await
-        .expect("orchestrator should return fallback decision");
-    std::env::remove_var("CLAWPAL_ZEROCLAW_DECIDER");
-    std::env::remove_var("CLAWPAL_ZEROCLAW_TIMEOUT_SECS");
+        .expect("precheck should execute");
 
-    assert_eq!(decision.source, "error");
-    assert!(
-        decision.reason.to_lowercase().contains("timed out"),
-        "reason={}",
-        decision.reason
-    );
-    assert_eq!(decision.error_code.as_deref(), Some("network_error"));
-
-    let _ = fs::remove_file(&script_path);
-    let _ = fs::remove_dir_all(&dir);
+    let refreshed = get_session_for_test(&session.id)
+        .await
+        .expect("get session should succeed");
+    let decision = orchestrator_next_for_test(&refreshed.id, "install:local")
+        .await
+        .expect("orchestrator should return builtin decision");
+    assert_eq!(decision.source, "builtin-rules");
+    assert_eq!(decision.step.as_deref(), Some("install"));
 }
 
 #[tokio::test]

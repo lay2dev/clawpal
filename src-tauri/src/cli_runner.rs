@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Instant;
 
 use clawpal_core::openclaw::OpenclawCli;
 use serde::{Deserialize, Serialize};
@@ -110,11 +111,60 @@ fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, Str
         }
     }
 
-    cmd_str.push_str(
-        "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN=\"$(command -v openclaw)\"; \
-         else echo \"openclaw command not found (PATH=$PATH SHELL=$SHELL)\" >&2; exit 127; fi; \
-         \"$OPENCLAW_BIN\"",
-    );
+    cmd_str.push_str(concat!(
+        "clawpal_find_openclaw() { ",
+        "if command -v openclaw >/dev/null 2>&1; then command -v openclaw; return 0; fi; ",
+        "for cand in ",
+        "\"$HOME/.npm-global/bin/openclaw\" ",
+        "\"$HOME/.local/bin/openclaw\" ",
+        "\"$HOME/.bun/bin/openclaw\" ",
+        "\"$HOME/.cargo/bin/openclaw\" ",
+        "\"/usr/local/bin/openclaw\" ",
+        "\"/opt/homebrew/bin/openclaw\" ",
+        "\"/usr/bin/openclaw\"; do ",
+        "[ -x \"$cand\" ] && { printf '%s' \"$cand\"; return 0; }; ",
+        "done; ",
+        "return 1; ",
+        "}; ",
+        "clawpal_install_openclaw() { ",
+        "platform=\"$(uname -s 2>/dev/null || printf unknown)\"; ",
+        "if [ \"$platform\" = \"Linux\" ] || [ \"$platform\" = \"Darwin\" ] || grep -qi microsoft /proc/version 2>/dev/null; then ",
+        "mkdir -p \"$HOME/.clawpal/install/cache\" && INSTALLER=\"$HOME/.clawpal/install/cache/openclaw-install.sh\" && ",
+        "if command -v curl >/dev/null 2>&1; then ",
+        "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$INSTALLER\"; ",
+        "elif command -v wget >/dev/null 2>&1; then ",
+        "wget -qO \"$INSTALLER\" https://openclaw.ai/install.sh; ",
+        "else ",
+        "echo 'openclaw install failed: curl or wget is required' >&2; return 1; ",
+        "fi && bash \"$INSTALLER\" --no-prompt --no-onboard; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v powershell.exe >/dev/null 2>&1; then ",
+        "powershell.exe -NoProfile -Command \"& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod npm -NoOnboard\"; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v powershell >/dev/null 2>&1; then ",
+        "powershell -NoProfile -Command \"& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod npm -NoOnboard\"; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v cmd.exe >/dev/null 2>&1; then ",
+        "cmd.exe /c \"curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && install.cmd && del install.cmd\"; ",
+        "return $?; ",
+        "fi; ",
+        "echo \"openclaw command not found after probe/auto-install (PATH=$PATH SHELL=$SHELL PLATFORM=$platform)\" >&2; ",
+        "return 127; ",
+        "}; ",
+        "OPENCLAW_BIN=\"$(clawpal_find_openclaw 2>/dev/null || true)\"; ",
+        "if [ -z \"$OPENCLAW_BIN\" ]; then ",
+        "clawpal_install_openclaw || exit $?; ",
+        "OPENCLAW_BIN=\"$(clawpal_find_openclaw 2>/dev/null || true)\"; ",
+        "fi; ",
+        "if [ -z \"$OPENCLAW_BIN\" ]; then ",
+        "echo \"openclaw command not found after auto-install (PATH=$PATH SHELL=$SHELL)\" >&2; ",
+        "exit 127; ",
+        "fi; ",
+        "\"$OPENCLAW_BIN\""
+    ));
     for arg in args {
         cmd_str.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
     }
@@ -128,12 +178,17 @@ pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn build_remote_openclaw_command_reports_diagnostic_context_when_missing() {
         let cmd = build_remote_openclaw_command(&["agents", "list", "--json"], None);
-        assert!(cmd.contains("command -v openclaw"));
-        assert!(cmd.contains("openclaw command not found (PATH=$PATH SHELL=$SHELL)"));
+        assert!(cmd.contains("clawpal_find_openclaw"));
+        assert!(cmd.contains("https://openclaw.ai/install.sh"));
+        assert!(cmd.contains("--no-prompt --no-onboard"));
+        assert!(cmd.contains("https://openclaw.ai/install.ps1"));
+        assert!(cmd.contains("install.cmd"));
+        assert!(cmd.contains("openclaw command not found after auto-install"));
     }
 
     #[test]
@@ -143,6 +198,196 @@ mod tests {
         let cmd = build_remote_openclaw_command(&["config", "get", "a'b"], Some(&env));
         assert!(cmd.contains("export OPENCLAW_HOME='/tmp/a'\\''b';"));
         assert!(cmd.contains(" 'a'\\''b'"));
+    }
+
+    #[test]
+    fn preview_direct_apply_handles_config_set_and_unset_with_arrays() {
+        let mut config = json!({
+            "agents": {
+                "list": [
+                    {"id": "main", "model": {"primary": "old/model"}}
+                ]
+            }
+        });
+
+        let set_cmd = PendingCommand {
+            id: "1".into(),
+            label: "set".into(),
+            command: vec![
+                "openclaw".into(),
+                "config".into(),
+                "set".into(),
+                "agents.list.0.model.primary".into(),
+                "new/model".into(),
+            ],
+            created_at: String::new(),
+        };
+        let unset_cmd = PendingCommand {
+            id: "2".into(),
+            label: "unset".into(),
+            command: vec![
+                "openclaw".into(),
+                "config".into(),
+                "unset".into(),
+                "agents.list.0.model.primary".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let domains = apply_direct_preview_command(&mut config, &set_cmd)
+            .expect("set should succeed")
+            .expect("must be direct");
+        assert!(domains.agents);
+        assert_eq!(
+            config
+                .pointer("/agents/list/0/model/primary")
+                .and_then(Value::as_str),
+            Some("new/model")
+        );
+
+        let domains = apply_direct_preview_command(&mut config, &unset_cmd)
+            .expect("unset should succeed")
+            .expect("must be direct");
+        assert!(domains.agents);
+        assert!(config.pointer("/agents/list/0/model/primary").is_none());
+    }
+
+    #[test]
+    fn preview_direct_apply_supports_json_payloads_and_root_replace() {
+        let mut config = json!({"gateway": {"port": 18789}});
+        let set_root_cmd = PendingCommand {
+            id: "1".into(),
+            label: "replace".into(),
+            command: vec![
+                "openclaw".into(),
+                "config".into(),
+                "set".into(),
+                ".".into(),
+                "{\"gateway\":{\"port\":19789},\"bindings\":[]}".into(),
+                "--json".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let domains = apply_direct_preview_command(&mut config, &set_root_cmd)
+            .expect("root replace should succeed")
+            .expect("must be direct");
+        assert!(domains.generic);
+        assert_eq!(config["gateway"]["port"], json!(19789));
+        assert_eq!(config["bindings"], json!([]));
+    }
+
+    #[test]
+    fn preview_direct_apply_supports_agents_add_and_delete() {
+        let mut config = json!({
+            "agents": {
+                "list": [
+                    {"id": "main"}
+                ]
+            }
+        });
+        let add_cmd = PendingCommand {
+            id: "1".into(),
+            label: "add".into(),
+            command: vec![
+                "openclaw".into(),
+                "agents".into(),
+                "add".into(),
+                "helper".into(),
+                "--non-interactive".into(),
+                "--model".into(),
+                "openai/gpt-5".into(),
+                "--workspace".into(),
+                "~/.openclaw/workspaces/helper".into(),
+            ],
+            created_at: String::new(),
+        };
+        let delete_cmd = PendingCommand {
+            id: "2".into(),
+            label: "delete".into(),
+            command: vec![
+                "openclaw".into(),
+                "agents".into(),
+                "delete".into(),
+                "helper".into(),
+                "--force".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let domains = apply_direct_preview_command(&mut config, &add_cmd)
+            .expect("add should succeed")
+            .expect("must be direct");
+        assert!(domains.agents);
+        let helper = config
+            .pointer("/agents/list")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some("helper"))
+            })
+            .expect("helper agent");
+        assert_eq!(helper["model"], json!("openai/gpt-5"));
+        assert_eq!(helper["workspace"], json!("~/.openclaw/workspaces/helper"));
+
+        let domains = apply_direct_preview_command(&mut config, &delete_cmd)
+            .expect("delete should succeed")
+            .expect("must be direct");
+        assert!(domains.agents);
+        assert!(config
+            .pointer("/agents/list")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .all(|entry| entry.get("id").and_then(Value::as_str) != Some("helper")));
+    }
+
+    #[test]
+    fn preview_direct_apply_returns_none_for_unknown_commands() {
+        let mut config = json!({});
+        let unknown_cmd = PendingCommand {
+            id: "1".into(),
+            label: "fallback".into(),
+            command: vec!["openclaw".into(), "gateway".into(), "restart".into()],
+            created_at: String::new(),
+        };
+
+        let result = apply_direct_preview_command(&mut config, &unknown_cmd)
+            .expect("parsing should succeed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn preview_side_effect_warning_marks_agent_commands() {
+        let add_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Create agent: helper".into(),
+            command: vec![
+                "openclaw".into(),
+                "agents".into(),
+                "add".into(),
+                "helper".into(),
+            ],
+            created_at: String::new(),
+        };
+        let delete_cmd = PendingCommand {
+            id: "2".into(),
+            label: "Delete agent: helper".into(),
+            command: vec![
+                "openclaw".into(),
+                "agents".into(),
+                "delete".into(),
+                "helper".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        assert!(preview_side_effect_warning(&add_cmd)
+            .expect("add warning")
+            .contains("workspace/filesystem setup"));
+        assert!(preview_side_effect_warning(&delete_cmd)
+            .expect("delete warning")
+            .contains("filesystem cleanup"));
     }
 }
 
@@ -258,12 +503,430 @@ pub fn queued_commands_count(queue: tauri::State<CommandQueue>) -> Result<usize,
 // Preview — sandbox execution with OPENCLAW_HOME
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, Default)]
+struct PreviewTouchedDomains {
+    agents: bool,
+    channels: bool,
+    bindings: bool,
+    generic: bool,
+}
+
+impl PreviewTouchedDomains {
+    fn mark_path(&mut self, path: &str) {
+        let normalized = path.trim();
+        if normalized.is_empty() || normalized == "." {
+            self.generic = true;
+            return;
+        }
+        if normalized == "bindings" || normalized.starts_with("bindings.") {
+            self.bindings = true;
+            return;
+        }
+        if normalized == "channels" || normalized.starts_with("channels.") {
+            self.channels = true;
+            return;
+        }
+        if normalized == "agents" || normalized.starts_with("agents.") {
+            self.agents = true;
+            return;
+        }
+        self.generic = true;
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.agents |= other.agents;
+        self.channels |= other.channels;
+        self.bindings |= other.bindings;
+        self.generic |= other.generic;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewValidationTarget {
+    Agents,
+    Channels,
+    Bindings,
+    Generic,
+}
+
+impl PreviewValidationTarget {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Agents => "agents",
+            Self::Channels => "channels",
+            Self::Bindings => "bindings",
+            Self::Generic => "config",
+        }
+    }
+
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Agents => &["agents", "list", "--json"],
+            Self::Channels => &["config", "get", "channels", "--json"],
+            Self::Bindings => &["config", "get", "bindings", "--json"],
+            Self::Generic => &["config", "get", "agents", "--json"],
+        }
+    }
+}
+
+fn preview_validation_targets(touched: PreviewTouchedDomains) -> Vec<PreviewValidationTarget> {
+    let mut targets = Vec::new();
+    if touched.agents {
+        targets.push(PreviewValidationTarget::Agents);
+    }
+    if touched.channels {
+        targets.push(PreviewValidationTarget::Channels);
+    }
+    if touched.bindings {
+        targets.push(PreviewValidationTarget::Bindings);
+    }
+    if touched.generic || targets.is_empty() {
+        targets.push(PreviewValidationTarget::Generic);
+    }
+    targets
+}
+
+fn log_preview_stage(
+    scope: &str,
+    host_id: Option<&str>,
+    queue_size: usize,
+    stage: &str,
+    outcome: &str,
+    elapsed_ms: u128,
+    detail: Option<&str>,
+) {
+    let mut line = format!(
+        "[preview] scope={scope} queueSize={queue_size} stage={stage} outcome={outcome} elapsedMs={elapsed_ms}"
+    );
+    if let Some(host) = host_id {
+        line.push_str(&format!(" hostId={host}"));
+    }
+    if let Some(extra) = detail.map(str::trim).filter(|s| !s.is_empty()) {
+        let compact = extra.replace('\n', " ").replace('\r', " ");
+        line.push_str(&format!(" detail={compact}"));
+    }
+    crate::logging::log_info(&line);
+}
+
+fn parse_preview_config(raw: &str) -> Value {
+    clawpal_core::config::parse_config_json5(raw)
+}
+
+fn render_preview_config(config: &Value) -> Result<String, String> {
+    clawpal_core::doctor::render_json_document(config, "preview config")
+}
+
+fn normalize_config_for_preview(raw: &str) -> String {
+    fn sort_value(v: &Value) -> Value {
+        match v {
+            Value::Object(map) => {
+                let sorted: serde_json::Map<String, Value> = map
+                    .iter()
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), sort_value(v)))
+                    .collect();
+                Value::Object(sorted)
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(sort_value).collect()),
+            other => other.clone(),
+        }
+    }
+
+    match serde_json::from_str::<Value>(raw) {
+        Ok(v) => serde_json::to_string_pretty(&sort_value(&v)).unwrap_or_else(|_| raw.to_string()),
+        Err(_) => raw.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreviewPathSegment {
+    Key(String),
+    Index(usize),
+}
+
+fn parse_preview_path(path: &str) -> Vec<PreviewPathSegment> {
+    path.split('.')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(|segment| match segment.parse::<usize>() {
+            Ok(index) => PreviewPathSegment::Index(index),
+            Err(_) => PreviewPathSegment::Key(segment.to_string()),
+        })
+        .collect()
+}
+
+fn ensure_preview_child(next: Option<&PreviewPathSegment>) -> Value {
+    match next {
+        Some(PreviewPathSegment::Index(_)) => Value::Array(Vec::new()),
+        _ => Value::Object(Default::default()),
+    }
+}
+
+fn preview_upsert_path(
+    cursor: &mut Value,
+    segments: &[PreviewPathSegment],
+    next_value: Value,
+) -> Result<(), String> {
+    if segments.is_empty() {
+        *cursor = next_value;
+        return Ok(());
+    }
+
+    match &segments[0] {
+        PreviewPathSegment::Key(key) => {
+            if !cursor.is_object() {
+                if cursor.is_null() {
+                    *cursor = Value::Object(Default::default());
+                } else {
+                    return Err(format!("path segment '{key}' is not an object"));
+                }
+            }
+
+            let obj = cursor
+                .as_object_mut()
+                .ok_or_else(|| format!("path segment '{key}' is not an object"))?;
+            if segments.len() == 1 {
+                obj.insert(key.clone(), next_value);
+                return Ok(());
+            }
+            let entry = obj
+                .entry(key.clone())
+                .or_insert_with(|| ensure_preview_child(segments.get(1)));
+            if entry.is_null() {
+                *entry = ensure_preview_child(segments.get(1));
+            }
+            preview_upsert_path(entry, &segments[1..], next_value)
+        }
+        PreviewPathSegment::Index(index) => {
+            if !cursor.is_array() {
+                if cursor.is_null() {
+                    *cursor = Value::Array(Vec::new());
+                } else {
+                    return Err(format!("path segment '{index}' is not an array"));
+                }
+            }
+
+            let arr = cursor
+                .as_array_mut()
+                .ok_or_else(|| format!("path segment '{index}' is not an array"))?;
+            while arr.len() <= *index {
+                arr.push(ensure_preview_child(segments.get(1)));
+            }
+            if segments.len() == 1 {
+                arr[*index] = next_value;
+                return Ok(());
+            }
+            if arr[*index].is_null() {
+                arr[*index] = ensure_preview_child(segments.get(1));
+            }
+            preview_upsert_path(&mut arr[*index], &segments[1..], next_value)
+        }
+    }
+}
+
+fn preview_delete_path(cursor: &mut Value, segments: &[PreviewPathSegment]) -> bool {
+    if segments.is_empty() {
+        return false;
+    }
+
+    match &segments[0] {
+        PreviewPathSegment::Key(key) => {
+            let Some(obj) = cursor.as_object_mut() else {
+                return false;
+            };
+            if segments.len() == 1 {
+                return obj.remove(key).is_some();
+            }
+            let Some(next) = obj.get_mut(key) else {
+                return false;
+            };
+            preview_delete_path(next, &segments[1..])
+        }
+        PreviewPathSegment::Index(index) => {
+            let Some(arr) = cursor.as_array_mut() else {
+                return false;
+            };
+            if *index >= arr.len() {
+                return false;
+            }
+            if segments.len() == 1 {
+                arr.remove(*index);
+                return true;
+            }
+            preview_delete_path(&mut arr[*index], &segments[1..])
+        }
+    }
+}
+
+fn set_preview_path_value(config: &mut Value, path: &str, value: Value) -> Result<(), String> {
+    if path.trim().is_empty() || path.trim() == "." {
+        *config = value;
+        return Ok(());
+    }
+    let segments = parse_preview_path(path);
+    if segments.is_empty() {
+        *config = value;
+        return Ok(());
+    }
+    preview_upsert_path(config, &segments, value)
+}
+
+fn delete_preview_path_value(config: &mut Value, path: &str) -> bool {
+    if path.trim().is_empty() || path.trim() == "." {
+        *config = Value::Object(Default::default());
+        return true;
+    }
+    let segments = parse_preview_path(path);
+    if segments.is_empty() {
+        *config = Value::Object(Default::default());
+        return true;
+    }
+    preview_delete_path(config, &segments)
+}
+
+fn ensure_preview_agents_list(config: &mut Value) -> Result<&mut Vec<Value>, String> {
+    if config.get("agents").is_none() {
+        set_preview_path_value(config, "agents", Value::Object(Default::default()))?;
+    }
+    if config.pointer("/agents/list").is_none() {
+        set_preview_path_value(config, "agents.list", Value::Array(Vec::new()))?;
+    }
+    config
+        .pointer_mut("/agents/list")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "agents.list is not an array".to_string())
+}
+
+fn apply_direct_preview_command(
+    config: &mut Value,
+    cmd: &PendingCommand,
+) -> Result<Option<PreviewTouchedDomains>, String> {
+    let Some(first) = cmd.command.first().map(|s| s.as_str()) else {
+        return Ok(None);
+    };
+
+    match first {
+        "__config_write__" | "__rollback__" => {
+            let Some(content) = cmd.command.get(1) else {
+                return Err(format!("{}: missing config payload", cmd.label));
+            };
+            *config = parse_preview_config(content);
+            let mut touched = PreviewTouchedDomains::default();
+            touched.generic = true;
+            return Ok(Some(touched));
+        }
+        "openclaw" => {}
+        _ => return Ok(None),
+    }
+
+    let args = &cmd.command[1..];
+    let Some(subcommand_idx) = args
+        .iter()
+        .position(|arg| arg == "config" || arg == "agents")
+    else {
+        return Ok(None);
+    };
+    let command = &args[subcommand_idx..];
+    match command {
+        [action, op, path, value, rest @ ..] if action == "config" && op == "set" => {
+            let parsed_value = if rest.iter().any(|arg| arg == "--json") {
+                serde_json::from_str::<Value>(value)
+                    .or_else(|_| json5::from_str::<Value>(value))
+                    .map_err(|e| format!("{}: invalid JSON value for {path}: {e}", cmd.label))?
+            } else {
+                Value::String(value.clone())
+            };
+            set_preview_path_value(config, path, parsed_value)?;
+            let mut touched = PreviewTouchedDomains::default();
+            touched.mark_path(path);
+            Ok(Some(touched))
+        }
+        [action, op, path, ..] if action == "config" && op == "unset" => {
+            let _ = delete_preview_path_value(config, path);
+            let mut touched = PreviewTouchedDomains::default();
+            touched.mark_path(path);
+            Ok(Some(touched))
+        }
+        [action, op, agent_id, rest @ ..] if action == "agents" && op == "add" => {
+            let mut model: Option<String> = None;
+            let mut workspace: Option<String> = None;
+            let mut idx = 0usize;
+            while idx < rest.len() {
+                match rest[idx].as_str() {
+                    "--model" => {
+                        if let Some(next) = rest.get(idx + 1) {
+                            model = Some(next.clone());
+                            idx += 2;
+                        } else {
+                            return Err(format!("{}: missing --model value", cmd.label));
+                        }
+                    }
+                    "--workspace" => {
+                        if let Some(next) = rest.get(idx + 1) {
+                            workspace = Some(next.clone());
+                            idx += 2;
+                        } else {
+                            return Err(format!("{}: missing --workspace value", cmd.label));
+                        }
+                    }
+                    _ => idx += 1,
+                }
+            }
+
+            let list = ensure_preview_agents_list(config)?;
+            list.retain(|entry| entry.get("id").and_then(Value::as_str) != Some(agent_id.as_str()));
+            let mut agent = serde_json::Map::new();
+            agent.insert("id".to_string(), Value::String(agent_id.clone()));
+            if let Some(model_value) = model {
+                agent.insert("model".to_string(), Value::String(model_value));
+            }
+            if let Some(workspace_value) = workspace {
+                agent.insert("workspace".to_string(), Value::String(workspace_value));
+            }
+            list.push(Value::Object(agent));
+            let mut touched = PreviewTouchedDomains::default();
+            touched.agents = true;
+            Ok(Some(touched))
+        }
+        [action, op, agent_id, ..] if action == "agents" && op == "delete" => {
+            let list = ensure_preview_agents_list(config)?;
+            list.retain(|entry| entry.get("id").and_then(Value::as_str) != Some(agent_id.as_str()));
+            let mut touched = PreviewTouchedDomains::default();
+            touched.agents = true;
+            Ok(Some(touched))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn preview_side_effect_warning(cmd: &PendingCommand) -> Option<String> {
+    let [bin, category, action, target, ..] = cmd.command.as_slice() else {
+        return None;
+    };
+    if bin != "openclaw" || category != "agents" {
+        return None;
+    }
+    match action.as_str() {
+        "add" => Some(format!(
+            "{}: preview only validates config changes; agent workspace/filesystem setup for '{}' will run during apply.",
+            cmd.label, target
+        )),
+        "delete" => Some(format!(
+            "{}: preview only validates config changes; any filesystem cleanup for '{}' is not simulated.",
+            cmd.label, target
+        )),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewQueueResult {
     pub commands: Vec<PendingCommand>,
     pub config_before: String,
     pub config_after: String,
+    pub warnings: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -278,13 +941,26 @@ pub async fn preview_queued_commands(
 
     tauri::async_runtime::spawn_blocking(move || {
         let paths = resolve_paths();
+        let queue_size = commands.len();
 
         // Read current config
+        let read_started = Instant::now();
         let config_before = crate::config_io::read_text(&paths.config_path)?;
+        log_preview_stage(
+            "local",
+            None,
+            queue_size,
+            "readConfig",
+            "success",
+            read_started.elapsed().as_millis(),
+            None,
+        );
+        let mut preview_config_json = parse_preview_config(&config_before);
 
         // Set up sandbox: symlink all entries from real .openclaw/ into sandbox,
         // but copy openclaw.json so commands modify the copy, not the original.
         // This ensures the CLI can find extensions, plugins, etc. for validation.
+        let sandbox_started = Instant::now();
         let sandbox_root = paths.clawpal_dir.join("preview");
         let preview_dir = sandbox_root.join(".openclaw");
         // Clean previous sandbox if any
@@ -310,6 +986,15 @@ pub async fn preview_queued_commands(
         // (fresh docker-local state), so write the already-loaded content.
         let preview_config = preview_dir.join("openclaw.json");
         crate::config_io::write_text(&preview_config, &config_before)?;
+        log_preview_stage(
+            "local",
+            None,
+            queue_size,
+            "setupSandbox",
+            "success",
+            sandbox_started.elapsed().as_millis(),
+            None,
+        );
 
         let mut env = HashMap::new();
         env.insert(
@@ -317,21 +1002,36 @@ pub async fn preview_queued_commands(
             sandbox_root.to_string_lossy().to_string(),
         );
 
-        // Execute each command in sandbox
+        // Execute preview queue in sandbox, applying config-like mutations directly
+        // and only falling back to CLI for commands that cannot be safely simulated.
+        let apply_started = Instant::now();
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut touched = PreviewTouchedDomains::default();
+        let mut preview_dirty = false;
         for cmd in &commands {
-            if matches!(
-                cmd.command.first().map(|s| s.as_str()),
-                Some("__config_write__") | Some("__rollback__")
-            ) {
-                // Internal command: write config content directly
-                if let Some(content) = cmd.command.get(1) {
-                    if let Err(e) = std::fs::write(&preview_config, content) {
-                        errors.push(format!("{}: {}", cmd.label, e));
+            match apply_direct_preview_command(&mut preview_config_json, cmd) {
+                Ok(Some(domains)) => {
+                    touched.merge(domains);
+                    if let Some(warning) = preview_side_effect_warning(cmd) {
+                        warnings.push(warning);
                     }
+                    preview_dirty = true;
+                    continue;
                 }
-                continue;
+                Ok(None) => {}
+                Err(e) => {
+                    errors.push(e);
+                    break;
+                }
             }
+
+            if preview_dirty {
+                let rendered = render_preview_config(&preview_config_json)?;
+                crate::config_io::write_text(&preview_config, &rendered)?;
+                preview_dirty = false;
+            }
+
             let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
             let result = run_openclaw_with_env(&args, Some(&env));
             match result {
@@ -342,17 +1042,99 @@ pub async fn preview_queued_commands(
                         output.stdout.clone()
                     };
                     errors.push(format!("{}: {}", cmd.label, detail));
+                    break;
                 }
                 Err(e) => {
                     errors.push(format!("{}: {}", cmd.label, e));
                     break;
                 }
-                _ => {}
+                Ok(_) => {
+                    let latest = crate::config_io::read_text(&preview_config)
+                        .unwrap_or_else(|_| config_before.clone());
+                    preview_config_json = parse_preview_config(&latest);
+                }
+            }
+        }
+        let apply_outcome = if errors.is_empty() {
+            "success"
+        } else {
+            "error"
+        };
+        let apply_detail = errors.first().map(String::as_str);
+        log_preview_stage(
+            "local",
+            None,
+            queue_size,
+            "applyPreviewTransforms",
+            apply_outcome,
+            apply_started.elapsed().as_millis(),
+            apply_detail,
+        );
+
+        if preview_dirty {
+            let rendered = render_preview_config(&preview_config_json)?;
+            crate::config_io::write_text(&preview_config, &rendered)?;
+        }
+
+        if errors.is_empty() {
+            let validate_started = Instant::now();
+            for target in preview_validation_targets(touched) {
+                let output = run_openclaw_with_env(target.args(), Some(&env));
+                match output {
+                    Ok(output) if output.exit_code == 0 => {}
+                    Ok(output) => {
+                        let detail = if !output.stderr.is_empty() {
+                            output.stderr.clone()
+                        } else {
+                            output.stdout.clone()
+                        };
+                        let message =
+                            format!("Preview validation ({}) failed: {}", target.label(), detail);
+                        errors.push(message.clone());
+                        log_preview_stage(
+                            "local",
+                            None,
+                            queue_size,
+                            "cliValidate",
+                            "error",
+                            validate_started.elapsed().as_millis(),
+                            Some(&message),
+                        );
+                        break;
+                    }
+                    Err(err) => {
+                        let message =
+                            format!("Preview validation ({}) failed: {}", target.label(), err);
+                        errors.push(message.clone());
+                        log_preview_stage(
+                            "local",
+                            None,
+                            queue_size,
+                            "cliValidate",
+                            "error",
+                            validate_started.elapsed().as_millis(),
+                            Some(&message),
+                        );
+                        break;
+                    }
+                }
+            }
+            if errors.is_empty() {
+                log_preview_stage(
+                    "local",
+                    None,
+                    queue_size,
+                    "cliValidate",
+                    "success",
+                    validate_started.elapsed().as_millis(),
+                    None,
+                );
             }
         }
 
         // Always read result config from sandbox (commands may have partially succeeded)
         // Replace sandbox paths with real paths so the diff doesn't show sandbox artifacts.
+        let readback_started = Instant::now();
         let sandbox_prefix = sandbox_root.to_string_lossy().to_string();
         let real_home = paths
             .openclaw_dir
@@ -362,42 +1144,37 @@ pub async fn preview_queued_commands(
         let config_after_raw = crate::config_io::read_text(&preview_config)
             .unwrap_or_else(|_| config_before.clone())
             .replace(&sandbox_prefix, &real_home);
+        log_preview_stage(
+            "local",
+            None,
+            queue_size,
+            "readbackConfig",
+            "success",
+            readback_started.elapsed().as_millis(),
+            None,
+        );
 
-        // Normalize both configs to sorted-key pretty JSON so the diff only
-        // shows semantic changes, not key reordering by the CLI.
-        fn sort_value(v: &Value) -> Value {
-            match v {
-                Value::Object(map) => {
-                    let sorted: serde_json::Map<String, Value> = map
-                        .iter()
-                        .collect::<std::collections::BTreeMap<_, _>>()
-                        .into_iter()
-                        .map(|(k, v)| (k.clone(), sort_value(v)))
-                        .collect();
-                    Value::Object(sorted)
-                }
-                Value::Array(arr) => Value::Array(arr.iter().map(sort_value).collect()),
-                other => other.clone(),
-            }
-        }
-        let normalize_json = |s: &str| -> String {
-            match serde_json::from_str::<Value>(s) {
-                Ok(v) => {
-                    serde_json::to_string_pretty(&sort_value(&v)).unwrap_or_else(|_| s.to_string())
-                }
-                Err(_) => s.to_string(),
-            }
-        };
-        let config_before = normalize_json(&config_before);
-        let config_after = normalize_json(&config_after_raw);
+        let config_before = normalize_config_for_preview(&config_before);
+        let config_after = normalize_config_for_preview(&config_after_raw);
 
         // Cleanup sandbox
+        let cleanup_started = Instant::now();
         let _ = std::fs::remove_dir_all(paths.clawpal_dir.join("preview"));
+        log_preview_stage(
+            "local",
+            None,
+            queue_size,
+            "cleanupSandbox",
+            "success",
+            cleanup_started.elapsed().as_millis(),
+            None,
+        );
 
         Ok(PreviewQueueResult {
             commands,
             config_before,
             config_after,
+            warnings,
             errors,
         })
     })
@@ -700,14 +1477,27 @@ pub async fn remote_preview_queued_commands(
     if commands.is_empty() {
         return Err("No pending commands to preview".into());
     }
+    let queue_size = commands.len();
 
     // Read current config via SSH
+    let read_started = Instant::now();
     let config_before = pool
         .sftp_read(&host_id, "~/.openclaw/openclaw.json")
         .await?;
+    log_preview_stage(
+        "remote",
+        Some(&host_id),
+        queue_size,
+        "readConfig",
+        "success",
+        read_started.elapsed().as_millis(),
+        None,
+    );
+    let mut preview_config_json = parse_preview_config(&config_before);
 
     // Set up sandbox on remote: symlink all entries from real .openclaw/ into sandbox,
     // but copy openclaw.json so commands modify the copy, not the original.
+    let sandbox_started = Instant::now();
     pool.exec(
         &host_id,
         concat!(
@@ -722,30 +1512,49 @@ pub async fn remote_preview_queued_commands(
         ),
     )
     .await?;
+    log_preview_stage(
+        "remote",
+        Some(&host_id),
+        queue_size,
+        "setupSandbox",
+        "success",
+        sandbox_started.elapsed().as_millis(),
+        None,
+    );
 
-    // Execute each command in sandbox with OPENCLAW_HOME override
-    // OPENCLAW_HOME should point to the parent of .openclaw/ (CLI adds .openclaw/ itself)
+    // Execute each command in sandbox with OPENCLAW_HOME override.
+    // OPENCLAW_HOME should point to the parent of .openclaw/ (CLI adds .openclaw/ itself).
+    let apply_started = Instant::now();
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut touched = PreviewTouchedDomains::default();
+    let mut preview_dirty = false;
     for cmd in &commands {
-        // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(
-            cmd.command.first().map(|s| s.as_str()),
-            Some("__config_write__") | Some("__rollback__")
-        ) {
-            if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool
-                    .sftp_write(
-                        &host_id,
-                        "~/.clawpal/preview/.openclaw/openclaw.json",
-                        content,
-                    )
-                    .await
-                {
-                    errors.push(format!("{}: {}", cmd.label, e));
-                    break;
+        match apply_direct_preview_command(&mut preview_config_json, cmd) {
+            Ok(Some(domains)) => {
+                touched.merge(domains);
+                if let Some(warning) = preview_side_effect_warning(cmd) {
+                    warnings.push(warning);
                 }
+                preview_dirty = true;
+                continue;
             }
-            continue;
+            Ok(None) => {}
+            Err(e) => {
+                errors.push(e);
+                break;
+            }
+        }
+
+        if preview_dirty {
+            let rendered = render_preview_config(&preview_config_json)?;
+            pool.sftp_write(
+                &host_id,
+                "~/.clawpal/preview/.openclaw/openclaw.json",
+                &rendered,
+            )
+            .await?;
+            preview_dirty = false;
         }
 
         let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
@@ -769,64 +1578,147 @@ pub async fn remote_preview_queued_commands(
                 errors.push(format!("{}: {}", cmd.label, e));
                 break;
             }
-            _ => {}
+            Ok(_) => {
+                let latest = pool
+                    .sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
+                    .await
+                    .unwrap_or_else(|_| config_before.clone());
+                preview_config_json = parse_preview_config(&latest);
+            }
+        }
+    }
+    let apply_outcome = if errors.is_empty() {
+        "success"
+    } else {
+        "error"
+    };
+    let apply_detail = errors.first().map(String::as_str);
+    log_preview_stage(
+        "remote",
+        Some(&host_id),
+        queue_size,
+        "applyPreviewTransforms",
+        apply_outcome,
+        apply_started.elapsed().as_millis(),
+        apply_detail,
+    );
+
+    if preview_dirty {
+        let rendered = render_preview_config(&preview_config_json)?;
+        pool.sftp_write(
+            &host_id,
+            "~/.clawpal/preview/.openclaw/openclaw.json",
+            &rendered,
+        )
+        .await?;
+    }
+
+    if errors.is_empty() {
+        let validate_started = Instant::now();
+        for target in preview_validation_targets(touched) {
+            let mut env = HashMap::new();
+            env.insert(
+                "OPENCLAW_HOME".to_string(),
+                "~/.clawpal/preview".to_string(),
+            );
+            match run_openclaw_remote_with_env(&pool, &host_id, target.args(), Some(&env)).await {
+                Ok(output) if output.exit_code == 0 => {}
+                Ok(output) => {
+                    let detail = if !output.stderr.is_empty() {
+                        output.stderr.clone()
+                    } else {
+                        output.stdout.clone()
+                    };
+                    let message =
+                        format!("Preview validation ({}) failed: {}", target.label(), detail);
+                    errors.push(message.clone());
+                    log_preview_stage(
+                        "remote",
+                        Some(&host_id),
+                        queue_size,
+                        "cliValidate",
+                        "error",
+                        validate_started.elapsed().as_millis(),
+                        Some(&message),
+                    );
+                    break;
+                }
+                Err(err) => {
+                    let message =
+                        format!("Preview validation ({}) failed: {}", target.label(), err);
+                    errors.push(message.clone());
+                    log_preview_stage(
+                        "remote",
+                        Some(&host_id),
+                        queue_size,
+                        "cliValidate",
+                        "error",
+                        validate_started.elapsed().as_millis(),
+                        Some(&message),
+                    );
+                    break;
+                }
+            }
+        }
+        if errors.is_empty() {
+            log_preview_stage(
+                "remote",
+                Some(&host_id),
+                queue_size,
+                "cliValidate",
+                "success",
+                validate_started.elapsed().as_millis(),
+                None,
+            );
         }
     }
 
-    let config_after = if errors.is_empty() {
-        let raw = pool
-            .sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
-            .await?;
-        // Replace sandbox paths with real paths in preview output.
-        // The sandbox is at ~/.clawpal/preview, real OPENCLAW_HOME is ~.
-        // Resolve ~ on remote to get absolute sandbox prefix.
-        let resolved_home = pool
-            .exec(&host_id, "echo $HOME")
-            .await
-            .map(|r| r.stdout.trim().to_string())
-            .unwrap_or_default();
-        if !resolved_home.is_empty() {
-            let sandbox_prefix = format!("{}/.clawpal/preview", resolved_home);
-            raw.replace(&sandbox_prefix, &resolved_home)
-        } else {
-            raw
-        }
+    let readback_started = Instant::now();
+    let raw = pool
+        .sftp_read(&host_id, "~/.clawpal/preview/.openclaw/openclaw.json")
+        .await
+        .unwrap_or_else(|_| config_before.clone());
+    // Replace sandbox paths with real paths in preview output.
+    // The sandbox is at ~/.clawpal/preview, real OPENCLAW_HOME is ~.
+    // Resolve ~ on remote to get absolute sandbox prefix.
+    let resolved_home = pool
+        .exec(&host_id, "echo $HOME")
+        .await
+        .map(|r| r.stdout.trim().to_string())
+        .unwrap_or_default();
+    let config_after = if !resolved_home.is_empty() {
+        let sandbox_prefix = format!("{}/.clawpal/preview", resolved_home);
+        raw.replace(&sandbox_prefix, &resolved_home)
     } else {
-        config_before.clone()
+        raw
     };
+    log_preview_stage(
+        "remote",
+        Some(&host_id),
+        queue_size,
+        "readbackConfig",
+        "success",
+        readback_started.elapsed().as_millis(),
+        None,
+    );
 
+    let cleanup_started = Instant::now();
     let _ = pool.exec(&host_id, "rm -rf ~/.clawpal/preview").await;
-
-    // Normalize both configs to sorted-key pretty JSON so the diff only
-    // shows semantic changes, not key reordering by the CLI.
-    let normalize = |s: &str| -> String {
-        match serde_json::from_str::<Value>(s) {
-            Ok(v) => {
-                fn sort_value(v: &Value) -> Value {
-                    match v {
-                        Value::Object(map) => {
-                            let sorted: serde_json::Map<String, Value> = map
-                                .iter()
-                                .collect::<std::collections::BTreeMap<_, _>>()
-                                .into_iter()
-                                .map(|(k, v)| (k.clone(), sort_value(v)))
-                                .collect();
-                            Value::Object(sorted)
-                        }
-                        Value::Array(arr) => Value::Array(arr.iter().map(sort_value).collect()),
-                        other => other.clone(),
-                    }
-                }
-                serde_json::to_string_pretty(&sort_value(&v)).unwrap_or_else(|_| s.to_string())
-            }
-            Err(_) => s.to_string(),
-        }
-    };
+    log_preview_stage(
+        "remote",
+        Some(&host_id),
+        queue_size,
+        "cleanupSandbox",
+        "success",
+        cleanup_started.elapsed().as_millis(),
+        None,
+    );
 
     Ok(PreviewQueueResult {
         commands,
-        config_before: normalize(&config_before),
-        config_after: normalize(&config_after),
+        config_before: normalize_config_for_preview(&config_before),
+        config_after: normalize_config_for_preview(&config_after),
+        warnings,
         errors,
     })
 }

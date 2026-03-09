@@ -16,13 +16,31 @@ on:
         description: 'Custom version (only used when bump_type is "custom", e.g. 1.0.0-beta.1)'
         required: false
         type: string
+  push:
+    branches:
+      - 'rc/v*'
+    paths-ignore:
+      - 'package.json'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
 
 permissions:
   contents: write
+  actions: write
+
+concurrency:
+  group: bump-version-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
-  bump:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.version.outputs.current }}
+      new_version: ${{ steps.version.outputs.new }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      source_ref: ${{ steps.version.outputs.source_ref }}
+      ref_name: ${{ steps.version.outputs.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,53 +56,578 @@ jobs:
         id: version
         run: |
           CURRENT=$(node -p "require('./package.json').version")
+          CURRENT_CARGO=$(node - <<'NODE'
+          const fs = require("fs");
+          const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+          const match = cargo.match(/^version\s*=\s*"([^"]+)"/m);
+          if (!match) {
+            console.error("Failed to locate version field in src-tauri/Cargo.toml");
+            process.exit(1);
+          }
+          process.stdout.write(match[1]);
+          NODE
+          )
+
+          if [ "$CURRENT" != "$CURRENT_CARGO" ]; then
+            echo "::error::Version mismatch: package.json=$CURRENT, src-tauri/Cargo.toml=$CURRENT_CARGO"
+            exit 1
+          fi
+
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ inputs.bump_type }}" = "custom" ]; then
-            NEW="${{ inputs.custom_version }}"
-            if [ -z "$NEW" ]; then
-              echo "::error::custom_version is required when bump_type is 'custom'"
-              exit 1
-            fi
-            # Basic semver validation (allows pre-release and build metadata)
-            if ! echo "$NEW" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
-              echo "::error::Invalid version format: $NEW (expected semver, e.g. 1.2.3 or 1.0.0-beta.1)"
-              exit 1
+          EVENT_NAME="${{ github.event_name }}"
+          if [ "$EVENT_NAME" = "create" ]; then
+            SOURCE_REF="${{ github.event.ref }}"
+          else
+            SOURCE_REF="${{ github.ref_name }}"
+          fi
+          REF_NAME="$SOURCE_REF"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+
+          BUMP_TYPE="${{ inputs.bump_type }}"
+          SEMVER_REGEX='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$BUMP_TYPE" = "custom" ]; then
+              NEW="${{ inputs.custom_version }}"
+              if [ -z "$NEW" ]; then
+                echo "::error::custom_version is required when bump_type is 'custom'"
+                exit 1
+              fi
+              if ! echo "$NEW" | grep -qE "$SEMVER_REGEX"; then
+                echo "::error::Invalid custom version: $NEW (must follow semver)"
+                exit 1
+              fi
+            else
+              BASE="${CURRENT%%[-+]*}"
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+              case "$BUMP_TYPE" in
+                major) NEW="$((MAJOR + 1)).0.0" ;;
+                minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+                patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+              esac
             fi
           else
-            IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT%%-*}"
-            case "${{ inputs.bump_type }}" in
-              major) NEW="$((MAJOR + 1)).0.0" ;;
-              minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
-              patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            case "$REF_NAME" in
+              rc/v*)
+                NEW="${REF_NAME#rc/v}"
+                ;;
+              *)
+                echo "::error::Branch $REF_NAME does not match rc/v<semver>"
+                exit 1
+                ;;
             esac
           fi
 
+          if ! echo "$NEW" | grep -qE "$SEMVER_REGEX"; then
+            echo "::error::Computed version is invalid semver: $NEW"
+            exit 1
+          fi
+
+          COMPARISON=$(
+            CURRENT_VERSION="$CURRENT" TARGET_VERSION="$NEW" node -e '
+              function parse(version) {
+                const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/);
+                if (!match) {
+                  throw new Error(`Invalid semver: ${version}`);
+                }
+                return {
+                  major: Number(match[1]),
+                  minor: Number(match[2]),
+                  patch: Number(match[3]),
+                  prerelease: match[4] ? match[4].split(".") : []
+                };
+              }
+
+              function compareIdentifier(left, right) {
+                const leftNumeric = /^\d+$/.test(left);
+                const rightNumeric = /^\d+$/.test(right);
+                if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+                if (leftNumeric) return -1;
+                if (rightNumeric) return 1;
+                return left.localeCompare(right);
+              }
+
+              function compare(left, right) {
+                for (const key of ["major", "minor", "patch"]) {
+                  if (left[key] !== right[key]) {
+                    return left[key] - right[key];
+                  }
+                }
+
+                if (!left.prerelease.length && !right.prerelease.length) return 0;
+                if (!left.prerelease.length) return 1;
+                if (!right.prerelease.length) return -1;
+
+                const len = Math.max(left.prerelease.length, right.prerelease.length);
+                for (let i = 0; i < len; i += 1) {
+                  if (left.prerelease[i] === undefined) return -1;
+                  if (right.prerelease[i] === undefined) return 1;
+                  const diff = compareIdentifier(left.prerelease[i], right.prerelease[i]);
+                  if (diff !== 0) return diff;
+                }
+
+                return 0;
+              }
+
+              const current = parse(process.env.CURRENT_VERSION);
+              const next = parse(process.env.TARGET_VERSION);
+              const diff = compare(next, current);
+              process.stdout.write(diff < 0 ? "lt" : diff > 0 ? "gt" : "eq");
+            '
+          )
+
+          if [ "$COMPARISON" = "lt" ]; then
+            echo "::error::New version $NEW would roll back current version $CURRENT"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$COMPARISON" = "eq" ]; then
+            echo "::error::New version equals current version ($CURRENT)"
+            exit 1
+          fi
+
+          if git show-ref --tags --verify --quiet "refs/tags/v$NEW"; then
+            echo "::error::Tag v$NEW already exists locally"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v$NEW" >/dev/null 2>&1; then
+            echo "::error::Tag v$NEW already exists on origin"
+            exit 1
+          fi
+
           echo "new=$NEW" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [[ "$NEW" == *-* ]]; then
+              REF_NAME="rc/v$NEW"
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+              echo "### Tag type: prerelease" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+              echo "### Tag type: release" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            git fetch --no-tags origin main develop
+
+            MAIN_BASE=$(git merge-base HEAD origin/main || true)
+            DEVELOP_BASE=$(git merge-base HEAD origin/develop || true)
+
+            if [ -z "$MAIN_BASE" ] || [ -z "$DEVELOP_BASE" ]; then
+              echo "::error::Failed to resolve ancestry against origin/main and origin/develop"
+              exit 1
+            fi
+
+            if [ "$MAIN_BASE" = "$DEVELOP_BASE" ]; then
+              echo "::error::Could not distinguish whether $REF_NAME was created from main or develop"
+              exit 1
+            fi
+
+            if git merge-base --is-ancestor "$MAIN_BASE" "$DEVELOP_BASE"; then
+              SOURCE_BRANCH="develop"
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+              echo "### Tag type: prerelease" >> "$GITHUB_STEP_SUMMARY"
+            elif git merge-base --is-ancestor "$DEVELOP_BASE" "$MAIN_BASE"; then
+              SOURCE_BRANCH="main"
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+              echo "### Tag type: release" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::Ambiguous ancestry for $REF_NAME; unable to determine whether it came from main or develop"
+              exit 1
+            fi
+
+            echo "### Source branch: $SOURCE_BRANCH" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Trigger mode: $EVENT_NAME" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref_name=$REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "### Checkout ref: $SOURCE_REF" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Publish ref: $REF_NAME" >> "$GITHUB_STEP_SUMMARY"
           echo "### Version bump: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Update package.json
-        run: |
-          npm version "${{ steps.version.outputs.new }}" --no-git-tag-version
+  test_ci:
+    name: Test CI
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.new_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Update src-tauri/Cargo.toml
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Apply version to source files
         run: |
-          sed -i "0,/^version = \".*\"/s//version = \"${{ steps.version.outputs.new }}\"/" src-tauri/Cargo.toml
+          node - <<'NODE'
+          const fs = require("fs");
+          const version = process.env.VERSION;
+
+          const pkgPath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const cargoPath = "src-tauri/Cargo.toml";
+          const cargoContent = fs.readFileSync(cargoPath, "utf8");
+          const cargoVersionRegex = /^version\s*=\s*".*"/m;
+          if (!cargoVersionRegex.test(cargoContent)) {
+            throw new Error("Failed to locate version field in src-tauri/Cargo.toml");
+          }
+          fs.writeFileSync(
+            cargoPath,
+            cargoContent.replace(cargoVersionRegex, `version = "${version}"`)
+          );
+          NODE
 
       - name: Update Cargo.lock
         run: |
-          cd src-tauri && cargo update -p clawpal --precise "${{ steps.version.outputs.new }}" 2>/dev/null || true
-          cd .. && cargo generate-lockfile 2>/dev/null || true
+          cd src-tauri
+          cargo update -p clawpal --precise "$VERSION" 2>/dev/null || true
+          cargo generate-lockfile 2>/dev/null || true
 
-      - name: Commit, tag, and push
+      - name: Install frontend dependencies
+        run: |
+          bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        working-directory: src-tauri
+
+      - name: Run clippy
+        run: cargo clippy -p clawpal-core -- -D warnings
+        working-directory: src-tauri
+
+      - name: Run tests
+        run: cargo test -p clawpal-core
+        working-directory: src-tauri
+
+  package_ci:
+    name: Package CI (${{ matrix.label }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-ARM64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+    runs-on: ${{ matrix.platform }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.new_version }}
+      IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Apply version to source files
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const version = process.env.VERSION;
+
+          const pkgPath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const cargoPath = "src-tauri/Cargo.toml";
+          const cargoContent = fs.readFileSync(cargoPath, "utf8");
+          const cargoVersionRegex = /^version\s*=\s*".*"/m;
+          if (!cargoVersionRegex.test(cargoContent)) {
+            throw new Error("Failed to locate version field in src-tauri/Cargo.toml");
+          }
+          fs.writeFileSync(
+            cargoPath,
+            cargoContent.replace(cargoVersionRegex, `version = "${version}"`)
+          );
+          NODE
+
+      - name: Update Cargo.lock
+        shell: bash
+        run: |
+          cd src-tauri
+          cargo update -p clawpal --precise "$VERSION" 2>/dev/null || true
+          cargo generate-lockfile 2>/dev/null || true
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Disable code signing for package CI
+        shell: bash
+        run: |
+          node << 'EOF'
+          const fs = require("fs");
+          const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          conf.bundle.createUpdaterArtifacts = false;
+          if (conf.bundle.macOS) conf.bundle.macOS.signingIdentity = "-";
+          fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(conf, null, 2));
+          EOF
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate DMG background asset (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-dmg-background.sh
+
+      - name: Compute build args
+        id: build_args
+        shell: bash
+        run: |
+          args="--target ${{ matrix.target }}"
+          if [ "${{ matrix.platform }}" = "windows-latest" ] && [ "$IS_PRERELEASE" = "true" ]; then
+            args+=" --bundles nsis"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        with:
+          args: ${{ steps.build_args.outputs.args }}
+
+      - name: Verify DMG layout (macOS only)
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle/dmg"
+            "src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          DMG_PATH=""
+          if [ -n "$BUNDLE_DIR" ]; then
+            DMG_PATH="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' | head -n 1 || true)"
+          fi
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::Could not locate DMG bundle for target ${{ matrix.target }}"
+            exit 1
+          fi
+
+          bash scripts/verify-dmg-layout.sh "$DMG_PATH" "ClawPal.app"
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          CANDIDATES=(
+            "target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+          )
+
+          BUNDLE_DIR=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              BUNDLE_DIR="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f \
+              \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.exe" -o -name "*.rpm" \) \
+              -exec cp {} artifacts/ \; 2>/dev/null || true
+          fi
+
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            PORTABLE_CANDIDATES=(
+              "target/${{ matrix.target }}/release/clawpal.exe"
+              "src-tauri/target/${{ matrix.target }}/release/clawpal.exe"
+            )
+            for portable in "${PORTABLE_CANDIDATES[@]}"; do
+              if [ -f "$portable" ]; then
+                cp "$portable" "artifacts/ClawPal_portable.exe"
+                break
+              fi
+            done
+          fi
+
+          echo "### Collected artifacts:"
+          ls -lh artifacts/ || echo "No artifacts found"
+
+      - name: Upload package CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bump-version-${{ matrix.label }}
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: warn
+
+  publish:
+    name: Commit and Trigger Draft Release
+    needs: [prepare, test_ci, package_ci]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.new_version }}
+      IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.source_ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply version to source files
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const version = process.env.VERSION;
+
+          const pkgPath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const cargoPath = "src-tauri/Cargo.toml";
+          const cargoContent = fs.readFileSync(cargoPath, "utf8");
+          const cargoVersionRegex = /^version\s*=\s*".*"/m;
+          if (!cargoVersionRegex.test(cargoContent)) {
+            throw new Error("Failed to locate version field in src-tauri/Cargo.toml");
+          }
+          fs.writeFileSync(
+            cargoPath,
+            cargoContent.replace(cargoVersionRegex, `version = "${version}"`)
+          );
+          NODE
+
+      - name: Update Cargo.lock
+        run: |
+          cd src-tauri
+          cargo update -p clawpal --precise "$VERSION" 2>/dev/null || true
+          cargo generate-lockfile 2>/dev/null || true
+
+      - name: Commit and push version bump
+        id: commit_push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
-          git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
+          git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            COMMIT_SHA=$(git rev-parse HEAD)
+            echo "No version changes to commit"
+            echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          NEW="${{ steps.version.outputs.new }}"
-          git commit -m "chore: bump version to ${NEW}"
-          git tag "v${NEW}"
-          git push origin HEAD --follow-tags
+          git commit -m "chore: bump version to ${VERSION}"
+          echo "Bumping to prerelease: $IS_PRERELEASE"
+          git push origin "HEAD:${{ needs.prepare.outputs.ref_name }}"
+
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger Release workflow (draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ steps.commit_push.outputs.commit_sha }}
+        run: |
+          gh workflow run release.yml \
+            --ref "${{ needs.prepare.outputs.ref_name }}" \
+            -f version="${VERSION}" \
+            -f target_commitish="${COMMIT_SHA}" \
+            -f is_prerelease="${IS_PRERELEASE}"
+
+      - name: Release trigger summary
+        run: |
+          echo "### Release draft trigger" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pushed branch commit: ${{ needs.prepare.outputs.ref_name }}@${{ steps.commit_push.outputs.commit_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version commit created: ${{ steps.commit_push.outputs.committed }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag to be created on publish: v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Prerelease: ${IS_PRERELEASE}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Next: \`Release\` workflow is dispatched to create/update draft release (without pushing tag)." >> "$GITHUB_STEP_SUMMARY"

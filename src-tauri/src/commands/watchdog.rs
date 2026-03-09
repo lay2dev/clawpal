@@ -6,31 +6,24 @@ pub async fn remote_get_watchdog_status(
     host_id: String,
 ) -> Result<Value, String> {
     let status_raw = pool
-        .sftp_read(&host_id, "~/.clawpal/watchdog/status.json")
+        .exec(
+            &host_id,
+            "cat ~/.clawpal/watchdog/status.json 2>/dev/null || true",
+        )
         .await
+        .map(|result| result.stdout)
         .unwrap_or_default();
-
-    let pid_raw = pool
-        .sftp_read(&host_id, "~/.clawpal/watchdog/watchdog.pid")
-        .await;
-    let alive_output = match pid_raw {
-        Ok(pid_str) => {
-            let cmd = format!(
-                "kill -0 {} 2>/dev/null && echo alive || echo dead",
-                pid_str.trim()
-            );
-            pool.exec(&host_id, &cmd)
-                .await
-                .map(|r| r.stdout)
-                .unwrap_or_else(|_| "dead".to_string())
-        }
-        Err(_) => "dead".to_string(),
-    };
-
-    let deployed = pool
-        .sftp_read(&host_id, "~/.clawpal/watchdog/watchdog.js")
-        .await
-        .is_ok();
+    let probe = pool.exec(
+        &host_id,
+        "pid=\"\"; [ -f ~/.clawpal/watchdog/watchdog.pid ] && pid=$(cat ~/.clawpal/watchdog/watchdog.pid 2>/dev/null | tr -d '\\r\\n'); alive=dead; [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null && alive=alive; deployed=0; [ -f ~/.clawpal/watchdog/watchdog.js ] && deployed=1; printf \"%s\\t%s\\t%s\\n\" \"$pid\" \"$alive\" \"$deployed\"",
+    )
+    .await
+    .map(|result| result.stdout)
+    .unwrap_or_default();
+    let mut fields = probe.trim().splitn(3, '\t');
+    let _pid = fields.next().unwrap_or("").trim();
+    let alive_output = fields.next().unwrap_or("dead").to_string();
+    let deployed = fields.next().map(|v| v.trim() == "1").unwrap_or(false);
 
     let mut status =
         clawpal_core::watchdog::parse_watchdog_status(&status_raw, &alive_output).extra;

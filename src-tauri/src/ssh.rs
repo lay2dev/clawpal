@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Semaphore};
@@ -21,6 +22,29 @@ pub struct SftpEntry {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTransferStats {
+    pub host_id: String,
+    pub upload_bytes_per_sec: u64,
+    pub download_bytes_per_sec: u64,
+    pub total_upload_bytes: u64,
+    pub total_download_bytes: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HostTransferCounter {
+    total_upload_bytes: u64,
+    total_download_bytes: u64,
+    upload_bytes_per_sec: u64,
+    download_bytes_per_sec: u64,
+    updated_at_ms: u64,
+    last_sample_at_ms: u64,
+    last_sample_upload_bytes: u64,
+    last_sample_download_bytes: u64,
+}
+
 #[derive(Clone)]
 struct ConnectedHost {
     config: SshHostConfig,
@@ -32,9 +56,13 @@ struct ConnectedHost {
 
 pub struct SshConnectionPool {
     connections: Mutex<HashMap<String, ConnectedHost>>,
+    transfer_counters: Mutex<HashMap<String, HostTransferCounter>>,
+    sftp_read_backoff_until_ms: Mutex<HashMap<String, u64>>,
 }
 
 const SSH_OP_MAX_CONCURRENCY_PER_HOST: usize = 2;
+const SSH_TRANSFER_IDLE_DECAY_MS: u64 = 8_000;
+const SFTP_READ_BACKOFF_MS: u64 = 60_000;
 
 impl SshConnectionPool {
     fn format_connection_ids(connections: &HashMap<String, ConnectedHost>) -> String {
@@ -46,6 +74,99 @@ impl SshConnectionPool {
     pub fn new() -> Self {
         Self {
             connections: Mutex::new(HashMap::new()),
+            transfer_counters: Mutex::new(HashMap::new()),
+            sftp_read_backoff_until_ms: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn refresh_counter_speed(counter: &mut HostTransferCounter, now_ms: u64) {
+        if counter.last_sample_at_ms == 0 {
+            counter.last_sample_at_ms = now_ms;
+            counter.last_sample_upload_bytes = counter.total_upload_bytes;
+            counter.last_sample_download_bytes = counter.total_download_bytes;
+            if counter.total_upload_bytes > 0 {
+                counter.upload_bytes_per_sec = counter.total_upload_bytes;
+            }
+            if counter.total_download_bytes > 0 {
+                counter.download_bytes_per_sec = counter.total_download_bytes;
+            }
+            return;
+        }
+        let elapsed = now_ms.saturating_sub(counter.last_sample_at_ms);
+        if elapsed < 400 {
+            return;
+        }
+        let upload_delta = counter
+            .total_upload_bytes
+            .saturating_sub(counter.last_sample_upload_bytes);
+        let download_delta = counter
+            .total_download_bytes
+            .saturating_sub(counter.last_sample_download_bytes);
+        let elapsed = elapsed.max(1);
+        counter.upload_bytes_per_sec = if upload_delta == 0 {
+            0
+        } else {
+            upload_delta
+                .saturating_mul(1000)
+                .saturating_add(elapsed.saturating_sub(1))
+                / elapsed
+        };
+        counter.download_bytes_per_sec = if download_delta == 0 {
+            0
+        } else {
+            download_delta
+                .saturating_mul(1000)
+                .saturating_add(elapsed.saturating_sub(1))
+                / elapsed
+        };
+        counter.last_sample_at_ms = now_ms;
+        counter.last_sample_upload_bytes = counter.total_upload_bytes;
+        counter.last_sample_download_bytes = counter.total_download_bytes;
+    }
+
+    async fn record_transfer(&self, host_id: &str, upload_bytes: u64, download_bytes: u64) {
+        if upload_bytes == 0 && download_bytes == 0 {
+            return;
+        }
+        let now_ms = Self::now_ms();
+        let mut guard = self.transfer_counters.lock().await;
+        let counter = guard.entry(host_id.to_string()).or_default();
+        if upload_bytes > 0 {
+            counter.total_upload_bytes = counter.total_upload_bytes.saturating_add(upload_bytes);
+        }
+        if download_bytes > 0 {
+            counter.total_download_bytes =
+                counter.total_download_bytes.saturating_add(download_bytes);
+        }
+        counter.updated_at_ms = now_ms;
+        Self::refresh_counter_speed(counter, now_ms);
+    }
+
+    pub async fn get_transfer_stats(&self, host_id: &str) -> SshTransferStats {
+        let now_ms = Self::now_ms();
+        let mut guard = self.transfer_counters.lock().await;
+        let counter = guard.entry(host_id.to_string()).or_default();
+        // Idle decay: keep last observed rate for a short window so sparse
+        // remote calls don't instantly collapse to 0 between samples.
+        if now_ms.saturating_sub(counter.updated_at_ms) > SSH_TRANSFER_IDLE_DECAY_MS {
+            counter.upload_bytes_per_sec = 0;
+            counter.download_bytes_per_sec = 0;
+        }
+        SshTransferStats {
+            host_id: host_id.to_string(),
+            upload_bytes_per_sec: counter.upload_bytes_per_sec,
+            download_bytes_per_sec: counter.download_bytes_per_sec,
+            total_upload_bytes: counter.total_upload_bytes,
+            total_download_bytes: counter.total_download_bytes,
+            updated_at_ms: counter.updated_at_ms,
         }
     }
 
@@ -110,6 +231,15 @@ impl SshConnectionPool {
                 op_limiter: std::sync::Arc::new(Semaphore::new(SSH_OP_MAX_CONCURRENCY_PER_HOST)),
             },
         );
+        self.transfer_counters
+            .lock()
+            .await
+            .entry(config.id.clone())
+            .or_default();
+        self.sftp_read_backoff_until_ms
+            .lock()
+            .await
+            .remove(&config.id);
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] connect_with_passphrase cached id={} total={}",
             config.id,
@@ -127,6 +257,7 @@ impl SshConnectionPool {
                 "[dev][ssh_pool] disconnect removed id={} home={}",
                 id, host.home_dir
             ));
+            self.sftp_read_backoff_until_ms.lock().await.remove(id);
         } else {
             let known = {
                 let guard = self.connections.lock().await;
@@ -219,6 +350,7 @@ impl SshConnectionPool {
             ));
             message
         })?;
+        self.record_transfer(id, command.len() as u64, 0).await;
         let mut result = {
             let session = conn.session.lock().await.clone();
             session.exec(command).await
@@ -242,6 +374,10 @@ impl SshConnectionPool {
             ));
             message
         })?;
+        let stdout_bytes = result.stdout.len() as u64;
+        let stderr_bytes = result.stderr.len() as u64;
+        self.record_transfer(id, 0, stdout_bytes.saturating_add(stderr_bytes))
+            .await;
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] exec success id={} exit={} stderr_len={}",
             id,
@@ -275,6 +411,22 @@ impl SshConnectionPool {
             ));
             message
         })?;
+        let now_ms = Self::now_ms();
+        if self.is_sftp_read_backoff_active(id, now_ms).await {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_read skip primary due backoff id={} path={}",
+                id, resolved
+            ));
+            let bytes = self.exec_cat_read_with_retry(&conn, &resolved).await?;
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_read bytes id={} path={} bytes={} source=exec-fallback(backoff)",
+                id,
+                resolved,
+                bytes.len()
+            ));
+            self.record_transfer(id, 0, bytes.len() as u64).await;
+            return Ok(String::from_utf8_lossy(&bytes).to_string());
+        }
         let mut bytes = {
             let session = conn.session.lock().await.clone();
             session.sftp_read(&resolved).await
@@ -284,6 +436,9 @@ impl SshConnectionPool {
                 "[dev][ssh_pool] sftp_read primary error id={} path={} error={}",
                 id, resolved, err
             ));
+            if should_backoff_sftp_read(&err.to_string()) {
+                self.set_sftp_read_backoff(id, Self::now_ms()).await;
+            }
             if is_retryable_session_error(&err.to_string()) {
                 self.refresh_session(&conn).await?;
                 let session = conn.session.lock().await.clone();
@@ -291,9 +446,15 @@ impl SshConnectionPool {
             }
         }
         let bytes = match bytes {
-            Ok(bytes) => bytes,
+            Ok(bytes) => {
+                self.clear_sftp_read_backoff(id).await;
+                bytes
+            }
             Err(primary_err) => {
                 let primary_msg = primary_err.to_string();
+                if should_backoff_sftp_read(&primary_msg) {
+                    self.set_sftp_read_backoff(id, Self::now_ms()).await;
+                }
                 if !should_attempt_sftp_exec_fallback(&primary_msg) {
                     crate::commands::logs::log_dev(format!(
                         "[dev][ssh_pool] sftp_read failed without fallback id={} path={} error={}",
@@ -321,6 +482,7 @@ impl SshConnectionPool {
             resolved,
             bytes.len()
         ));
+        self.record_transfer(id, 0, bytes.len() as u64).await;
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 
@@ -366,6 +528,8 @@ impl SshConnectionPool {
             "[dev][ssh_pool] sftp_write success id={} path={}",
             id, resolved
         ));
+        self.record_transfer(id, content.as_bytes().len() as u64, 0)
+            .await;
         Ok(())
     }
 
@@ -434,6 +598,34 @@ impl SshConnectionPool {
             id, conn.config.host
         ));
         Ok(conn.clone())
+    }
+
+    async fn is_sftp_read_backoff_active(&self, id: &str, now_ms: u64) -> bool {
+        let mut guard = self.sftp_read_backoff_until_ms.lock().await;
+        let Some(until_ms) = guard.get(id).copied() else {
+            return false;
+        };
+        if now_ms < until_ms {
+            return true;
+        }
+        guard.remove(id);
+        false
+    }
+
+    async fn set_sftp_read_backoff(&self, id: &str, now_ms: u64) {
+        let until_ms = now_ms.saturating_add(SFTP_READ_BACKOFF_MS);
+        self.sftp_read_backoff_until_ms
+            .lock()
+            .await
+            .insert(id.to_string(), until_ms);
+        crate::commands::logs::log_dev(format!(
+            "[dev][ssh_pool] sftp_read backoff enabled id={} until_ms={}",
+            id, until_ms
+        ));
+    }
+
+    async fn clear_sftp_read_backoff(&self, id: &str) {
+        self.sftp_read_backoff_until_ms.lock().await.remove(id);
     }
 
     async fn refresh_session(&self, conn: &ConnectedHost) -> Result<(), String> {
@@ -556,9 +748,22 @@ fn should_attempt_sftp_exec_fallback(message: &str) -> bool {
         || lowered.contains("connection closed")
 }
 
+fn should_backoff_sftp_read(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("timed out")
+        || lowered.contains("timeout")
+        || lowered.contains("open channel")
+        || lowered.contains("connection reset")
+        || lowered.contains("broken pipe")
+        || lowered.contains("connection closed")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_login_shell_wrapper, shell_quote, should_attempt_sftp_exec_fallback};
+    use super::{
+        build_login_shell_wrapper, shell_quote, should_attempt_sftp_exec_fallback,
+        should_backoff_sftp_read, HostTransferCounter, SshConnectionPool,
+    };
 
     #[test]
     fn shell_quote_escapes_single_quote() {
@@ -568,7 +773,7 @@ mod tests {
     #[test]
     fn login_wrapper_sources_common_profile_files() {
         let wrapped = build_login_shell_wrapper("openclaw --version");
-        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -ilc"));
+        assert!(wrapped.contains("*/zsh|*/bash) \"$LOGIN_SHELL\" -lc"));
         assert!(wrapped.contains("[ -f ~/.profile ]"));
     }
 
@@ -583,5 +788,39 @@ mod tests {
         assert!(!should_attempt_sftp_exec_fallback(
             "open /tmp/missing.json: No such file or directory"
         ));
+    }
+
+    #[test]
+    fn sftp_backoff_only_triggers_for_transport_like_errors() {
+        assert!(should_backoff_sftp_read(
+            "sftp failed: russh sftp_read timed out after 30s"
+        ));
+        assert!(should_backoff_sftp_read(
+            "ssh open channel failed: channel closed"
+        ));
+        assert!(!should_backoff_sftp_read(
+            "open /tmp/missing.json: No such file or directory"
+        ));
+    }
+
+    #[test]
+    fn transfer_speed_initial_sample_is_not_zero_for_non_zero_bytes() {
+        let mut counter = HostTransferCounter {
+            total_download_bytes: 24,
+            ..Default::default()
+        };
+        SshConnectionPool::refresh_counter_speed(&mut counter, 1_000);
+        assert_eq!(counter.download_bytes_per_sec, 24);
+    }
+
+    #[test]
+    fn transfer_speed_uses_ceil_division_for_small_deltas() {
+        let mut counter = HostTransferCounter::default();
+        // Initialize sampling anchor.
+        SshConnectionPool::refresh_counter_speed(&mut counter, 1_000);
+        counter.total_download_bytes = 1;
+        // 1 byte over 2000ms should still report 1 B/s instead of flooring to 0.
+        SshConnectionPool::refresh_counter_speed(&mut counter, 3_000);
+        assert_eq!(counter.download_bytes_per_sec, 1);
     }
 }

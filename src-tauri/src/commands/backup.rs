@@ -198,32 +198,13 @@ pub async fn remote_check_openclaw_update(
         Err(_) => String::new(),
     };
 
-    // Try `openclaw update status --json` first (may not exist on older versions)
-    let update_result = pool
-        .exec_login(
-            &host_id,
-            "openclaw update status --json --no-color 2>/dev/null",
-        )
-        .await;
-    if let Ok(r) = update_result {
-        if r.exit_code == 0 && !r.stdout.trim().is_empty() {
-            if let Some((latest, _channel, _details, upgrade)) =
-                parse_openclaw_update_json(&r.stdout, &installed_version)
-            {
-                return Ok(serde_json::json!({
-                    "upgradeAvailable": upgrade,
-                    "latestVersion": latest,
-                    "installedVersion": installed_version,
-                }));
-            }
-        }
-    }
-
-    // Fallback: query npm registry directly from Tauri (no remote CLI dependency)
-    // Must use spawn_blocking because reqwest::blocking panics in async context
-    let latest_version = tokio::task::spawn_blocking(|| query_openclaw_latest_npm().ok().flatten())
-        .await
-        .unwrap_or(None);
+    let paths = resolve_paths();
+    let cache = tokio::task::spawn_blocking(move || {
+        resolve_openclaw_latest_release_cached(&paths, false).ok()
+    })
+    .await
+    .unwrap_or(None);
+    let latest_version = cache.and_then(|entry| entry.latest_version);
     let upgrade = latest_version
         .as_ref()
         .is_some_and(|latest| compare_semver(&installed_version, Some(latest.as_str())));

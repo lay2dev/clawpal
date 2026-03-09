@@ -10,6 +10,7 @@ import {
   readCacheValue,
   buildCacheKey,
   invalidateGlobalReadCache,
+  resolveReadCacheScopeKey,
 } from "../use-api";
 
 describe("buildCacheKey", () => {
@@ -27,6 +28,36 @@ describe("buildCacheKey", () => {
     const a = buildCacheKey("inst#1", "listAgents");
     const b = buildCacheKey("inst#2", "listAgents");
     expect(a).not.toBe(b);
+  });
+});
+
+describe("resolveReadCacheScopeKey", () => {
+  test("shares host-scoped read resources across instance tokens", () => {
+    expect(
+      resolveReadCacheScopeKey(
+        "ssh:hetzner#111",
+        "ssh:hetzner",
+        "getChannelsConfigSnapshot",
+      ),
+    ).toBe("ssh:hetzner");
+
+    expect(
+      resolveReadCacheScopeKey(
+        "ssh:hetzner#222",
+        "ssh:hetzner",
+        "getCronRuntimeSnapshot",
+      ),
+    ).toBe("ssh:hetzner");
+  });
+
+  test("keeps token-scoped keys for non-shared methods", () => {
+    expect(
+      resolveReadCacheScopeKey(
+        "ssh:hetzner#111",
+        "ssh:hetzner",
+        "getCronRuns",
+      ),
+    ).toBe("ssh:hetzner#111");
   });
 });
 

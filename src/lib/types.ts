@@ -183,6 +183,9 @@ export interface ProviderAuthSuggestion {
 export interface ResolvedApiKey {
   profileId: string;
   maskedKey: string;
+  credentialKind?: "oauth" | "env_ref" | "manual" | "unset";
+  authRef?: string | null;
+  resolved?: boolean;
 }
 
 export interface RemoteAuthSyncResult {
@@ -195,26 +198,55 @@ export interface RemoteAuthSyncResult {
   failedKeyResolves: number;
 }
 
+export interface ProfilePushResult {
+  requestedProfiles: number;
+  pushedProfiles: number;
+  writtenModelEntries: number;
+  writtenAuthEntries: number;
+  blockedProfiles: number;
+}
+
+export interface RelatedSecretPushResult {
+  totalRelatedProviders: number;
+  resolvedSecrets: number;
+  writtenSecrets: number;
+  skippedProviders: number;
+  failedProviders: number;
+}
+
 export interface AppPreferences {
-  zeroclawModel: string | null;
-  showZeroclawDoctorUi: boolean;
+  showSshTransferSpeedUi: boolean;
 }
 
-export interface ZeroclawUsageStats {
-  totalCalls: number;
-  usageCalls: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  lastUpdatedMs: number;
+export interface SshTransferStats {
+  hostId: string;
+  uploadBytesPerSec: number;
+  downloadBytesPerSec: number;
+  totalUploadBytes: number;
+  totalDownloadBytes: number;
+  updatedAtMs: number;
 }
 
-export interface ZeroclawRuntimeTarget {
-  provider: string | null;
-  model: string | null;
-  source: "preferred" | "auto" | "provider_only" | "unavailable" | string;
-  preferredModel: string | null;
-  providerOrder: string[];
+export type BugReportBackend = "sentry";
+export type BugReportSeverity = "info" | "warn" | "error" | "critical";
+
+export interface BugReportSettings {
+  enabled: boolean;
+  backend: BugReportBackend;
+  endpoint: string | null;
+  severityThreshold: BugReportSeverity;
+  maxReportsPerHour: number;
+}
+
+export interface BugReportStats {
+  sessionId: string;
+  totalSent: number;
+  sentLastHour: number;
+  droppedRateLimited: number;
+  sendFailures: number;
+  lastSentAt: string | null;
+  persistedPending: number;
+  deadLetterCount: number;
 }
 
 export interface HistoryItem {
@@ -272,16 +304,40 @@ export interface InstanceStatus {
   activeAgents: number;
   globalDefaultModel?: string;
   fallbackModels?: string[];
+  sshDiagnostic?: SshDiagnosticReport | null;
 }
 
 export type SshConnectionQuality = "excellent" | "good" | "fair" | "poor" | "unknown";
-export type SshConnectionBottleneckStage = "connect" | "gateway" | "config" | "version" | "other";
+export type SshConnectionBottleneckStage = "connect" | "gateway" | "config" | "agents" | "version" | "other";
+export type SshConnectionProbeStatus = "success" | "failed" | "interactive_required";
+export type SshConnectionStageKey = "connect" | "gateway" | "config" | "agents" | "version";
+export type SshConnectionStageStatus = "ok" | "failed" | "not_run" | "reused" | "interactive_required";
+export type SshConnectionProbePhase = "start" | "success" | "failed" | "reused" | "interactive_required" | "completed";
+
+export interface SshConnectionStageMetric {
+  key: SshConnectionStageKey;
+  latencyMs: number;
+  status: SshConnectionStageStatus;
+  note?: string | null;
+}
+
+export interface SshProbeProgressEvent {
+  hostId: string;
+  requestId: string;
+  stage: SshConnectionStageKey;
+  phase: SshConnectionProbePhase;
+  latencyMs?: number | null;
+  note?: string | null;
+}
 
 export interface SshConnectionProfile {
+  probeStatus?: SshConnectionProbeStatus;
+  reusedExistingConnection?: boolean;
   status: InstanceStatus;
   connectLatencyMs: number;
   gatewayLatencyMs: number;
   configLatencyMs: number;
+  agentsLatencyMs?: number;
   versionLatencyMs: number;
   totalLatencyMs: number;
   quality: SshConnectionQuality;
@@ -290,11 +346,45 @@ export interface SshConnectionProfile {
     stage: SshConnectionBottleneckStage;
     latencyMs: number;
   };
+  stages?: SshConnectionStageMetric[];
 }
 
 export interface StatusExtra {
   openclawVersion?: string;
   duplicateInstalls?: string[];
+}
+
+export interface InstanceConfigSnapshot {
+  globalDefaultModel?: string;
+  fallbackModels: string[];
+  agents: AgentOverview[];
+}
+
+export interface InstanceRuntimeSnapshot {
+  status: InstanceStatus;
+  agents: AgentOverview[];
+  globalDefaultModel?: string;
+  fallbackModels: string[];
+}
+
+export interface ChannelsConfigSnapshot {
+  channels: ChannelNode[];
+  bindings: Binding[];
+}
+
+export interface ChannelsRuntimeSnapshot {
+  channels: ChannelNode[];
+  bindings: Binding[];
+  agents: AgentOverview[];
+}
+
+export interface CronConfigSnapshot {
+  jobs: CronJob[];
+}
+
+export interface CronRuntimeSnapshot {
+  jobs: CronJob[];
+  watchdog: WatchdogStatus & { alive: boolean; deployed: boolean };
 }
 
 export interface Binding {
@@ -327,6 +417,72 @@ export interface SshConfigHostSuggestion {
   user?: string;
   port?: number;
   identityFile?: string;
+}
+
+export type SshStage =
+  | "resolveHostConfig"
+  | "tcpReachability"
+  | "hostKeyVerification"
+  | "authNegotiation"
+  | "sessionOpen"
+  | "remoteExec"
+  | "sftpRead"
+  | "sftpWrite"
+  | "sftpRemove";
+
+export type SshIntent =
+  | "connect"
+  | "exec"
+  | "sftp_read"
+  | "sftp_write"
+  | "sftp_remove"
+  | "install_step"
+  | "doctor_remote"
+  | "health_check";
+
+export type SshDiagnosticStatus = "ok" | "degraded" | "failed";
+
+export type SshErrorCode =
+  | "SSH_HOST_UNREACHABLE"
+  | "SSH_CONNECTION_REFUSED"
+  | "SSH_TIMEOUT"
+  | "SSH_HOST_KEY_FAILED"
+  | "SSH_KEYFILE_MISSING"
+  | "SSH_PASSPHRASE_REQUIRED"
+  | "SSH_AUTH_FAILED"
+  | "SSH_REMOTE_COMMAND_FAILED"
+  | "SSH_SFTP_PERMISSION_DENIED"
+  | "SSH_SESSION_STALE"
+  | "SSH_UNKNOWN";
+
+export type SshRepairAction =
+  | "promptPassphrase"
+  | "retryWithBackoff"
+  | "switchAuthMethodToSshConfig"
+  | "suggestKnownHostsBootstrap"
+  | "suggestAuthorizedKeysCheck"
+  | "suggestPortHostValidation"
+  | "reconnectSession";
+
+export interface SshEvidence {
+  kind: string;
+  value: string;
+}
+
+export interface SshDiagnosticReport {
+  stage: SshStage;
+  intent: SshIntent;
+  status: SshDiagnosticStatus;
+  errorCode?: SshErrorCode | null;
+  summary: string;
+  evidence: SshEvidence[];
+  repairPlan: SshRepairAction[];
+  confidence: number;
+}
+
+export interface SshCommandError {
+  message: string;
+  diagnostic: SshDiagnosticReport;
 }
 
 export interface DockerInstance {
@@ -368,6 +524,12 @@ export interface SftpEntry {
 }
 
 export type RescueBotAction = "set" | "activate" | "status" | "deactivate" | "unset";
+export type RescueBotRuntimeState =
+  | "unconfigured"
+  | "configured_inactive"
+  | "active"
+  | "checking"
+  | "error";
 
 export interface RescueBotCommandResult {
   command: string[];
@@ -384,6 +546,9 @@ export interface RescueBotManageResult {
   mainPort: number;
   rescuePort: number;
   minRecommendedPort: number;
+  configured: boolean;
+  active: boolean;
+  runtimeState: RescueBotRuntimeState;
   wasAlreadyConfigured: boolean;
   commands: RescueBotCommandResult[];
 }
@@ -405,13 +570,62 @@ export interface RescuePrimaryIssue {
   source: "rescue" | "primary";
 }
 
+export interface RescueDocHypothesis {
+  title: string;
+  reason: string;
+  score: number;
+}
+
+export interface RescueDocCitation {
+  url: string;
+  section: string;
+}
+
+export interface RescuePrimarySummary {
+  status: "healthy" | "degraded" | "broken" | "inactive";
+  headline: string;
+  recommendedAction: string;
+  fixableIssueCount: number;
+  selectedFixIssueIds: string[];
+  rootCauseHypotheses?: RescueDocHypothesis[];
+  fixSteps?: string[];
+  confidence?: number;
+  citations?: RescueDocCitation[];
+  versionAwareness?: string;
+}
+
+export interface RescuePrimarySectionItem {
+  id: string;
+  label: string;
+  status: "ok" | "warn" | "error" | "info" | "inactive";
+  detail: string;
+  autoFixable: boolean;
+  issueId?: string | null;
+}
+
+export interface RescuePrimarySectionResult {
+  key: "gateway" | "models" | "tools" | "agents" | "channels";
+  title: string;
+  status: "healthy" | "degraded" | "broken" | "inactive";
+  summary: string;
+  docsUrl: string;
+  items: RescuePrimarySectionItem[];
+  rootCauseHypotheses?: RescueDocHypothesis[];
+  fixSteps?: string[];
+  confidence?: number;
+  citations?: RescueDocCitation[];
+  versionAwareness?: string;
+}
+
 export interface RescuePrimaryDiagnosisResult {
-  status: "healthy" | "degraded" | "broken";
+  status: "healthy" | "degraded" | "broken" | "inactive";
   checkedAt: string;
   targetProfile: string;
   rescueProfile: string;
   rescueConfigured: boolean;
   rescuePort?: number;
+  summary: RescuePrimarySummary;
+  sections: RescuePrimarySectionResult[];
   checks: RescuePrimaryCheckItem[];
   issues: RescuePrimaryIssue[];
 }
@@ -424,7 +638,14 @@ export interface RescuePrimaryRepairStep {
   command?: string[];
 }
 
+export interface RescuePrimaryPendingAction {
+  kind: "tempProviderSetup";
+  reason: string;
+  tempProviderProfileId?: string | null;
+}
+
 export interface RescuePrimaryRepairResult {
+  status: "completed" | "needsTempProviderSetup";
   attemptedAt: string;
   targetProfile: string;
   rescueProfile: string;
@@ -432,6 +653,7 @@ export interface RescuePrimaryRepairResult {
   appliedIssueIds: string[];
   skippedIssueIds: string[];
   failedIssueIds: string[];
+  pendingAction?: RescuePrimaryPendingAction | null;
   steps: RescuePrimaryRepairStep[];
   before: RescuePrimaryDiagnosisResult;
   after: RescuePrimaryDiagnosisResult;
@@ -515,6 +737,7 @@ export interface PreviewQueueResult {
   commands: PendingCommand[];
   configBefore: string;
   configAfter: string;
+  warnings: string[];
   errors: string[];
 }
 
@@ -527,10 +750,20 @@ export interface DoctorInvoke {
   type: "read" | "write";
 }
 
+export interface DiagnosisCitation {
+  url: string;
+  section?: string;
+}
+
 export interface DiagnosisReportItem {
   problem: string;
   severity: "error" | "warn" | "info";
   fix_options: string[];
+  root_cause_hypothesis?: string;
+  fix_steps?: string[];
+  confidence?: number;
+  citations?: DiagnosisCitation[];
+  version_awareness?: string;
   action?: { tool: string; args: string; instance?: string; reason?: string };
 }
 
@@ -543,6 +776,8 @@ export interface DoctorChatMessage {
   invokeId?: string;
   status?: "pending" | "approved" | "rejected" | "auto";
   diagnosisReport?: { items: DiagnosisReportItem[] };
+  /** Epoch milliseconds when the message was created. */
+  timestamp?: number;
 }
 
 export interface ApplyQueueResult {
@@ -598,6 +833,7 @@ export interface InstallStepResult {
   artifacts: Record<string, unknown>;
   next_step: string | null;
   error_code: string | null;
+  ssh_diagnostic?: SshDiagnosticReport | null;
 }
 
 export interface InstallMethodCapability {

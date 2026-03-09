@@ -45,6 +45,7 @@ jobs:
     needs: authorize
     if: needs.authorize.outputs.can_download == 'true'
     runs-on: ${{ matrix.platform }}
+    environment: prerelease
     strategy:
       fail-fast: false
       matrix:
@@ -65,8 +66,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: develop
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -183,14 +182,9 @@ jobs:
           done
 
           if [ -n "$BUNDLE_DIR" ]; then
-            find "$BUNDLE_DIR" -type f \(
-              -name "*.dmg" -o \
-              -name "*.deb" -o \
-              -name "*.AppImage" -o \
-              -name "*.msi" -o \
-              -name "*.exe" -o \
-              -name "*.rpm" \
-            \) -exec cp {} artifacts/ \; 2>/dev/null || true
+            find "$BUNDLE_DIR" -type f \
+              \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.exe" -o -name "*.rpm" \) \
+              -exec cp {} artifacts/ \; 2>/dev/null || true
           fi
 
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
@@ -218,31 +212,16 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: clawpal-${{ matrix.label }}-${{ github.run_id }}
+          name: clawpal-${{ matrix.label }}
           path: artifacts/*
           retention-days: 7
           if-no-files-found: warn
 
       - name: Build summary
         if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ARTIFACT_LIST_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts"
-          ARTIFACT_NAME="clawpal-${{ matrix.label }}-${{ github.run_id }}"
-
           echo "## Artifact Download" >> "$GITHUB_STEP_SUMMARY"
           echo "请在此 Action Summary 页面下方的 **Artifacts** 区域下载，当前为 repo 成员专用。" >> "$GITHUB_STEP_SUMMARY"
           echo "(Artifacts are attached to this run and available at the same page.)" >> "$GITHUB_STEP_SUMMARY"
           echo "Run details: ${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Artifacts: ${ARTIFACT_LIST_URL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          ARTIFACT_URL=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .archive_download_url" | head -n 1)
-
-          if [ -n "$ARTIFACT_URL" ]; then
-            echo "- [下载 ${ARTIFACT_NAME}](${ARTIFACT_URL})" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- ${ARTIFACT_NAME} 下载链接暂未就绪，稍后可在 Actions 页面该构建任务底部 Artifacts 区域手动下载。" >> "$GITHUB_STEP_SUMMARY"
-          fi

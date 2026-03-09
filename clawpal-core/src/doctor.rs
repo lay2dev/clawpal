@@ -225,6 +225,14 @@ pub fn summarize_gateway_status(status: &Value) -> Option<String> {
         .get("port")
         .and_then(Value::as_u64)
         .or_else(|| status.pointer("/gateway/port").and_then(Value::as_u64));
+    let service_status = status
+        .pointer("/service/runtime/status")
+        .and_then(Value::as_str);
+    let service_state = status
+        .pointer("/service/runtime/state")
+        .and_then(Value::as_str);
+    let rpc_ok = status.pointer("/rpc/ok").and_then(Value::as_bool);
+    let port_status = status.pointer("/port/status").and_then(Value::as_str);
 
     let mut parts = Vec::new();
     if let Some(value) = running {
@@ -235,6 +243,15 @@ pub fn summarize_gateway_status(status: &Value) -> Option<String> {
     }
     if let Some(value) = port {
         parts.push(format!("port={value}"));
+    }
+    if let Some(value) = service_status.or(service_state) {
+        parts.push(format!("state={value}"));
+    }
+    if let Some(value) = rpc_ok {
+        parts.push(format!("rpc={value}"));
+    }
+    if let Some(value) = port_status {
+        parts.push(format!("port_status={value}"));
     }
     if parts.is_empty() {
         return None;
@@ -248,6 +265,27 @@ pub fn gateway_output_ok(exit_code: i32, stdout: &str, stderr: &str) -> bool {
     }
     let status = parse_json_loose(stdout).or_else(|| parse_json_loose(stderr));
     let Some(status) = status else {
+        let details = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        if details.contains("not running")
+            || details.contains("already stopped")
+            || details.contains("isn't running")
+            || details.contains("is not running")
+            || details.contains("down")
+            || details.contains("stopped")
+            || details.contains("unhealthy")
+            || details.contains("not healthy")
+            || details.contains("inactive")
+            || details.contains("failed to start")
+            || details.contains("failed to load")
+            || details.contains("could not load")
+            || details.contains("could not read")
+            || details.contains("invalid json")
+            || details.contains("json syntax")
+            || details.contains("parse error")
+            || details.contains("malformed")
+        {
+            return false;
+        }
         return true;
     };
     let running = status
@@ -259,7 +297,64 @@ pub fn gateway_output_ok(exit_code: i32, stdout: &str, stderr: &str) -> bool {
         .and_then(Value::as_bool)
         .or_else(|| status.pointer("/health/ok").and_then(Value::as_bool))
         .or_else(|| status.pointer("/health/healthy").and_then(Value::as_bool));
-    !matches!(running, Some(false)) && !matches!(healthy, Some(false))
+    let service_status = status
+        .pointer("/service/runtime/status")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    let service_state = status
+        .pointer("/service/runtime/state")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    let service_sub_state = status
+        .pointer("/service/runtime/subState")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    let rpc_ok = status.pointer("/rpc/ok").and_then(Value::as_bool);
+    let port_status = status
+        .pointer("/port/status")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    let listeners_empty = status
+        .pointer("/port/listeners")
+        .and_then(Value::as_array)
+        .map(|listeners| listeners.is_empty());
+
+    if matches!(running, Some(false)) || matches!(healthy, Some(false)) {
+        return false;
+    }
+
+    if matches!(
+        service_status.as_deref(),
+        Some("stopped" | "inactive" | "failed")
+    ) || matches!(
+        service_state.as_deref(),
+        Some("inactive" | "dead" | "failed")
+    ) || matches!(
+        service_sub_state.as_deref(),
+        Some("dead" | "failed" | "exited")
+    ) {
+        return false;
+    }
+
+    if matches!(port_status.as_deref(), Some("free" | "closed"))
+        && matches!(listeners_empty, Some(true))
+    {
+        return false;
+    }
+
+    if matches!(rpc_ok, Some(false))
+        && (matches!(
+            service_status.as_deref(),
+            Some("stopped" | "inactive" | "failed")
+        ) || matches!(
+            service_state.as_deref(),
+            Some("inactive" | "dead" | "failed")
+        ) || matches!(port_status.as_deref(), Some("free" | "closed")))
+    {
+        return false;
+    }
+
+    true
 }
 
 pub fn gateway_output_detail(exit_code: i32, stdout: &str, stderr: &str) -> Option<String> {
@@ -267,6 +362,14 @@ pub fn gateway_output_detail(exit_code: i32, stdout: &str, stderr: &str) -> Opti
         parse_json_loose(stdout)
             .or_else(|| parse_json_loose(stderr))
             .and_then(|status| summarize_gateway_status(&status))
+            .or_else(|| {
+                let details = command_output_detail(stderr, stdout);
+                if details == "no output" {
+                    None
+                } else {
+                    Some(details)
+                }
+            })
     } else {
         None
     }
@@ -298,16 +401,16 @@ pub fn command_output_detail(stderr: &str, stdout: &str) -> String {
     "no output".into()
 }
 
-pub fn collect_safe_primary_issue_ids(
+pub fn collect_repairable_primary_issue_ids(
     issues: &[DoctorIssue],
     requested_ids: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let mut seen_safe = HashSet::new();
-    let safe_ids = issues
+    let mut seen_repairable = HashSet::new();
+    let repairable_ids = issues
         .iter()
-        .filter(|issue| issue.source == "primary" && issue.auto_fixable)
+        .filter(|issue| is_repairable_primary_issue(&issue.source, &issue.id, issue.auto_fixable))
         .filter_map(|issue| {
-            if seen_safe.insert(issue.id.clone()) {
+            if seen_repairable.insert(issue.id.clone()) {
                 Some(issue.id.clone())
             } else {
                 None
@@ -316,10 +419,10 @@ pub fn collect_safe_primary_issue_ids(
         .collect::<Vec<_>>();
 
     if requested_ids.is_empty() {
-        return (safe_ids, Vec::new());
+        return (repairable_ids, Vec::new());
     }
 
-    let safe_set = safe_ids.iter().cloned().collect::<HashSet<_>>();
+    let repairable_set = repairable_ids.iter().cloned().collect::<HashSet<_>>();
     let mut selected = Vec::new();
     let mut skipped = Vec::new();
     let mut seen_requested = HashSet::new();
@@ -327,13 +430,125 @@ pub fn collect_safe_primary_issue_ids(
         if !seen_requested.insert(id.clone()) {
             continue;
         }
-        if safe_set.contains(id) {
+        if repairable_set.contains(id) {
             selected.push(id.clone());
         } else {
             skipped.push(id.clone());
         }
     }
     (selected, skipped)
+}
+
+pub fn is_repairable_primary_issue(source: &str, issue_id: &str, _auto_fixable: bool) -> bool {
+    if source != "primary" {
+        return false;
+    }
+    issue_id.starts_with("primary.gateway.")
+        || issue_id.starts_with("primary.config.")
+        || matches!(
+            issue_id,
+            "field.port" | "field.gateway.port" | "field.bind" | "field.gateway.bind"
+        )
+}
+
+pub fn is_primary_gateway_recovery_issue(issue_id: &str) -> bool {
+    issue_id == "primary.gateway.unhealthy"
+}
+
+pub fn is_primary_rescue_permission_issue(
+    source: &str,
+    issue_id: &str,
+    code: &str,
+    message: &str,
+    fix_hint: Option<&str>,
+) -> bool {
+    if source != "primary" {
+        return false;
+    }
+    let haystack = format!(
+        "{} {} {} {}",
+        issue_id,
+        code,
+        message,
+        fix_hint.unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    [
+        "allowlist",
+        "allowfrom",
+        "groupallowfrom",
+        "grouppolicy",
+        "mention",
+        "permission",
+        "approval",
+        "sandbox",
+        "visibility",
+        "tools.allow",
+        "tools.profile",
+        "tools.exec",
+        "sessions.visibility",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+pub fn build_rescue_permission_baseline_commands(profile: &str) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.profile".to_string(),
+            "\"full\"".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.sessions.visibility".to_string(),
+            "\"all\"".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.allow".to_string(),
+            "[\"*\"]".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.exec.host".to_string(),
+            "\"gateway\"".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.exec.security".to_string(),
+            "\"full\"".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "config".to_string(),
+            "set".to_string(),
+            "tools.exec.ask".to_string(),
+            "\"off\"".to_string(),
+            "--json".to_string(),
+        ],
+    ]
 }
 
 pub fn build_primary_issue_fix_tail(issue_id: &str) -> Option<(String, Vec<String>)> {
@@ -469,6 +684,7 @@ pub fn build_rescue_bot_command_plan(
                     cmd
                 });
             }
+            commands.extend(build_rescue_permission_baseline_commands(profile));
         }
         "activate" => {
             commands.extend(build_rescue_bot_command_plan(
@@ -477,26 +693,54 @@ pub fn build_rescue_bot_command_plan(
                 rescue_port,
                 include_configure,
             ));
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "install".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend(["gateway".into(), "restart".into()]);
-                cmd
-            });
-            commands.push({
-                let mut cmd = profile_arg.clone();
-                cmd.extend([
-                    "gateway".into(),
-                    "status".into(),
-                    "--no-probe".into(),
-                    "--json".into(),
-                ]);
-                cmd
-            });
+            if include_configure {
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "stop".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "uninstall".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "install".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "start".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "status".into(), "--json".into()]);
+                    cmd
+                });
+            } else {
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "install".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend(["gateway".into(), "restart".into()]);
+                    cmd
+                });
+                commands.push({
+                    let mut cmd = profile_arg.clone();
+                    cmd.extend([
+                        "gateway".into(),
+                        "status".into(),
+                        "--no-probe".into(),
+                        "--json".into(),
+                    ]);
+                    cmd
+                });
+            }
         }
         "status" => {
             commands.push({
@@ -849,9 +1093,7 @@ pub fn remote_gateway_log_tail_script(lines: usize, filename: &str) -> String {
     script.push_str(
         "gateway_data_root=\"${CLAWPAL_DATA_DIR:-${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-$HOME/.openclaw}}}\"; ",
     );
-    script.push_str("log_path=\"$gateway_data_root/logs/");
-    script.push_str(file);
-    script.push_str(".log\"; ");
+    script.push_str("log_path=\"\"; ");
     script.push_str("for base in ");
     script.push_str("\"$gateway_data_root\" ");
     script.push_str("\"$gateway_data_root/.openclaw\" ");
@@ -870,6 +1112,13 @@ pub fn remote_gateway_log_tail_script(lines: usize, filename: &str) -> String {
     script.push_str(".log\"; ");
     script.push_str("[ -f \"$candidate\" ] && log_path=\"$candidate\" && break; ");
     script.push_str("done; ");
+    if file == "gateway" {
+        script.push_str("[ -n \"$log_path\" ] || [ ! -f \"/tmp/openclaw/gateway-run.log\" ] || log_path=\"/tmp/openclaw/gateway-run.log\"; ");
+        script.push_str("if [ -z \"$log_path\" ] && [ -d \"/tmp/openclaw\" ]; then latest_tmp_openclaw=$(ls -1t /tmp/openclaw/openclaw-*.log 2>/dev/null | head -n 1); [ -n \"$latest_tmp_openclaw\" ] && log_path=\"$latest_tmp_openclaw\"; fi; ");
+    }
+    script.push_str("[ -n \"$log_path\" ] || log_path=\"$gateway_data_root/logs/");
+    script.push_str(file);
+    script.push_str(".log\"; ");
     script.push_str("tail -");
     script.push_str(&lines.to_string());
     script.push_str(" \"$log_path\" 2>/dev/null || echo ''");
@@ -1128,13 +1377,61 @@ mod tests {
     }
 
     #[test]
+    fn gateway_output_ok_detects_plain_text_down_status() {
+        let stdout = "Gateway is not running";
+        assert!(!gateway_output_ok(0, stdout, ""));
+        assert_eq!(
+            gateway_output_detail(0, stdout, "").as_deref(),
+            Some("Gateway is not running")
+        );
+    }
+
+    #[test]
+    fn gateway_output_ok_detects_plain_text_config_failure_status() {
+        let stdout = "Failed to load openclaw.json: invalid JSON syntax";
+        assert!(!gateway_output_ok(0, stdout, ""));
+        assert_eq!(
+            gateway_output_detail(0, stdout, "").as_deref(),
+            Some("Failed to load openclaw.json: invalid JSON syntax")
+        );
+    }
+
+    #[test]
+    fn gateway_output_ok_detects_structured_inactive_gateway_status() {
+        let stdout = r#"{
+  "service": {
+    "runtime": {
+      "status": "stopped",
+      "state": "inactive",
+      "subState": "dead"
+    }
+  },
+  "gateway": {
+    "port": 18789
+  },
+  "port": {
+    "status": "free",
+    "listeners": []
+  },
+  "rpc": {
+    "ok": false
+  }
+}"#;
+        assert!(!gateway_output_ok(0, stdout, ""));
+        assert_eq!(
+            gateway_output_detail(0, stdout, "").as_deref(),
+            Some("port=18789, state=stopped, rpc=false, port_status=free")
+        );
+    }
+
+    #[test]
     fn command_output_detail_prefers_stderr_and_trims() {
         let detail = command_output_detail("  first error line\nsecond\n", "ok");
         assert_eq!(detail, "first error line");
     }
 
     #[test]
-    fn collect_safe_primary_issue_ids_filters_and_dedupes_requested() {
+    fn collect_repairable_primary_issue_ids_filters_and_dedupes_requested() {
         let issues = vec![
             DoctorIssue {
                 id: "field.agents".into(),
@@ -1155,6 +1452,15 @@ mod tests {
                 source: "primary".into(),
             },
             DoctorIssue {
+                id: "primary.gateway.unhealthy".into(),
+                code: "x".into(),
+                severity: "error".into(),
+                message: "gateway unhealthy".into(),
+                auto_fixable: false,
+                fix_hint: Some("Restart primary gateway".into()),
+                source: "primary".into(),
+            },
+            DoctorIssue {
                 id: "rescue.gateway.unhealthy".into(),
                 code: "x".into(),
                 severity: "warn".into(),
@@ -1164,16 +1470,23 @@ mod tests {
                 source: "rescue".into(),
             },
         ];
-        let (selected, skipped) = collect_safe_primary_issue_ids(
+        let (selected, skipped) = collect_repairable_primary_issue_ids(
             &issues,
             &[
                 "field.agents".to_string(),
+                "primary.gateway.unhealthy".to_string(),
                 "field.port".to_string(),
                 "field.agents".to_string(),
             ],
         );
-        assert_eq!(selected, vec!["field.agents".to_string()]);
-        assert_eq!(skipped, vec!["field.port".to_string()]);
+        assert_eq!(
+            selected,
+            vec![
+                "primary.gateway.unhealthy".to_string(),
+                "field.port".to_string()
+            ]
+        );
+        assert_eq!(skipped, vec!["field.agents".to_string()]);
     }
 
     #[test]
@@ -1260,6 +1573,37 @@ mod tests {
             .map(|items| items.into_iter().map(String::from).collect::<Vec<_>>())
             .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn build_rescue_bot_command_plan_for_activate_includes_permission_baseline() {
+        let commands = build_rescue_bot_command_plan("activate", "rescue", 19789, false);
+        let command_strings = commands
+            .iter()
+            .map(|command| command.join(" "))
+            .collect::<Vec<_>>();
+
+        assert!(command_strings
+            .iter()
+            .any(|command| command.contains("config set tools.profile \"full\" --json")));
+        assert!(
+            command_strings
+                .iter()
+                .any(|command| command
+                    .contains("config set tools.sessions.visibility \"all\" --json"))
+        );
+        assert!(command_strings
+            .iter()
+            .any(|command| command.contains("config set tools.allow [\"*\"] --json")));
+        assert!(command_strings
+            .iter()
+            .any(|command| command.contains("config set tools.exec.host \"gateway\" --json")));
+        assert!(command_strings
+            .iter()
+            .any(|command| command.contains("config set tools.exec.security \"full\" --json")));
+        assert!(command_strings
+            .iter()
+            .any(|command| command.contains("config set tools.exec.ask \"off\" --json")));
     }
 
     #[test]
@@ -1370,6 +1714,8 @@ mod tests {
         let script = remote_gateway_log_tail_script(77, "gateway");
         assert!(script.contains("tail -77"));
         assert!(script.contains("gateway.log"));
+        assert!(script.contains("/tmp/openclaw/gateway-run.log"));
+        assert!(script.contains("/tmp/openclaw/openclaw-*.log"));
         assert!(script.contains("OPENCLAW_STATE_DIR"));
         assert!(script.contains("\"$gateway_data_root/.openclaw\""));
         assert!(script.contains("for base in"));

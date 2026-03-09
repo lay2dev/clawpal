@@ -52,7 +52,10 @@ bun run release           # Tag and push (triggers CI)
 ```bash
 export CLAWPAL_OPENCLAW_DIR="$HOME/.openclaw"   # OpenClaw config directory (default)
 export CLAWPAL_DATA_DIR="$HOME/.clawpal"        # ClawPal metadata directory
+export CLAWPAL_SENTRY_DSN="https://public@example.com/42"  # Build-time override for ClawPal's public bug-report Sentry DSN
 ```
+
+`CLAWPAL_SENTRY_DSN` is optional. By default ClawPal uses a public Sentry intake for sanitized bug reports; set this before `bun run dev:tauri` or `bun run build:tauri` if you want reports routed to your own Sentry project.
 
 ## WSL2 (Windows Subsystem for Linux)
 

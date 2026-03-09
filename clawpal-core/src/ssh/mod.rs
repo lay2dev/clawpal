@@ -1,4 +1,5 @@
 pub mod config;
+pub mod diagnostic;
 pub mod registry;
 
 use std::process::Stdio;
@@ -56,6 +57,7 @@ const LEGACY_SSH_CONNECT_TIMEOUT_SECS: u64 = 12;
 const LEGACY_SSH_SERVER_ALIVE_INTERVAL_SECS: u64 = 15;
 const LEGACY_SSH_SERVER_ALIVE_COUNT_MAX: u64 = 2;
 const RUSSH_CONNECT_TIMEOUT_SECS: u64 = 10;
+const RUSSH_AUTH_TIMEOUT_SECS: u64 = 12;
 const RUSSH_DISCONNECT_TIMEOUT_SECS: u64 = 3;
 const RUSSH_EXEC_TIMEOUT_SECS: u64 = 25;
 const RUSSH_SFTP_TIMEOUT_SECS: u64 = 30;
@@ -189,6 +191,11 @@ impl SshSession {
             .channel_open_session()
             .await
             .map_err(|e| SshError::Sftp(e.to_string()))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+
         let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
             .map_err(|e| SshError::Sftp(e.to_string()))?;
@@ -220,10 +227,16 @@ impl SshSession {
             Backend::Russh { handle } => handle.clone(),
             Backend::Legacy => return self.sftp_write_legacy(path, content).await,
         };
+
         let channel = handle
             .channel_open_session()
             .await
             .map_err(|e| SshError::Sftp(e.to_string()))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| SshError::Sftp(e.to_string()))?;
+
         let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
             .map_err(|e| SshError::Sftp(e.to_string()))?;
@@ -465,10 +478,17 @@ async fn connect_and_auth(
             .ok_or_else(|| {
                 SshError::InvalidConfig("password auth selected but password is empty".to_string())
             })?;
-        let ok = handle
-            .authenticate_password(&resolved.username, password)
-            .await
-            .map_err(|e| SshError::Auth(e.to_string()))?;
+        let ok = timeout(
+            Duration::from_secs(RUSSH_AUTH_TIMEOUT_SECS),
+            handle.authenticate_password(&resolved.username, password),
+        )
+        .await
+        .map_err(|_| {
+            SshError::Auth(format!(
+                "password authentication timed out after {RUSSH_AUTH_TIMEOUT_SECS}s"
+            ))
+        })?
+        .map_err(|e| SshError::Auth(e.to_string()))?;
         if ok {
             return Ok((handle, resolved));
         }
@@ -502,13 +522,23 @@ async fn connect_and_auth(
         let Some(key_pair) = key_pair else {
             continue;
         };
-        let ok = handle
-            .authenticate_publickey(&resolved.username, Arc::new(key_pair))
-            .await
-            .map_err(|e| {
-                attempts.push(format!("{expanded}: auth request failed ({})", e));
-                SshError::Auth(e.to_string())
-            })?;
+        let ok = timeout(
+            Duration::from_secs(RUSSH_AUTH_TIMEOUT_SECS),
+            handle.authenticate_publickey(&resolved.username, Arc::new(key_pair)),
+        )
+        .await
+        .map_err(|_| {
+            attempts.push(format!(
+                "{expanded}: auth timed out after {RUSSH_AUTH_TIMEOUT_SECS}s"
+            ));
+            SshError::Auth(format!(
+                "public key authentication timed out after {RUSSH_AUTH_TIMEOUT_SECS}s"
+            ))
+        })?
+        .map_err(|e| {
+            attempts.push(format!("{expanded}: auth request failed ({})", e));
+            SshError::Auth(e.to_string())
+        })?;
         if ok {
             return Ok((handle, resolved));
         }

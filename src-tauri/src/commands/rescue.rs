@@ -1,5 +1,20 @@
 use super::*;
 
+fn escape_single_quoted_shell(value: &str) -> String {
+    value.replace('\'', "'\"'\"'")
+}
+
+async fn remote_log_helper_event(pool: &SshConnectionPool, host_id: &str, message: &str) {
+    let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let line = format!("[{ts}] {message}");
+    let escaped = escape_single_quoted_shell(&line);
+    let cmd = format!(
+        "mkdir -p \"$HOME/.clawpal/logs\"; printf '%s\\n' '{}' >> \"$HOME/.clawpal/logs/helper.log\"",
+        escaped
+    );
+    let _ = pool.exec(host_id, &cmd).await;
+}
+
 #[tauri::command]
 pub async fn remote_manage_rescue_bot(
     pool: State<'_, SshConnectionPool>,
@@ -8,6 +23,18 @@ pub async fn remote_manage_rescue_bot(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
+    let action_label = action.clone();
+    let profile_label = profile.clone().unwrap_or_else(|| "rescue".into());
+    remote_log_helper_event(
+        &pool,
+        &host_id,
+        &format!(
+            "[remote:{host_id}] manage_rescue_bot start action={} profile={}",
+            action_label, profile_label
+        ),
+    )
+    .await;
+
     let action = RescueBotAction::parse(&action)?;
     let profile = profile
         .as_deref()
@@ -28,7 +55,9 @@ pub async fn remote_manage_rescue_bot(
     };
     let (already_configured, existing_port) =
         resolve_remote_rescue_profile_state(&pool, &host_id, &profile).await?;
-    let should_configure = !already_configured || action == RescueBotAction::Set;
+    let should_configure = !already_configured
+        || action == RescueBotAction::Set
+        || action == RescueBotAction::Activate;
     let rescue_port = if should_configure {
         rescue_port.unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
     } else {
@@ -43,12 +72,16 @@ pub async fn remote_manage_rescue_bot(
     }
 
     if action == RescueBotAction::Status && !already_configured {
+        let runtime_state = infer_rescue_bot_runtime_state(false, None, None);
         return Ok(RescueBotManageResult {
             action: action.as_str().into(),
             profile,
             main_port,
             rescue_port,
             min_recommended_port,
+            configured: false,
+            active: false,
+            runtime_state,
             was_already_configured: false,
             commands: Vec::new(),
         });
@@ -81,15 +114,79 @@ pub async fn remote_manage_rescue_bot(
         commands.push(result);
     }
 
-    Ok(RescueBotManageResult {
+    let configured = match action {
+        RescueBotAction::Unset => false,
+        RescueBotAction::Activate | RescueBotAction::Set | RescueBotAction::Deactivate => true,
+        RescueBotAction::Status => already_configured,
+    };
+    let mut status_output = commands
+        .iter()
+        .rev()
+        .find(|result| {
+            result
+                .command
+                .windows(2)
+                .any(|window| window[0] == "gateway" && window[1] == "status")
+        })
+        .map(|result| &result.output);
+    if action == RescueBotAction::Activate {
+        let active_now = status_output
+            .map(|output| infer_rescue_bot_runtime_state(true, Some(output), None) == "active")
+            .unwrap_or(false);
+        if !active_now {
+            let probe_status = build_gateway_status_command(&profile, true);
+            if let Ok(result) = run_remote_rescue_bot_command(&pool, &host_id, probe_status).await {
+                commands.push(result);
+                status_output = commands
+                    .iter()
+                    .rev()
+                    .find(|result| {
+                        result
+                            .command
+                            .windows(2)
+                            .any(|window| window[0] == "gateway" && window[1] == "status")
+                    })
+                    .map(|result| &result.output);
+            }
+        }
+    }
+    let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
+    let active = runtime_state == "active";
+
+    let result = RescueBotManageResult {
         action: action.as_str().into(),
         profile,
         main_port,
         rescue_port,
         min_recommended_port,
+        configured,
+        active,
+        runtime_state,
         was_already_configured: already_configured,
         commands,
-    })
+    };
+
+    remote_log_helper_event(
+        &pool,
+        &host_id,
+        &format!(
+            "[remote:{host_id}] manage_rescue_bot success action={} profile={} state={} configured={} active={}",
+            action_label, result.profile, result.runtime_state, result.configured, result.active
+        ),
+    )
+    .await;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn remote_get_rescue_bot_status(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    profile: Option<String>,
+    rescue_port: Option<u16>,
+) -> Result<RescueBotManageResult, String> {
+    remote_manage_rescue_bot(pool, host_id, "status".to_string(), profile, rescue_port).await
 }
 
 #[tauri::command]
@@ -101,7 +198,45 @@ pub async fn remote_diagnose_primary_via_rescue(
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
     let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
-    diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile).await
+    remote_log_helper_event(
+        &pool,
+        &host_id,
+        &format!(
+            "[remote:{host_id}] diagnose_primary_via_rescue start target={} rescue={}",
+            target_profile, rescue_profile
+        ),
+    )
+    .await;
+    let result =
+        diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile).await;
+    match &result {
+        Ok(summary) => {
+            remote_log_helper_event(
+                &pool,
+                &host_id,
+                &format!(
+                    "[remote:{host_id}] diagnose_primary_via_rescue success target={} rescue={} status={} issues={}",
+                    summary.target_profile,
+                    summary.rescue_profile,
+                    summary.summary.status,
+                    summary.issues.len()
+                ),
+            )
+            .await;
+        }
+        Err(error) => {
+            remote_log_helper_event(
+                &pool,
+                &host_id,
+                &format!(
+                    "[remote:{host_id}] diagnose_primary_via_rescue failed target={} rescue={} error={}",
+                    target_profile, rescue_profile, error
+                ),
+            )
+            .await;
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -114,12 +249,51 @@ pub async fn remote_repair_primary_via_rescue(
 ) -> Result<RescuePrimaryRepairResult, String> {
     let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
-    repair_primary_via_rescue_remote(
+    let requested_issue_count = issue_ids.as_ref().map_or(0, Vec::len);
+    remote_log_helper_event(
+        &pool,
+        &host_id,
+        &format!(
+            "[remote:{host_id}] repair_primary_via_rescue start target={} rescue={} requested_issues={}",
+            target_profile, rescue_profile, requested_issue_count
+        ),
+    )
+    .await;
+    let result = repair_primary_via_rescue_remote(
         &pool,
         &host_id,
         &target_profile,
         &rescue_profile,
         issue_ids.unwrap_or_default(),
     )
-    .await
+    .await;
+    match &result {
+        Ok(summary) => {
+            remote_log_helper_event(
+                &pool,
+                &host_id,
+                &format!(
+                    "[remote:{host_id}] repair_primary_via_rescue success target={} rescue={} applied={} failed={} skipped={}",
+                    summary.target_profile,
+                    summary.rescue_profile,
+                    summary.applied_issue_ids.len(),
+                    summary.failed_issue_ids.len(),
+                    summary.skipped_issue_ids.len()
+                ),
+            )
+            .await;
+        }
+        Err(error) => {
+            remote_log_helper_event(
+                &pool,
+                &host_id,
+                &format!(
+                    "[remote:{host_id}] repair_primary_via_rescue failed target={} rescue={} error={}",
+                    target_profile, rescue_profile, error
+                ),
+            )
+            .await;
+        }
+    }
+    result
 }

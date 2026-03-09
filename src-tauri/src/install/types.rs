@@ -1,3 +1,4 @@
+use clawpal_core::ssh::diagnostic::SshDiagnosticReport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -110,6 +111,8 @@ pub struct InstallStepResult {
     pub artifacts: HashMap<String, Value>,
     pub next_step: Option<String>,
     pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_diagnostic: Option<SshDiagnosticReport>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

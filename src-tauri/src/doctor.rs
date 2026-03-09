@@ -7,21 +7,21 @@ use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoctorEngine {
-    ZeroClaw,
+    Builtin,
 }
 
 impl DoctorEngine {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::ZeroClaw => "zeroclaw",
+            Self::Builtin => "builtin",
         }
     }
 }
 
 pub fn parse_engine(input: Option<String>) -> Result<DoctorEngine, String> {
-    let raw = input.unwrap_or_else(|| "zeroclaw".to_string());
+    let raw = input.unwrap_or_else(|| "builtin".to_string());
     match raw.trim().to_ascii_lowercase().as_str() {
-        "zeroclaw" | "" => Ok(DoctorEngine::ZeroClaw),
+        "builtin" | "zeroclaw" | "" => Ok(DoctorEngine::Builtin),
         other => Err(format!("Unsupported doctor engine: {other}")),
     }
 }
@@ -68,13 +68,14 @@ pub fn classify_engine_error(message: &str) -> &'static str {
         return "MODEL_UNAVAILABLE";
     }
     if lower.contains("no such file")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
         || (lower.contains("not found")
             && (lower.contains("file")
                 || lower.contains("directory")
                 || lower.contains("binary")
                 || lower.contains("command")
                 || lower.contains("executable")
-                || lower.contains("zeroclaw")
                 || lower.contains("openclaw")))
         || lower.contains("failed to start")
         || lower.contains("permission denied")

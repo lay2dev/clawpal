@@ -1,15 +1,16 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader};
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::{
     fs,
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Command, Stdio},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::access_discovery::probe_engine::{build_probe_plan_for_local, run_probe_with_redaction};
 use crate::access_discovery::store::AccessDiscoveryStore;
@@ -20,7 +21,14 @@ use crate::history::{add_snapshot, list_snapshots, read_snapshot};
 use crate::install::session_store::InstallSessionStore;
 use crate::install::types::InstallState;
 use crate::models::resolve_paths;
-use crate::ssh::{SftpEntry, SshConnectionPool, SshExecResult, SshHostConfig};
+use crate::openclaw_doc_resolver::{
+    resolve_local_doc_guidance, resolve_remote_doc_guidance, DocCitation, DocGuidance,
+    DocResolveIssue, DocResolveRequest, RootCauseHypothesis,
+};
+use crate::ssh::{SftpEntry, SshConnectionPool, SshExecResult, SshHostConfig, SshTransferStats};
+use clawpal_core::ssh::diagnostic::{
+    from_any_error, SshDiagnosticReport, SshDiagnosticStatus, SshErrorCode, SshIntent, SshStage,
+};
 
 pub mod agent;
 pub mod backup;
@@ -29,8 +37,10 @@ pub mod cron;
 pub mod discover_local;
 pub mod discovery;
 pub mod doctor;
+pub mod doctor_assistant;
 pub mod gateway;
 pub mod logs;
+pub mod overview;
 pub mod precheck;
 pub mod preferences;
 pub mod profiles;
@@ -53,9 +63,13 @@ pub use discovery::*;
 #[allow(unused_imports)]
 pub use doctor::*;
 #[allow(unused_imports)]
+pub use doctor_assistant::*;
+#[allow(unused_imports)]
 pub use gateway::*;
 #[allow(unused_imports)]
 pub use logs::*;
+#[allow(unused_imports)]
+pub use overview::*;
 #[allow(unused_imports)]
 pub use precheck::*;
 #[allow(unused_imports)]
@@ -68,6 +82,10 @@ pub use rescue::*;
 pub use sessions::*;
 #[allow(unused_imports)]
 pub use watchdog::*;
+
+static REMOTE_OPENCLAW_CONFIG_PATH_CACHE: LazyLock<Mutex<HashMap<String, (String, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const REMOTE_OPENCLAW_CONFIG_PATH_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Escape a string for safe inclusion in a single-quoted shell argument.
 fn shell_escape(s: &str) -> String {
@@ -151,6 +169,9 @@ pub struct RescueBotManageResult {
     pub main_port: u16,
     pub rescue_port: u16,
     pub min_recommended_port: u16,
+    pub configured: bool,
+    pub active: bool,
+    pub runtime_state: String,
     pub was_already_configured: bool,
     pub commands: Vec<RescueBotCommandResult>,
 }
@@ -185,8 +206,58 @@ pub struct RescuePrimaryDiagnosisResult {
     pub rescue_profile: String,
     pub rescue_configured: bool,
     pub rescue_port: Option<u16>,
+    pub summary: RescuePrimarySummary,
+    pub sections: Vec<RescuePrimarySectionResult>,
     pub checks: Vec<RescuePrimaryCheckItem>,
     pub issues: Vec<RescuePrimaryIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescuePrimarySummary {
+    pub status: String,
+    pub headline: String,
+    pub recommended_action: String,
+    pub fixable_issue_count: usize,
+    pub selected_fix_issue_ids: Vec<String>,
+    #[serde(default)]
+    pub root_cause_hypotheses: Vec<RootCauseHypothesis>,
+    #[serde(default)]
+    pub fix_steps: Vec<String>,
+    pub confidence: Option<f32>,
+    #[serde(default)]
+    pub citations: Vec<DocCitation>,
+    pub version_awareness: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescuePrimarySectionResult {
+    pub key: String,
+    pub title: String,
+    pub status: String,
+    pub summary: String,
+    pub docs_url: String,
+    pub items: Vec<RescuePrimarySectionItem>,
+    #[serde(default)]
+    pub root_cause_hypotheses: Vec<RootCauseHypothesis>,
+    #[serde(default)]
+    pub fix_steps: Vec<String>,
+    pub confidence: Option<f32>,
+    #[serde(default)]
+    pub citations: Vec<DocCitation>,
+    pub version_awareness: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescuePrimarySectionItem {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub detail: String,
+    pub auto_fixable: bool,
+    pub issue_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,7 +272,16 @@ pub struct RescuePrimaryRepairStep {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RescuePrimaryPendingAction {
+    pub kind: String,
+    pub reason: String,
+    pub temp_provider_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RescuePrimaryRepairResult {
+    pub status: String,
     pub attempted_at: String,
     pub target_profile: String,
     pub rescue_profile: String,
@@ -209,6 +289,7 @@ pub struct RescuePrimaryRepairResult {
     pub applied_issue_ids: Vec<String>,
     pub skipped_issue_ids: Vec<String>,
     pub failed_issue_ids: Vec<String>,
+    pub pending_action: Option<RescuePrimaryPendingAction>,
     pub steps: Vec<RescuePrimaryRepairStep>,
     pub before: RescuePrimaryDiagnosisResult,
     pub after: RescuePrimaryDiagnosisResult,
@@ -230,7 +311,7 @@ pub struct ExtractModelProfileEntry {
     pub source: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenclawUpdateCache {
     pub checked_at: u64,
@@ -436,6 +517,8 @@ pub struct StatusLight {
     pub active_agents: u32,
     pub global_default_model: Option<String>,
     pub fallback_models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_diagnostic: Option<SshDiagnosticReport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -454,16 +537,29 @@ pub struct SshBottleneck {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SshConnectionStage {
+    pub key: String,
+    pub latency_ms: u64,
+    pub status: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SshConnectionProfile {
+    pub probe_status: String,
+    pub reused_existing_connection: bool,
     pub status: StatusLight,
     pub connect_latency_ms: u64,
     pub gateway_latency_ms: u64,
     pub config_latency_ms: u64,
+    pub agents_latency_ms: u64,
     pub version_latency_ms: u64,
     pub total_latency_ms: u64,
     pub quality: String,
     pub quality_score: u8,
     pub bottleneck: SshBottleneck,
+    pub stages: Vec<SshConnectionStage>,
 }
 
 /// Clear cached openclaw version — call after upgrade so status shows new version.
@@ -635,15 +731,64 @@ fn agent_has_sessions(base_dir: &std::path::Path, agent_id: &str) -> bool {
     }
 }
 
+fn truncated_json_debug(value: &Value, max_chars: usize) -> String {
+    let raw = value.to_string();
+    if raw.chars().count() <= max_chars {
+        raw
+    } else {
+        let mut out = raw.chars().take(max_chars).collect::<String>();
+        out.push_str("...[truncated]");
+        out
+    }
+}
+
+fn agent_entries_from_cli_json(json: &Value) -> Result<&Vec<Value>, String> {
+    json.as_array()
+        .or_else(|| json.get("agents").and_then(Value::as_array))
+        .or_else(|| json.get("data").and_then(Value::as_array))
+        .or_else(|| json.get("items").and_then(Value::as_array))
+        .or_else(|| json.get("result").and_then(Value::as_array))
+        .or_else(|| {
+            json.get("data")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .or_else(|| {
+            json.get("result")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .ok_or_else(|| {
+            let shape = match json {
+                Value::Array(array) => format!("top-level array(len={})", array.len()),
+                Value::Object(map) => {
+                    let mut keys = map.keys().cloned().collect::<Vec<_>>();
+                    keys.sort();
+                    format!("top-level object keys=[{}]", keys.join(", "))
+                }
+                Value::Null => "top-level null".to_string(),
+                Value::Bool(_) => "top-level bool".to_string(),
+                Value::Number(_) => "top-level number".to_string(),
+                Value::String(_) => "top-level string".to_string(),
+            };
+            format!(
+                "agents list output is not an array ({shape}; raw={})",
+                truncated_json_debug(json, 240)
+            )
+        })
+}
+
+pub(crate) fn count_agent_entries_from_cli_json(json: &Value) -> Result<u32, String> {
+    Ok(agent_entries_from_cli_json(json)?.len() as u32)
+}
+
 /// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
 /// `online_set`: if Some, use it to determine online status; if None, check local sessions.
 fn parse_agents_cli_output(
     json: &Value,
     online_set: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<AgentOverview>, String> {
-    let arr = json
-        .as_array()
-        .ok_or("agents list output is not an array")?;
+    let arr = agent_entries_from_cli_json(json)?;
     let paths = if online_set.is_none() {
         Some(resolve_paths())
     } else {
@@ -686,18 +831,51 @@ fn parse_agents_cli_output(
             workspace,
         });
     }
-    if agents.is_empty() {
-        agents.push(AgentOverview {
-            id: "main".into(),
-            name: None,
-            emoji: None,
-            model: None,
-            channels: Vec::new(),
-            online: false,
-            workspace: None,
-        });
-    }
     Ok(agents)
+}
+
+#[cfg(test)]
+mod parse_agents_cli_output_tests {
+    use super::{count_agent_entries_from_cli_json, parse_agents_cli_output};
+    use serde_json::json;
+
+    #[test]
+    fn keeps_empty_agent_lists_empty() {
+        let parsed = parse_agents_cli_output(&json!([]), None).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn counts_real_agent_entries_without_implicit_main() {
+        let count = count_agent_entries_from_cli_json(&json!([])).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn accepts_wrapped_agent_arrays_from_multiple_cli_shapes() {
+        for payload in [
+            json!({ "agents": [{ "id": "main" }] }),
+            json!({ "data": [{ "id": "main" }] }),
+            json!({ "items": [{ "id": "main" }] }),
+            json!({ "result": [{ "id": "main" }] }),
+            json!({ "data": { "agents": [{ "id": "main" }] } }),
+            json!({ "result": { "agents": [{ "id": "main" }] } }),
+        ] {
+            let count = count_agent_entries_from_cli_json(&payload).unwrap();
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    fn invalid_agent_shapes_include_top_level_keys_in_error() {
+        let err = count_agent_entries_from_cli_json(&json!({
+            "status": "ok",
+            "payload": { "entries": [] }
+        }))
+        .unwrap_err();
+        assert!(err.contains("top-level object keys=[payload, status]"));
+        assert!(err.contains("\"payload\":{\"entries\":[]}"));
+    }
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -1061,7 +1239,13 @@ pub async fn manage_rescue_bot(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let action_label = action.clone();
+    let profile_label = profile.clone().unwrap_or_else(|| "rescue".into());
+    crate::logging::log_helper(&format!(
+        "[local] manage_rescue_bot start action={} profile={}",
+        action_label, profile_label
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let action = RescueBotAction::parse(&action)?;
         let profile = profile
             .as_deref()
@@ -1074,7 +1258,9 @@ pub async fn manage_rescue_bot(
             .map(|cfg| clawpal_core::doctor::resolve_gateway_port_from_config(&cfg))
             .unwrap_or(18789);
         let (already_configured, existing_port) = resolve_local_rescue_profile_state(&profile)?;
-        let should_configure = !already_configured || action == RescueBotAction::Set;
+        let should_configure = !already_configured
+            || action == RescueBotAction::Set
+            || action == RescueBotAction::Activate;
         let rescue_port = if should_configure {
             rescue_port.unwrap_or_else(|| clawpal_core::doctor::suggest_rescue_port(main_port))
         } else {
@@ -1089,12 +1275,16 @@ pub async fn manage_rescue_bot(
         }
 
         if action == RescueBotAction::Status && !already_configured {
+            let runtime_state = infer_rescue_bot_runtime_state(false, None, None);
             return Ok(RescueBotManageResult {
                 action: action.as_str().into(),
                 profile,
                 main_port,
                 rescue_port,
                 min_recommended_port,
+                configured: false,
+                active: false,
+                runtime_state,
                 was_already_configured: false,
                 commands: Vec::new(),
             });
@@ -1127,18 +1317,81 @@ pub async fn manage_rescue_bot(
             commands.push(result);
         }
 
+        let configured = match action {
+            RescueBotAction::Unset => false,
+            RescueBotAction::Activate | RescueBotAction::Set | RescueBotAction::Deactivate => true,
+            RescueBotAction::Status => already_configured,
+        };
+        let mut status_output = commands
+            .iter()
+            .rev()
+            .find(|result| {
+                result
+                    .command
+                    .windows(2)
+                    .any(|window| window[0] == "gateway" && window[1] == "status")
+            })
+            .map(|result| &result.output);
+        if action == RescueBotAction::Activate {
+            let active_now = status_output
+                .map(|output| infer_rescue_bot_runtime_state(true, Some(output), None) == "active")
+                .unwrap_or(false);
+            if !active_now {
+                let probe_status = build_gateway_status_command(&profile, true);
+                if let Ok(result) = run_local_rescue_bot_command(probe_status) {
+                    commands.push(result);
+                    status_output = commands
+                        .iter()
+                        .rev()
+                        .find(|result| {
+                            result
+                                .command
+                                .windows(2)
+                                .any(|window| window[0] == "gateway" && window[1] == "status")
+                        })
+                        .map(|result| &result.output);
+                }
+            }
+        }
+        let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
+        let active = runtime_state == "active";
+
         Ok(RescueBotManageResult {
             action: action.as_str().into(),
             profile,
             main_port,
             rescue_port,
             min_recommended_port,
+            configured,
+            active,
+            runtime_state,
             was_already_configured: already_configured,
             commands,
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] manage_rescue_bot success action={} profile={} state={} configured={} active={}",
+            action_label, summary.profile, summary.runtime_state, summary.configured, summary.active
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] manage_rescue_bot failed action={} profile={} error={}",
+            action_label, profile_label, error
+        )),
+    }
+
+    result
+}
+
+#[tauri::command]
+pub async fn get_rescue_bot_status(
+    profile: Option<String>,
+    rescue_port: Option<u16>,
+) -> Result<RescueBotManageResult, String> {
+    manage_rescue_bot("status".to_string(), profile, rescue_port).await
 }
 
 #[tauri::command]
@@ -1146,13 +1399,35 @@ pub async fn diagnose_primary_via_rescue(
     target_profile: Option<String>,
     rescue_profile: Option<String>,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
+    let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+    crate::logging::log_helper(&format!(
+        "[local] diagnose_primary_via_rescue start target={} rescue={}",
+        target_label, rescue_label
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
         let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
         diagnose_primary_via_rescue_local(&target_profile, &rescue_profile)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] diagnose_primary_via_rescue success target={} rescue={} status={} issues={}",
+            summary.target_profile,
+            summary.rescue_profile,
+            summary.summary.status,
+            summary.issues.len()
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] diagnose_primary_via_rescue failed target={} rescue={} error={}",
+            target_label, rescue_label, error
+        )),
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1161,7 +1436,14 @@ pub async fn repair_primary_via_rescue(
     rescue_profile: Option<String>,
     issue_ids: Option<Vec<String>>,
 ) -> Result<RescuePrimaryRepairResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
+    let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
+    let requested_issue_count = issue_ids.as_ref().map_or(0, Vec::len);
+    crate::logging::log_helper(&format!(
+        "[local] repair_primary_via_rescue start target={} rescue={} requested_issues={}",
+        target_label, rescue_label, requested_issue_count
+    ));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
         let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
         repair_primary_via_rescue_local(
@@ -1171,7 +1453,24 @@ pub async fn repair_primary_via_rescue(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(summary) => crate::logging::log_helper(&format!(
+            "[local] repair_primary_via_rescue success target={} rescue={} applied={} failed={} skipped={}",
+            summary.target_profile,
+            summary.rescue_profile,
+            summary.applied_issue_ids.len(),
+            summary.failed_issue_ids.len(),
+            summary.skipped_issue_ids.len()
+        )),
+        Err(error) => crate::logging::log_helper(&format!(
+            "[local] repair_primary_via_rescue failed target={} rescue={} error={}",
+            target_label, rescue_label, error
+        )),
+    }
+
+    result
 }
 
 fn collect_model_summary(cfg: &Value) -> ModelSummary {
@@ -1245,9 +1544,20 @@ fn normalize_profile_name(raw: Option<&str>, fallback: &str) -> String {
 }
 
 fn build_profile_command(profile: &str, args: &[&str]) -> Vec<String> {
-    let mut command = vec!["--profile".to_string(), profile.to_string()];
+    let mut command = Vec::new();
+    if !profile.eq_ignore_ascii_case("primary") {
+        command.extend(["--profile".to_string(), profile.to_string()]);
+    }
     command.extend(args.iter().map(|item| (*item).to_string()));
     command
+}
+
+fn build_gateway_status_command(profile: &str, use_probe: bool) -> Vec<String> {
+    if use_probe {
+        build_profile_command(profile, &["gateway", "status", "--json"])
+    } else {
+        build_profile_command(profile, &["gateway", "status", "--no-probe", "--json"])
+    }
 }
 
 fn command_detail(output: &OpenclawCommandOutput) -> String {
@@ -1263,16 +1573,799 @@ fn gateway_output_detail(output: &OpenclawCommandOutput) -> String {
         .unwrap_or_else(|| command_detail(output))
 }
 
+fn infer_rescue_bot_runtime_state(
+    configured: bool,
+    status_output: Option<&OpenclawCommandOutput>,
+    status_error: Option<&str>,
+) -> String {
+    if status_error.is_some() {
+        return "error".into();
+    }
+    if !configured {
+        return "unconfigured".into();
+    }
+    let Some(output) = status_output else {
+        return "configured_inactive".into();
+    };
+    if gateway_output_ok(output) {
+        return "active".into();
+    }
+    if let Some(value) = clawpal_core::doctor::parse_json_loose(&output.stdout)
+        .or_else(|| clawpal_core::doctor::parse_json_loose(&output.stderr))
+    {
+        let running = value
+            .get("running")
+            .and_then(Value::as_bool)
+            .or_else(|| value.pointer("/gateway/running").and_then(Value::as_bool));
+        let healthy = value
+            .get("healthy")
+            .and_then(Value::as_bool)
+            .or_else(|| value.pointer("/health/ok").and_then(Value::as_bool))
+            .or_else(|| value.pointer("/health/healthy").and_then(Value::as_bool));
+        if matches!(running, Some(false)) || matches!(healthy, Some(false)) {
+            return "configured_inactive".into();
+        }
+    }
+    let details = format!("{}\n{}", output.stderr, output.stdout).to_ascii_lowercase();
+    if details.contains("not running")
+        || details.contains("already stopped")
+        || details.contains("not installed")
+        || details.contains("not found")
+        || details.contains("is not running")
+        || details.contains("isn't running")
+        || details.contains("\"running\":false")
+        || details.contains("\"healthy\":false")
+        || details.contains("\"ok\":false")
+        || details.contains("inactive")
+        || details.contains("stopped")
+    {
+        return "configured_inactive".into();
+    }
+    "error".into()
+}
+
+fn rescue_section_order() -> [&'static str; 5] {
+    ["gateway", "models", "tools", "agents", "channels"]
+}
+
+fn rescue_section_title(key: &str) -> &'static str {
+    match key {
+        "gateway" => "Gateway",
+        "models" => "Models",
+        "tools" => "Tools",
+        "agents" => "Agents",
+        "channels" => "Channels",
+        _ => "Recovery",
+    }
+}
+
+fn rescue_section_docs_url(key: &str) -> &'static str {
+    match key {
+        "gateway" => "https://docs.openclaw.ai/gateway/security/index",
+        "models" => "https://docs.openclaw.ai/models",
+        "tools" => "https://docs.openclaw.ai/tools",
+        "agents" => "https://docs.openclaw.ai/agents",
+        "channels" => "https://docs.openclaw.ai/channels",
+        _ => "https://docs.openclaw.ai/",
+    }
+}
+
+fn section_item_status_from_issue(issue: &RescuePrimaryIssue) -> String {
+    match issue.severity.as_str() {
+        "error" => "error".into(),
+        "warn" => "warn".into(),
+        "info" => "info".into(),
+        _ => "warn".into(),
+    }
+}
+
+fn classify_rescue_check_section(check: &RescuePrimaryCheckItem) -> Option<&'static str> {
+    let id = check.id.to_ascii_lowercase();
+    if id.contains("gateway") || id.contains("rescue.profile") || id == "field.port" {
+        return Some("gateway");
+    }
+    if id.contains("model") || id.contains("provider") || id.contains("auth") {
+        return Some("models");
+    }
+    if id.contains("tool") || id.contains("allowlist") || id.contains("sandbox") {
+        return Some("tools");
+    }
+    if id.contains("agent") || id.contains("workspace") {
+        return Some("agents");
+    }
+    if id.contains("channel") || id.contains("discord") || id.contains("group") {
+        return Some("channels");
+    }
+    None
+}
+
+fn classify_rescue_issue_section(issue: &RescuePrimaryIssue) -> &'static str {
+    let haystack = format!(
+        "{} {} {} {} {}",
+        issue.id,
+        issue.code,
+        issue.message,
+        issue.fix_hint.clone().unwrap_or_default(),
+        issue.source
+    )
+    .to_ascii_lowercase();
+    if issue.source == "rescue"
+        || haystack.contains("gateway")
+        || haystack.contains("port")
+        || haystack.contains("proxy")
+        || haystack.contains("security")
+    {
+        return "gateway";
+    }
+    if haystack.contains("tool")
+        || haystack.contains("allowlist")
+        || haystack.contains("sandbox")
+        || haystack.contains("approval")
+        || haystack.contains("permission")
+        || haystack.contains("policy")
+    {
+        return "tools";
+    }
+    if haystack.contains("channel")
+        || haystack.contains("discord")
+        || haystack.contains("guild")
+        || haystack.contains("allowfrom")
+        || haystack.contains("groupallowfrom")
+        || haystack.contains("grouppolicy")
+        || haystack.contains("mention")
+    {
+        return "channels";
+    }
+    if haystack.contains("agent") || haystack.contains("workspace") || haystack.contains("session")
+    {
+        return "agents";
+    }
+    if haystack.contains("model")
+        || haystack.contains("provider")
+        || haystack.contains("auth")
+        || haystack.contains("token")
+        || haystack.contains("api key")
+        || haystack.contains("apikey")
+        || haystack.contains("oauth")
+        || haystack.contains("base url")
+    {
+        return "models";
+    }
+    "gateway"
+}
+
+fn has_unreadable_primary_config_issue(issues: &[RescuePrimaryIssue]) -> bool {
+    issues
+        .iter()
+        .any(|issue| issue.code == "primary.config.unreadable")
+}
+
+fn config_item(id: &str, label: &str, status: &str, detail: String) -> RescuePrimarySectionItem {
+    RescuePrimarySectionItem {
+        id: id.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
+        detail,
+        auto_fixable: false,
+        issue_id: None,
+    }
+}
+
+fn build_rescue_primary_sections(
+    config: Option<&Value>,
+    checks: &[RescuePrimaryCheckItem],
+    issues: &[RescuePrimaryIssue],
+) -> Vec<RescuePrimarySectionResult> {
+    let mut grouped_items = BTreeMap::<String, Vec<RescuePrimarySectionItem>>::new();
+    for key in rescue_section_order() {
+        grouped_items.insert(key.to_string(), Vec::new());
+    }
+
+    if let Some(cfg) = config {
+        let gateway_port = cfg
+            .pointer("/gateway/port")
+            .and_then(Value::as_u64)
+            .map(|port| port.to_string());
+        grouped_items
+            .get_mut("gateway")
+            .expect("gateway section must exist")
+            .push(config_item(
+                "gateway.config.port",
+                "Gateway port",
+                if gateway_port.is_some() { "ok" } else { "warn" },
+                gateway_port
+                    .map(|port| format!("Configured primary gateway port: {port}"))
+                    .unwrap_or_else(|| "Gateway port is not explicitly configured".into()),
+            ));
+
+        let providers = cfg
+            .pointer("/models/providers")
+            .and_then(Value::as_object)
+            .map(|providers| providers.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        grouped_items
+            .get_mut("models")
+            .expect("models section must exist")
+            .push(config_item(
+                "models.providers",
+                "Provider configuration",
+                if providers.is_empty() { "warn" } else { "ok" },
+                if providers.is_empty() {
+                    "No model providers are configured".into()
+                } else {
+                    format!("Configured providers: {}", providers.join(", "))
+                },
+            ));
+        let default_model = cfg
+            .pointer("/agents/defaults/model")
+            .or_else(|| cfg.pointer("/agents/default/model"))
+            .and_then(read_model_value);
+        grouped_items
+            .get_mut("models")
+            .expect("models section must exist")
+            .push(config_item(
+                "models.defaults.primary",
+                "Primary model binding",
+                if default_model.is_some() {
+                    "ok"
+                } else {
+                    "warn"
+                },
+                default_model
+                    .map(|model| format!("Primary model resolves to {model}"))
+                    .unwrap_or_else(|| "No default model binding is configured".into()),
+            ));
+
+        let tools = cfg.pointer("/tools").and_then(Value::as_object);
+        grouped_items
+            .get_mut("tools")
+            .expect("tools section must exist")
+            .push(config_item(
+                "tools.config.surface",
+                "Tooling surface",
+                if tools.is_some() { "ok" } else { "inactive" },
+                tools
+                    .map(|tool_cfg| {
+                        let keys = tool_cfg.keys().cloned().collect::<Vec<_>>();
+                        if keys.is_empty() {
+                            "Tools config exists but has no explicit controls".into()
+                        } else {
+                            format!("Configured tool controls: {}", keys.join(", "))
+                        }
+                    })
+                    .unwrap_or_else(|| "No explicit tools configuration found".into()),
+            ));
+
+        let agent_count = cfg
+            .pointer("/agents/list")
+            .and_then(Value::as_array)
+            .map(|agents| agents.len())
+            .unwrap_or(0);
+        grouped_items
+            .get_mut("agents")
+            .expect("agents section must exist")
+            .push(config_item(
+                "agents.config.count",
+                "Agent definitions",
+                if agent_count > 0 { "ok" } else { "warn" },
+                if agent_count > 0 {
+                    format!("Configured agents: {agent_count}")
+                } else {
+                    "No explicit agents.list entries were found".into()
+                },
+            ));
+
+        let channel_nodes = collect_channel_nodes(cfg);
+        let channel_kinds = channel_nodes
+            .iter()
+            .filter_map(|node| node.channel_type.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        grouped_items
+            .get_mut("channels")
+            .expect("channels section must exist")
+            .push(config_item(
+                "channels.config.count",
+                "Configured channel surfaces",
+                if channel_nodes.is_empty() {
+                    "inactive"
+                } else {
+                    "ok"
+                },
+                if channel_nodes.is_empty() {
+                    "No channels are configured".into()
+                } else {
+                    format!(
+                        "Configured channel nodes: {} ({})",
+                        channel_nodes.len(),
+                        channel_kinds.join(", ")
+                    )
+                },
+            ));
+    } else {
+        for key in rescue_section_order() {
+            grouped_items
+                .get_mut(key)
+                .expect("section must exist")
+                .push(config_item(
+                    &format!("{key}.config.unavailable"),
+                    "Configuration unavailable",
+                    if key == "gateway" { "warn" } else { "inactive" },
+                    "Configuration could not be read for this target".into(),
+                ));
+        }
+    }
+
+    for check in checks {
+        let Some(section_key) = classify_rescue_check_section(check) else {
+            continue;
+        };
+        grouped_items
+            .get_mut(section_key)
+            .expect("section must exist")
+            .push(RescuePrimarySectionItem {
+                id: check.id.clone(),
+                label: check.title.clone(),
+                status: if check.ok { "ok".into() } else { "warn".into() },
+                detail: check.detail.clone(),
+                auto_fixable: false,
+                issue_id: None,
+            });
+    }
+
+    for issue in issues {
+        let section_key = classify_rescue_issue_section(issue);
+        grouped_items
+            .get_mut(section_key)
+            .expect("section must exist")
+            .push(RescuePrimarySectionItem {
+                id: issue.id.clone(),
+                label: issue.message.clone(),
+                status: section_item_status_from_issue(issue),
+                detail: issue.fix_hint.clone().unwrap_or_default(),
+                auto_fixable: issue.auto_fixable && issue.source == "primary",
+                issue_id: Some(issue.id.clone()),
+            });
+    }
+
+    rescue_section_order()
+        .into_iter()
+        .map(|key| {
+            let items = grouped_items.remove(key).unwrap_or_default();
+            let has_error = items.iter().any(|item| item.status == "error");
+            let has_warn = items.iter().any(|item| item.status == "warn");
+            let has_active_signal = items
+                .iter()
+                .any(|item| item.status != "inactive" && !item.detail.is_empty());
+            let status = if has_error {
+                "broken"
+            } else if has_warn {
+                "degraded"
+            } else if has_active_signal {
+                "healthy"
+            } else {
+                "inactive"
+            };
+            let issue_count = items.iter().filter(|item| item.issue_id.is_some()).count();
+            let summary = match status {
+                "broken" => format!(
+                    "{} has {} blocking finding(s)",
+                    rescue_section_title(key),
+                    issue_count.max(1)
+                ),
+                "degraded" => format!(
+                    "{} has {} recommended change(s)",
+                    rescue_section_title(key),
+                    issue_count.max(1)
+                ),
+                "healthy" => format!("{} checks look healthy", rescue_section_title(key)),
+                _ => format!("{} is not configured yet", rescue_section_title(key)),
+            };
+            RescuePrimarySectionResult {
+                key: key.to_string(),
+                title: rescue_section_title(key).to_string(),
+                status: status.to_string(),
+                summary,
+                docs_url: rescue_section_docs_url(key).to_string(),
+                items,
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            }
+        })
+        .collect()
+}
+
+fn build_rescue_primary_summary(
+    sections: &[RescuePrimarySectionResult],
+    issues: &[RescuePrimaryIssue],
+) -> RescuePrimarySummary {
+    let selected_fix_issue_ids = issues
+        .iter()
+        .filter(|issue| {
+            clawpal_core::doctor::is_repairable_primary_issue(
+                &issue.source,
+                &issue.id,
+                issue.auto_fixable,
+            )
+        })
+        .map(|issue| issue.id.clone())
+        .collect::<Vec<_>>();
+    let fixable_issue_count = selected_fix_issue_ids.len();
+    let status = if sections.iter().any(|section| section.status == "broken") {
+        "broken"
+    } else if sections.iter().any(|section| section.status == "degraded") {
+        "degraded"
+    } else if sections.iter().any(|section| section.status == "healthy") {
+        "healthy"
+    } else {
+        "inactive"
+    };
+    let priority_section = sections
+        .iter()
+        .find(|section| section.status == "broken")
+        .or_else(|| sections.iter().find(|section| section.status == "degraded"))
+        .or_else(|| sections.iter().find(|section| section.status == "healthy"));
+    if has_unreadable_primary_config_issue(issues) && status == "degraded" {
+        return RescuePrimarySummary {
+            status: status.to_string(),
+            headline: "Configuration needs attention".into(),
+            recommended_action: if fixable_issue_count > 0 {
+                format!(
+                    "Apply {} optimization(s) and re-run recovery",
+                    fixable_issue_count
+                )
+            } else {
+                "Repair the OpenClaw configuration before the next check".into()
+            },
+            fixable_issue_count,
+            selected_fix_issue_ids,
+            root_cause_hypotheses: Vec::new(),
+            fix_steps: Vec::new(),
+            confidence: None,
+            citations: Vec::new(),
+            version_awareness: None,
+        };
+    }
+    let (headline, recommended_action) = match priority_section {
+        Some(section) if section.status == "broken" => (
+            format!("{} needs attention first", section.title),
+            if fixable_issue_count > 0 {
+                format!("Apply {} fix(es) and re-run recovery", fixable_issue_count)
+            } else {
+                format!("Review {} findings and fix them manually", section.title)
+            },
+        ),
+        Some(section) if section.status == "degraded" => (
+            format!("{} has recommended improvements", section.title),
+            if fixable_issue_count > 0 {
+                format!(
+                    "Apply {} optimization(s) to stabilize the target",
+                    fixable_issue_count
+                )
+            } else {
+                format!(
+                    "Review {} recommendations before the next check",
+                    section.title
+                )
+            },
+        ),
+        Some(section) => (
+            "Primary recovery checks look healthy".into(),
+            format!(
+                "Keep monitoring {} and re-run checks after changes",
+                section.title
+            ),
+        ),
+        None => (
+            "No recovery checks are available yet".into(),
+            "Configure and activate Rescue Bot before running recovery".into(),
+        ),
+    };
+
+    RescuePrimarySummary {
+        status: status.to_string(),
+        headline,
+        recommended_action,
+        fixable_issue_count,
+        selected_fix_issue_ids,
+        root_cause_hypotheses: Vec::new(),
+        fix_steps: Vec::new(),
+        confidence: None,
+        citations: Vec::new(),
+        version_awareness: None,
+    }
+}
+
+fn doc_guidance_section_from_url(url: &str) -> Option<&'static str> {
+    let lowered = url.to_ascii_lowercase();
+    if lowered.contains("/gateway") || lowered.contains("/security") {
+        return Some("gateway");
+    }
+    if lowered.contains("/models") {
+        return Some("models");
+    }
+    if lowered.contains("/tools") {
+        return Some("tools");
+    }
+    if lowered.contains("/agents") {
+        return Some("agents");
+    }
+    if lowered.contains("/channels") {
+        return Some("channels");
+    }
+    None
+}
+
+fn classify_doc_guidance_section(
+    guidance: &DocGuidance,
+    sections: &[RescuePrimarySectionResult],
+) -> Option<&'static str> {
+    for citation in &guidance.citations {
+        if let Some(section) = doc_guidance_section_from_url(&citation.url) {
+            return Some(section);
+        }
+    }
+    for rule in &guidance.resolver_meta.rules_matched {
+        let lowered = rule.to_ascii_lowercase();
+        if lowered.contains("gateway") || lowered.contains("cron") {
+            return Some("gateway");
+        }
+        if lowered.contains("provider") || lowered.contains("auth") || lowered.contains("model") {
+            return Some("models");
+        }
+        if lowered.contains("tool") || lowered.contains("sandbox") || lowered.contains("allowlist")
+        {
+            return Some("tools");
+        }
+        if lowered.contains("agent") || lowered.contains("workspace") {
+            return Some("agents");
+        }
+        if lowered.contains("channel") || lowered.contains("group") || lowered.contains("pairing") {
+            return Some("channels");
+        }
+    }
+    sections
+        .iter()
+        .find(|section| section.status == "broken")
+        .or_else(|| sections.iter().find(|section| section.status == "degraded"))
+        .map(|section| match section.key.as_str() {
+            "gateway" => "gateway",
+            "models" => "models",
+            "tools" => "tools",
+            "agents" => "agents",
+            "channels" => "channels",
+            _ => "gateway",
+        })
+}
+
+fn build_doc_resolve_request(
+    instance_scope: &str,
+    transport: &str,
+    openclaw_version: Option<String>,
+    issues: &[RescuePrimaryIssue],
+    config_content: String,
+    gateway_status: Option<String>,
+) -> DocResolveRequest {
+    DocResolveRequest {
+        instance_scope: instance_scope.to_string(),
+        transport: transport.to_string(),
+        openclaw_version,
+        doctor_issues: issues
+            .iter()
+            .map(|issue| DocResolveIssue {
+                id: issue.id.clone(),
+                severity: issue.severity.clone(),
+                message: issue.message.clone(),
+            })
+            .collect(),
+        config_content,
+        error_log: issues
+            .iter()
+            .map(|issue| format!("[{}] {}", issue.severity, issue.message))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        gateway_status,
+    }
+}
+
+fn apply_doc_guidance_to_diagnosis(
+    mut diagnosis: RescuePrimaryDiagnosisResult,
+    guidance: Option<DocGuidance>,
+) -> RescuePrimaryDiagnosisResult {
+    let Some(guidance) = guidance else {
+        return diagnosis;
+    };
+    if !guidance.root_cause_hypotheses.is_empty() {
+        diagnosis.summary.root_cause_hypotheses = guidance.root_cause_hypotheses.clone();
+    }
+    if !guidance.fix_steps.is_empty() {
+        diagnosis.summary.fix_steps = guidance.fix_steps.clone();
+        if diagnosis.summary.status != "healthy" {
+            if let Some(first_step) = guidance.fix_steps.first() {
+                diagnosis.summary.recommended_action = first_step.clone();
+            }
+        }
+    }
+    if !guidance.citations.is_empty() {
+        diagnosis.summary.citations = guidance.citations.clone();
+    }
+    diagnosis.summary.confidence = Some(guidance.confidence);
+    diagnosis.summary.version_awareness = Some(guidance.version_awareness.clone());
+
+    if let Some(section_key) = classify_doc_guidance_section(&guidance, &diagnosis.sections) {
+        if let Some(section) = diagnosis
+            .sections
+            .iter_mut()
+            .find(|section| section.key == section_key)
+        {
+            if !guidance.root_cause_hypotheses.is_empty() {
+                section.root_cause_hypotheses = guidance.root_cause_hypotheses.clone();
+            }
+            if !guidance.fix_steps.is_empty() {
+                section.fix_steps = guidance.fix_steps.clone();
+            }
+            if !guidance.citations.is_empty() {
+                section.citations = guidance.citations.clone();
+            }
+            section.confidence = Some(guidance.confidence);
+            section.version_awareness = Some(guidance.version_awareness.clone());
+        }
+    }
+
+    diagnosis
+}
+
+fn parse_json_from_openclaw_output(output: &OpenclawCommandOutput) -> Option<Value> {
+    clawpal_core::doctor::extract_json_from_output(&output.stdout)
+        .and_then(|json| serde_json::from_str::<Value>(json).ok())
+        .or_else(|| {
+            clawpal_core::doctor::extract_json_from_output(&output.stderr)
+                .and_then(|json| serde_json::from_str::<Value>(json).ok())
+        })
+}
+
+fn collect_local_rescue_runtime_checks(config: Option<&Value>) -> Vec<RescuePrimaryCheckItem> {
+    let mut checks = Vec::new();
+    if let Ok(output) = run_openclaw_raw(&["agents", "list", "--json"]) {
+        if let Some(json) = parse_json_from_openclaw_output(&output) {
+            let count = count_agent_entries_from_cli_json(&json).unwrap_or(0);
+            checks.push(RescuePrimaryCheckItem {
+                id: "agents.runtime.count".into(),
+                title: "Runtime agent inventory".into(),
+                ok: count > 0,
+                detail: if count > 0 {
+                    format!("Detected {count} agent(s) from openclaw agents list")
+                } else {
+                    "No agents were detected from openclaw agents list".into()
+                },
+            });
+        }
+    }
+
+    let paths = resolve_paths();
+    if let Some(catalog) = extract_model_catalog_from_cli(&paths) {
+        let provider_count = catalog.len();
+        let model_count = catalog
+            .iter()
+            .map(|provider| provider.models.len())
+            .sum::<usize>();
+        checks.push(RescuePrimaryCheckItem {
+            id: "models.catalog.runtime".into(),
+            title: "Runtime model catalog".into(),
+            ok: provider_count > 0 && model_count > 0,
+            detail: format!("Discovered {provider_count} provider(s) and {model_count} model(s)"),
+        });
+    }
+
+    if let Some(cfg) = config {
+        let channel_nodes = collect_channel_nodes(cfg);
+        checks.push(RescuePrimaryCheckItem {
+            id: "channels.runtime.nodes".into(),
+            title: "Configured channel nodes".into(),
+            ok: !channel_nodes.is_empty(),
+            detail: if channel_nodes.is_empty() {
+                "No channel nodes were discovered in config".into()
+            } else {
+                format!("Discovered {} channel node(s)", channel_nodes.len())
+            },
+        });
+    }
+
+    checks
+}
+
+async fn collect_remote_rescue_runtime_checks(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    config: Option<&Value>,
+) -> Vec<RescuePrimaryCheckItem> {
+    let mut checks = Vec::new();
+    if let Ok(output) = run_remote_openclaw_dynamic(
+        pool,
+        host_id,
+        vec!["agents".into(), "list".into(), "--json".into()],
+    )
+    .await
+    {
+        if let Some(json) = parse_json_from_openclaw_output(&output) {
+            let count = count_agent_entries_from_cli_json(&json).unwrap_or(0);
+            checks.push(RescuePrimaryCheckItem {
+                id: "agents.runtime.count".into(),
+                title: "Runtime agent inventory".into(),
+                ok: count > 0,
+                detail: if count > 0 {
+                    format!("Detected {count} agent(s) from remote openclaw agents list")
+                } else {
+                    "No agents were detected from remote openclaw agents list".into()
+                },
+            });
+        }
+    }
+
+    if let Ok(output) = run_remote_openclaw_dynamic(
+        pool,
+        host_id,
+        vec![
+            "models".into(),
+            "list".into(),
+            "--all".into(),
+            "--json".into(),
+            "--no-color".into(),
+        ],
+    )
+    .await
+    {
+        if let Some(catalog) = parse_model_catalog_from_cli_output(&output.stdout) {
+            let provider_count = catalog.len();
+            let model_count = catalog
+                .iter()
+                .map(|provider| provider.models.len())
+                .sum::<usize>();
+            checks.push(RescuePrimaryCheckItem {
+                id: "models.catalog.runtime".into(),
+                title: "Runtime model catalog".into(),
+                ok: provider_count > 0 && model_count > 0,
+                detail: format!(
+                    "Discovered {provider_count} provider(s) and {model_count} model(s)"
+                ),
+            });
+        }
+    }
+
+    if let Some(cfg) = config {
+        let channel_nodes = collect_channel_nodes(cfg);
+        checks.push(RescuePrimaryCheckItem {
+            id: "channels.runtime.nodes".into(),
+            title: "Configured channel nodes".into(),
+            ok: !channel_nodes.is_empty(),
+            detail: if channel_nodes.is_empty() {
+                "No channel nodes were discovered in config".into()
+            } else {
+                format!("Discovered {} channel node(s)", channel_nodes.len())
+            },
+        });
+    }
+
+    checks
+}
+
 fn build_rescue_primary_diagnosis(
     target_profile: &str,
     rescue_profile: &str,
     rescue_configured: bool,
     rescue_port: Option<u16>,
+    config: Option<&Value>,
+    mut runtime_checks: Vec<RescuePrimaryCheckItem>,
     rescue_gateway_status: Option<&OpenclawCommandOutput>,
     primary_doctor_output: &OpenclawCommandOutput,
     primary_gateway_status: &OpenclawCommandOutput,
 ) -> RescuePrimaryDiagnosisResult {
     let mut checks = Vec::new();
+    checks.append(&mut runtime_checks);
     let mut issues: Vec<clawpal_core::doctor::DoctorIssue> = Vec::new();
 
     checks.push(RescuePrimaryCheckItem {
@@ -1374,14 +2467,33 @@ fn build_rescue_primary_diagnosis(
         ok: primary_gateway_ok,
         detail: gateway_output_detail(primary_gateway_status),
     });
+    if config.is_none() {
+        issues.push(clawpal_core::doctor::DoctorIssue {
+            id: "primary.config.unreadable".into(),
+            code: "primary.config.unreadable".into(),
+            severity: if primary_gateway_ok {
+                "warn".into()
+            } else {
+                "error".into()
+            },
+            message: "Primary configuration could not be read".into(),
+            auto_fixable: false,
+            fix_hint: Some(
+                "Repair openclaw.json parsing errors and re-run the primary recovery check".into(),
+            ),
+            source: "primary".into(),
+        });
+    }
     if !primary_gateway_ok {
         issues.push(clawpal_core::doctor::DoctorIssue {
             id: "primary.gateway.unhealthy".into(),
             code: "primary.gateway.unhealthy".into(),
             severity: "error".into(),
             message: "Primary gateway is not healthy".into(),
-            auto_fixable: false,
-            fix_hint: Some("Inspect gateway logs and restart primary gateway".into()),
+            auto_fixable: true,
+            fix_hint: Some(
+                "Restart primary gateway and inspect gateway logs if it stays unhealthy".into(),
+            ),
             source: "primary".into(),
         });
     }
@@ -1400,6 +2512,8 @@ fn build_rescue_primary_diagnosis(
             source: issue.source,
         })
         .collect();
+    let sections = build_rescue_primary_sections(config, &checks, &issues);
+    let summary = build_rescue_primary_summary(&sections, &issues);
 
     RescuePrimaryDiagnosisResult {
         status,
@@ -1408,6 +2522,8 @@ fn build_rescue_primary_diagnosis(
         rescue_profile: rescue_profile.to_string(),
         rescue_configured,
         rescue_port,
+        summary,
+        sections,
         checks,
         issues,
     }
@@ -1417,32 +2533,55 @@ fn diagnose_primary_via_rescue_local(
     target_profile: &str,
     rescue_profile: &str,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    let paths = resolve_paths();
+    let config = read_openclaw_config(&paths).ok();
+    let config_content = fs::read_to_string(&paths.config_path)
+        .ok()
+        .and_then(|raw| {
+            clawpal_core::config::parse_and_normalize_config(&raw)
+                .ok()
+                .map(|(_, normalized)| normalized)
+        })
+        .or_else(|| {
+            config
+                .as_ref()
+                .and_then(|cfg| serde_json::to_string_pretty(cfg).ok())
+        })
+        .unwrap_or_default();
     let (rescue_configured, rescue_port) = resolve_local_rescue_profile_state(rescue_profile)?;
     let rescue_gateway_status = if rescue_configured {
-        let command = build_profile_command(
-            rescue_profile,
-            &["gateway", "status", "--no-probe", "--json"],
-        );
+        let command = build_gateway_status_command(rescue_profile, false);
         Some(run_openclaw_dynamic(&command)?)
     } else {
         None
     };
     let primary_doctor_output = run_local_primary_doctor_with_fallback(target_profile)?;
-    let primary_gateway_command = build_profile_command(
-        target_profile,
-        &["gateway", "status", "--no-probe", "--json"],
-    );
+    let primary_gateway_command = build_gateway_status_command(target_profile, true);
     let primary_gateway_output = run_openclaw_dynamic(&primary_gateway_command)?;
+    let runtime_checks = collect_local_rescue_runtime_checks(config.as_ref());
 
-    Ok(build_rescue_primary_diagnosis(
+    let diagnosis = build_rescue_primary_diagnosis(
         target_profile,
         rescue_profile,
         rescue_configured,
         rescue_port,
+        config.as_ref(),
+        runtime_checks,
         rescue_gateway_status.as_ref(),
         &primary_doctor_output,
         &primary_gateway_output,
-    ))
+    );
+    let doc_request = build_doc_resolve_request(
+        "local",
+        "local",
+        Some(resolve_openclaw_version()),
+        &diagnosis.issues,
+        config_content,
+        Some(gateway_output_detail(&primary_gateway_output)),
+    );
+    let guidance = tauri::async_runtime::block_on(resolve_local_doc_guidance(&doc_request, &paths));
+
+    Ok(apply_doc_guidance_to_diagnosis(diagnosis, Some(guidance)))
 }
 
 async fn diagnose_primary_via_rescue_remote(
@@ -1451,38 +2590,60 @@ async fn diagnose_primary_via_rescue_remote(
     target_profile: &str,
     rescue_profile: &str,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    let remote_config = remote_read_openclaw_config_text_and_json(pool, host_id)
+        .await
+        .ok();
+    let config_content = remote_config
+        .as_ref()
+        .map(|(_, normalized, _)| normalized.clone())
+        .unwrap_or_default();
+    let config = remote_config.as_ref().map(|(_, _, cfg)| cfg.clone());
     let (rescue_configured, rescue_port) =
         resolve_remote_rescue_profile_state(pool, host_id, rescue_profile).await?;
     let rescue_gateway_status = if rescue_configured {
-        let command = build_profile_command(
-            rescue_profile,
-            &["gateway", "status", "--no-probe", "--json"],
-        );
+        let command = build_gateway_status_command(rescue_profile, false);
         Some(run_remote_openclaw_dynamic(pool, host_id, command).await?)
     } else {
         None
     };
     let primary_doctor_output =
         run_remote_primary_doctor_with_fallback(pool, host_id, target_profile).await?;
-    let primary_gateway_command = build_profile_command(
-        target_profile,
-        &["gateway", "status", "--no-probe", "--json"],
-    );
+    let primary_gateway_command = build_gateway_status_command(target_profile, true);
     let primary_gateway_output =
         run_remote_openclaw_dynamic(pool, host_id, primary_gateway_command).await?;
+    let runtime_checks = collect_remote_rescue_runtime_checks(pool, host_id, config.as_ref()).await;
 
-    Ok(build_rescue_primary_diagnosis(
+    let diagnosis = build_rescue_primary_diagnosis(
         target_profile,
         rescue_profile,
         rescue_configured,
         rescue_port,
+        config.as_ref(),
+        runtime_checks,
         rescue_gateway_status.as_ref(),
         &primary_doctor_output,
         &primary_gateway_output,
-    ))
+    );
+    let remote_version = pool
+        .exec_login(host_id, "openclaw --version 2>/dev/null || true")
+        .await
+        .ok()
+        .map(|output| output.stdout.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let doc_request = build_doc_resolve_request(
+        host_id,
+        "remote_ssh",
+        remote_version,
+        &diagnosis.issues,
+        config_content,
+        Some(gateway_output_detail(&primary_gateway_output)),
+    );
+    let guidance = resolve_remote_doc_guidance(pool, host_id, &doc_request, &resolve_paths()).await;
+
+    Ok(apply_doc_guidance_to_diagnosis(diagnosis, Some(guidance)))
 }
 
-fn collect_safe_primary_issue_ids(
+fn collect_repairable_primary_issue_ids(
     diagnosis: &RescuePrimaryDiagnosisResult,
     requested_ids: &[String],
 ) -> (Vec<String>, Vec<String>) {
@@ -1499,7 +2660,7 @@ fn collect_safe_primary_issue_ids(
             source: issue.source.clone(),
         })
         .collect();
-    clawpal_core::doctor::collect_safe_primary_issue_ids(&issues, requested_ids)
+    clawpal_core::doctor::collect_repairable_primary_issue_ids(&issues, requested_ids)
 }
 
 fn build_primary_issue_fix_command(
@@ -1511,6 +2672,38 @@ fn build_primary_issue_fix_command(
     Some((title, build_profile_command(target_profile, &tail_refs)))
 }
 
+fn build_primary_doctor_fix_command(target_profile: &str) -> Vec<String> {
+    build_profile_command(target_profile, &["doctor", "--fix", "--yes"])
+}
+
+fn should_run_primary_doctor_fix(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
+    if diagnosis.status != "healthy" {
+        return true;
+    }
+
+    diagnosis
+        .sections
+        .iter()
+        .any(|section| section.status != "healthy")
+}
+
+fn should_refresh_rescue_helper_permissions(
+    diagnosis: &RescuePrimaryDiagnosisResult,
+    selected_issue_ids: &[String],
+) -> bool {
+    let selected = selected_issue_ids.iter().cloned().collect::<HashSet<_>>();
+    diagnosis.issues.iter().any(|issue| {
+        (selected.is_empty() || selected.contains(&issue.id))
+            && clawpal_core::doctor::is_primary_rescue_permission_issue(
+                &issue.source,
+                &issue.id,
+                &issue.code,
+                &issue.message,
+                issue.fix_hint.as_deref(),
+            )
+    })
+}
+
 fn build_step_detail(command: &[String], output: &OpenclawCommandOutput) -> String {
     if output.exit_code == 0 {
         return command_detail(output);
@@ -1518,16 +2711,18 @@ fn build_step_detail(command: &[String], output: &OpenclawCommandOutput) -> Stri
     command_failure_message(command, output)
 }
 
-fn run_local_profile_restart_with_fallback(
+fn run_local_gateway_restart_with_fallback(
     profile: &str,
     steps: &mut Vec<RescuePrimaryRepairStep>,
+    id_prefix: &str,
+    title_prefix: &str,
 ) -> Result<bool, String> {
     let restart_command = build_profile_command(profile, &["gateway", "restart"]);
     let restart_output = run_openclaw_dynamic(&restart_command)?;
     let restart_ok = restart_output.exit_code == 0;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.restart".into(),
-        title: "Restart primary gateway".into(),
+        id: format!("{id_prefix}.restart"),
+        title: format!("Restart {title_prefix}"),
         ok: restart_ok,
         detail: build_step_detail(&restart_command, &restart_output),
         command: Some(restart_command.clone()),
@@ -1543,8 +2738,8 @@ fn run_local_profile_restart_with_fallback(
     let stop_command = build_profile_command(profile, &["gateway", "stop"]);
     let stop_output = run_openclaw_dynamic(&stop_command)?;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.stop".into(),
-        title: "Stop primary gateway (restart fallback)".into(),
+        id: format!("{id_prefix}.stop"),
+        title: format!("Stop {title_prefix} (restart fallback)"),
         ok: stop_output.exit_code == 0,
         detail: build_step_detail(&stop_command, &stop_output),
         command: Some(stop_command),
@@ -1554,8 +2749,8 @@ fn run_local_profile_restart_with_fallback(
     let start_output = run_openclaw_dynamic(&start_command)?;
     let start_ok = start_output.exit_code == 0;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.start".into(),
-        title: "Start primary gateway (restart fallback)".into(),
+        id: format!("{id_prefix}.start"),
+        title: format!("Start {title_prefix} (restart fallback)"),
         ok: start_ok,
         detail: build_step_detail(&start_command, &start_output),
         command: Some(start_command),
@@ -1563,19 +2758,65 @@ fn run_local_profile_restart_with_fallback(
     Ok(start_ok)
 }
 
-async fn run_remote_profile_restart_with_fallback(
+fn run_local_rescue_permission_refresh(
+    rescue_profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<(), String> {
+    for (index, command) in
+        clawpal_core::doctor::build_rescue_permission_baseline_commands(rescue_profile)
+            .into_iter()
+            .enumerate()
+    {
+        let output = run_openclaw_dynamic(&command)?;
+        steps.push(RescuePrimaryRepairStep {
+            id: format!("rescue.permissions.{}", index + 1),
+            title: "Update recovery helper permissions".into(),
+            ok: output.exit_code == 0,
+            detail: build_step_detail(&command, &output),
+            command: Some(command),
+        });
+    }
+    let _ = run_local_gateway_restart_with_fallback(
+        rescue_profile,
+        steps,
+        "rescue.gateway",
+        "recovery helper",
+    )?;
+    Ok(())
+}
+
+fn run_local_primary_doctor_fix(
+    profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<bool, String> {
+    let command = build_primary_doctor_fix_command(profile);
+    let output = run_openclaw_dynamic(&command)?;
+    let ok = output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.doctor.fix".into(),
+        title: "Run openclaw doctor --fix".into(),
+        ok,
+        detail: build_step_detail(&command, &output),
+        command: Some(command),
+    });
+    Ok(ok)
+}
+
+async fn run_remote_gateway_restart_with_fallback(
     pool: &SshConnectionPool,
     host_id: &str,
     profile: &str,
     steps: &mut Vec<RescuePrimaryRepairStep>,
+    id_prefix: &str,
+    title_prefix: &str,
 ) -> Result<bool, String> {
     let restart_command = build_profile_command(profile, &["gateway", "restart"]);
     let restart_output =
         run_remote_openclaw_dynamic(pool, host_id, restart_command.clone()).await?;
     let restart_ok = restart_output.exit_code == 0;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.restart".into(),
-        title: "Restart primary gateway".into(),
+        id: format!("{id_prefix}.restart"),
+        title: format!("Restart {title_prefix}"),
         ok: restart_ok,
         detail: build_step_detail(&restart_command, &restart_output),
         command: Some(restart_command.clone()),
@@ -1591,8 +2832,8 @@ async fn run_remote_profile_restart_with_fallback(
     let stop_command = build_profile_command(profile, &["gateway", "stop"]);
     let stop_output = run_remote_openclaw_dynamic(pool, host_id, stop_command.clone()).await?;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.stop".into(),
-        title: "Stop primary gateway (restart fallback)".into(),
+        id: format!("{id_prefix}.stop"),
+        title: format!("Stop {title_prefix} (restart fallback)"),
         ok: stop_output.exit_code == 0,
         detail: build_step_detail(&stop_command, &stop_output),
         command: Some(stop_command),
@@ -1602,13 +2843,64 @@ async fn run_remote_profile_restart_with_fallback(
     let start_output = run_remote_openclaw_dynamic(pool, host_id, start_command.clone()).await?;
     let start_ok = start_output.exit_code == 0;
     steps.push(RescuePrimaryRepairStep {
-        id: "primary.gateway.start".into(),
-        title: "Start primary gateway (restart fallback)".into(),
+        id: format!("{id_prefix}.start"),
+        title: format!("Start {title_prefix} (restart fallback)"),
         ok: start_ok,
         detail: build_step_detail(&start_command, &start_output),
         command: Some(start_command),
     });
     Ok(start_ok)
+}
+
+async fn run_remote_rescue_permission_refresh(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    rescue_profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<(), String> {
+    for (index, command) in
+        clawpal_core::doctor::build_rescue_permission_baseline_commands(rescue_profile)
+            .into_iter()
+            .enumerate()
+    {
+        let output = run_remote_openclaw_dynamic(pool, host_id, command.clone()).await?;
+        steps.push(RescuePrimaryRepairStep {
+            id: format!("rescue.permissions.{}", index + 1),
+            title: "Update recovery helper permissions".into(),
+            ok: output.exit_code == 0,
+            detail: build_step_detail(&command, &output),
+            command: Some(command),
+        });
+    }
+    let _ = run_remote_gateway_restart_with_fallback(
+        pool,
+        host_id,
+        rescue_profile,
+        steps,
+        "rescue.gateway",
+        "recovery helper",
+    )
+    .await?;
+    Ok(())
+}
+
+async fn run_remote_primary_doctor_fix(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<bool, String> {
+    let command = build_primary_doctor_fix_command(profile);
+    let output = run_remote_openclaw_dynamic(pool, host_id, command.clone()).await?;
+    let ok = output.exit_code == 0;
+    steps.push(RescuePrimaryRepairStep {
+        id: "primary.doctor.fix".into(),
+        title: "Run openclaw doctor --fix".into(),
+        ok,
+        detail: build_step_detail(&command, &output),
+        command: Some(command),
+    });
+    Ok(ok)
 }
 
 fn repair_primary_via_rescue_local(
@@ -1618,11 +2910,15 @@ fn repair_primary_via_rescue_local(
 ) -> Result<RescuePrimaryRepairResult, String> {
     let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
     let before = diagnose_primary_via_rescue_local(target_profile, rescue_profile)?;
-    let (selected_issue_ids, mut skipped_issue_ids) =
-        collect_safe_primary_issue_ids(&before, &issue_ids);
+    let (selected_issue_ids, skipped_issue_ids) =
+        collect_repairable_primary_issue_ids(&before, &issue_ids);
     let mut applied_issue_ids = Vec::new();
     let mut failed_issue_ids = Vec::new();
+    let mut deferred_issue_ids = Vec::new();
     let mut steps = Vec::new();
+    let should_run_doctor_fix = should_run_primary_doctor_fix(&before);
+    let should_refresh_rescue_permissions =
+        should_refresh_rescue_helper_permissions(&before, &selected_issue_ids);
 
     if !before.rescue_configured {
         steps.push(RescuePrimaryRepairStep {
@@ -1637,6 +2933,7 @@ fn repair_primary_via_rescue_local(
         });
         let after = before.clone();
         return Ok(RescuePrimaryRepairResult {
+            status: "completed".into(),
             attempted_at,
             target_profile: target_profile.to_string(),
             rescue_profile: rescue_profile.to_string(),
@@ -1644,30 +2941,48 @@ fn repair_primary_via_rescue_local(
             applied_issue_ids,
             skipped_issue_ids,
             failed_issue_ids,
+            pending_action: None,
             steps,
             before,
             after,
         });
     }
 
-    if selected_issue_ids.is_empty() {
+    if selected_issue_ids.is_empty() && !should_run_doctor_fix {
         steps.push(RescuePrimaryRepairStep {
             id: "repair.noop".into(),
-            title: "No safe auto-fixes available".into(),
+            title: "No automatic repairs available".into(),
             ok: true,
-            detail: "No auto-fixable primary issues were selected".into(),
+            detail: "No primary issues were selected for repair".into(),
             command: None,
         });
     } else {
+        if should_refresh_rescue_permissions {
+            run_local_rescue_permission_refresh(rescue_profile, &mut steps)?;
+        }
+        if should_run_doctor_fix {
+            let _ = run_local_primary_doctor_fix(target_profile, &mut steps)?;
+        }
+        let mut gateway_recovery_requested = false;
         for issue_id in &selected_issue_ids {
+            if clawpal_core::doctor::is_primary_gateway_recovery_issue(issue_id) {
+                gateway_recovery_requested = true;
+                continue;
+            }
             let Some((title, command)) = build_primary_issue_fix_command(target_profile, issue_id)
             else {
-                skipped_issue_ids.push(issue_id.clone());
+                deferred_issue_ids.push(issue_id.clone());
                 steps.push(RescuePrimaryRepairStep {
                     id: format!("repair.{issue_id}"),
-                    title: "Skip unsupported issue fix".into(),
-                    ok: false,
-                    detail: format!("No safe repair mapping for issue \"{issue_id}\""),
+                    title: "Delegate issue to openclaw doctor --fix".into(),
+                    ok: should_run_doctor_fix,
+                    detail: if should_run_doctor_fix {
+                        format!(
+                            "No direct repair mapping for issue \"{issue_id}\"; relying on openclaw doctor --fix and recheck"
+                        )
+                    } else {
+                        format!("No repair mapping for issue \"{issue_id}\"")
+                    },
                     command: None,
                 });
                 continue;
@@ -1687,17 +3002,40 @@ fn repair_primary_via_rescue_local(
                 failed_issue_ids.push(issue_id.clone());
             }
         }
-    }
-
-    if !applied_issue_ids.is_empty() {
-        let restart_ok = run_local_profile_restart_with_fallback(target_profile, &mut steps)?;
-        if !restart_ok {
-            failed_issue_ids.push("primary.gateway.restart".into());
+        if gateway_recovery_requested || !selected_issue_ids.is_empty() || should_run_doctor_fix {
+            let restart_ok = run_local_gateway_restart_with_fallback(
+                target_profile,
+                &mut steps,
+                "primary.gateway",
+                "primary gateway",
+            )?;
+            if gateway_recovery_requested {
+                if restart_ok {
+                    applied_issue_ids.push("primary.gateway.unhealthy".into());
+                } else {
+                    failed_issue_ids.push("primary.gateway.unhealthy".into());
+                }
+            } else if !restart_ok {
+                failed_issue_ids.push("primary.gateway.restart".into());
+            }
         }
     }
 
     let after = diagnose_primary_via_rescue_local(target_profile, rescue_profile)?;
+    let remaining_issue_ids = after
+        .issues
+        .iter()
+        .map(|issue| issue.id.as_str())
+        .collect::<HashSet<_>>();
+    for issue_id in deferred_issue_ids {
+        if remaining_issue_ids.contains(issue_id.as_str()) {
+            failed_issue_ids.push(issue_id);
+        } else {
+            applied_issue_ids.push(issue_id);
+        }
+    }
     Ok(RescuePrimaryRepairResult {
+        status: "completed".into(),
         attempted_at,
         target_profile: target_profile.to_string(),
         rescue_profile: rescue_profile.to_string(),
@@ -1705,6 +3043,7 @@ fn repair_primary_via_rescue_local(
         applied_issue_ids,
         skipped_issue_ids,
         failed_issue_ids,
+        pending_action: None,
         steps,
         before,
         after,
@@ -1721,11 +3060,15 @@ async fn repair_primary_via_rescue_remote(
     let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
     let before =
         diagnose_primary_via_rescue_remote(pool, host_id, target_profile, rescue_profile).await?;
-    let (selected_issue_ids, mut skipped_issue_ids) =
-        collect_safe_primary_issue_ids(&before, &issue_ids);
+    let (selected_issue_ids, skipped_issue_ids) =
+        collect_repairable_primary_issue_ids(&before, &issue_ids);
     let mut applied_issue_ids = Vec::new();
     let mut failed_issue_ids = Vec::new();
+    let mut deferred_issue_ids = Vec::new();
     let mut steps = Vec::new();
+    let should_run_doctor_fix = should_run_primary_doctor_fix(&before);
+    let should_refresh_rescue_permissions =
+        should_refresh_rescue_helper_permissions(&before, &selected_issue_ids);
 
     if !before.rescue_configured {
         steps.push(RescuePrimaryRepairStep {
@@ -1740,6 +3083,7 @@ async fn repair_primary_via_rescue_remote(
         });
         let after = before.clone();
         return Ok(RescuePrimaryRepairResult {
+            status: "completed".into(),
             attempted_at,
             target_profile: target_profile.to_string(),
             rescue_profile: rescue_profile.to_string(),
@@ -1747,30 +3091,49 @@ async fn repair_primary_via_rescue_remote(
             applied_issue_ids,
             skipped_issue_ids,
             failed_issue_ids,
+            pending_action: None,
             steps,
             before,
             after,
         });
     }
 
-    if selected_issue_ids.is_empty() {
+    if selected_issue_ids.is_empty() && !should_run_doctor_fix {
         steps.push(RescuePrimaryRepairStep {
             id: "repair.noop".into(),
-            title: "No safe auto-fixes available".into(),
+            title: "No automatic repairs available".into(),
             ok: true,
-            detail: "No auto-fixable primary issues were selected".into(),
+            detail: "No primary issues were selected for repair".into(),
             command: None,
         });
     } else {
+        if should_refresh_rescue_permissions {
+            run_remote_rescue_permission_refresh(pool, host_id, rescue_profile, &mut steps).await?;
+        }
+        if should_run_doctor_fix {
+            let _ =
+                run_remote_primary_doctor_fix(pool, host_id, target_profile, &mut steps).await?;
+        }
+        let mut gateway_recovery_requested = false;
         for issue_id in &selected_issue_ids {
+            if clawpal_core::doctor::is_primary_gateway_recovery_issue(issue_id) {
+                gateway_recovery_requested = true;
+                continue;
+            }
             let Some((title, command)) = build_primary_issue_fix_command(target_profile, issue_id)
             else {
-                skipped_issue_ids.push(issue_id.clone());
+                deferred_issue_ids.push(issue_id.clone());
                 steps.push(RescuePrimaryRepairStep {
                     id: format!("repair.{issue_id}"),
-                    title: "Skip unsupported issue fix".into(),
-                    ok: false,
-                    detail: format!("No safe repair mapping for issue \"{issue_id}\""),
+                    title: "Delegate issue to openclaw doctor --fix".into(),
+                    ok: should_run_doctor_fix,
+                    detail: if should_run_doctor_fix {
+                        format!(
+                            "No direct repair mapping for issue \"{issue_id}\"; relying on openclaw doctor --fix and recheck"
+                        )
+                    } else {
+                        format!("No repair mapping for issue \"{issue_id}\"")
+                    },
                     command: None,
                 });
                 continue;
@@ -1790,20 +3153,44 @@ async fn repair_primary_via_rescue_remote(
                 failed_issue_ids.push(issue_id.clone());
             }
         }
-    }
-
-    if !applied_issue_ids.is_empty() {
-        let restart_ok =
-            run_remote_profile_restart_with_fallback(pool, host_id, target_profile, &mut steps)
-                .await?;
-        if !restart_ok {
-            failed_issue_ids.push("primary.gateway.restart".into());
+        if gateway_recovery_requested || !selected_issue_ids.is_empty() || should_run_doctor_fix {
+            let restart_ok = run_remote_gateway_restart_with_fallback(
+                pool,
+                host_id,
+                target_profile,
+                &mut steps,
+                "primary.gateway",
+                "primary gateway",
+            )
+            .await?;
+            if gateway_recovery_requested {
+                if restart_ok {
+                    applied_issue_ids.push("primary.gateway.unhealthy".into());
+                } else {
+                    failed_issue_ids.push("primary.gateway.unhealthy".into());
+                }
+            } else if !restart_ok {
+                failed_issue_ids.push("primary.gateway.restart".into());
+            }
         }
     }
 
     let after =
         diagnose_primary_via_rescue_remote(pool, host_id, target_profile, rescue_profile).await?;
+    let remaining_issue_ids = after
+        .issues
+        .iter()
+        .map(|issue| issue.id.as_str())
+        .collect::<HashSet<_>>();
+    for issue_id in deferred_issue_ids {
+        if remaining_issue_ids.contains(issue_id.as_str()) {
+            failed_issue_ids.push(issue_id);
+        } else {
+            applied_issue_ids.push(issue_id);
+        }
+    }
     Ok(RescuePrimaryRepairResult {
+        status: "completed".into(),
         attempted_at,
         target_profile: target_profile.to_string(),
         rescue_profile: rescue_profile.to_string(),
@@ -1811,6 +3198,7 @@ async fn repair_primary_via_rescue_remote(
         applied_issue_ids,
         skipped_issue_ids,
         failed_issue_ids,
+        pending_action: None,
         steps,
         before,
         after,
@@ -1882,16 +3270,47 @@ fn is_rescue_cleanup_noop(
 
 fn run_local_rescue_bot_command(command: Vec<String>) -> Result<RescueBotCommandResult, String> {
     let output = run_openclaw_dynamic(&command)?;
+    if is_gateway_status_command_output_incompatible(&output, &command) {
+        let fallback = strip_gateway_status_json_flag(&command);
+        if fallback != command {
+            let fallback_output = run_openclaw_dynamic(&fallback)?;
+            return Ok(RescueBotCommandResult {
+                command: fallback,
+                output: fallback_output,
+            });
+        }
+    }
     Ok(RescueBotCommandResult { command, output })
 }
 
+fn is_gateway_status_command_output_incompatible(
+    output: &OpenclawCommandOutput,
+    command: &[String],
+) -> bool {
+    if output.exit_code == 0 {
+        return false;
+    }
+    if !command.iter().any(|arg| arg == "--json") {
+        return false;
+    }
+    clawpal_core::doctor::doctor_json_option_unsupported(&output.stderr, &output.stdout)
+}
+
+fn strip_gateway_status_json_flag(command: &[String]) -> Vec<String> {
+    command
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .cloned()
+        .collect()
+}
+
 fn run_local_primary_doctor_with_fallback(profile: &str) -> Result<OpenclawCommandOutput, String> {
-    let json_command = build_profile_command(profile, &["doctor", "--json"]);
+    let json_command = build_profile_command(profile, &["doctor", "--json", "--yes"]);
     let output = run_openclaw_dynamic(&json_command)?;
     if output.exit_code != 0
         && clawpal_core::doctor::doctor_json_option_unsupported(&output.stderr, &output.stdout)
     {
-        let plain_command = build_profile_command(profile, &["doctor"]);
+        let plain_command = build_profile_command(profile, &["doctor", "--yes"]);
         return run_openclaw_dynamic(&plain_command);
     }
     Ok(output)
@@ -2068,6 +3487,11 @@ pub fn local_openclaw_config_exists(openclaw_home: String) -> Result<bool, Strin
         .join(".openclaw")
         .join("openclaw.json");
     Ok(config_path.exists())
+}
+
+#[tauri::command]
+pub fn local_openclaw_cli_available() -> Result<bool, String> {
+    Ok(run_openclaw_raw(&["--version"]).is_ok())
 }
 
 #[tauri::command]
@@ -2516,6 +3940,27 @@ fn normalize_semver_components(raw: &str) -> Option<Vec<u32>> {
     Some(parts)
 }
 
+#[cfg(test)]
+mod openclaw_update_tests {
+    use super::normalize_openclaw_release_tag;
+
+    #[test]
+    fn normalize_openclaw_release_tag_extracts_semver_from_github_tag() {
+        assert_eq!(
+            normalize_openclaw_release_tag("v2026.3.2"),
+            Some("2026.3.2".into())
+        );
+        assert_eq!(
+            normalize_openclaw_release_tag("OpenClaw v2026.3.2"),
+            Some("2026.3.2".into())
+        );
+        assert_eq!(
+            normalize_openclaw_release_tag("2026.3.2-rc.1"),
+            Some("2026.3.2-rc.1".into())
+        );
+    }
+}
+
 fn unix_timestamp_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2601,190 +4046,114 @@ fn check_openclaw_update_cached(
     paths: &crate::models::OpenClawPaths,
     force: bool,
 ) -> Result<OpenclawUpdateCheck, String> {
-    let cache_path = openclaw_update_cache_path(paths);
-    let now = unix_timestamp_secs();
-    if !force {
-        if let Some(cached) = read_openclaw_update_cache(&cache_path) {
-            if now.saturating_sub(cached.checked_at) < cached.ttl_seconds {
-                let installed_version = cached
-                    .installed_version
-                    .unwrap_or_else(resolve_openclaw_version);
-                let upgrade_available =
-                    compare_semver(&installed_version, cached.latest_version.as_deref());
-                return Ok(OpenclawUpdateCheck {
-                    installed_version,
-                    latest_version: cached.latest_version,
-                    upgrade_available,
-                    channel: cached.channel,
-                    details: cached.details,
-                    source: cached.source,
-                    checked_at: format_timestamp_from_unix(now),
-                });
-            }
-        }
-    }
-
     let installed_version = resolve_openclaw_version();
-    let (latest_version, channel, details, source, upgrade_available) =
-        detect_openclaw_update_cached(&installed_version).unwrap_or((
-            None,
-            None,
-            Some("failed to detect update status".into()),
-            "openclaw-command".into(),
-            false,
-        ));
-    let checked_at = format_timestamp_from_unix(now);
-    let cache = OpenclawUpdateCache {
-        checked_at: now,
-        latest_version: latest_version.clone(),
-        channel,
-        details: details.clone(),
-        source: source.clone(),
-        installed_version: Some(installed_version.clone()),
-        ttl_seconds: 60 * 60 * 6,
-    };
-    save_openclaw_update_cache(&cache_path, &cache)?;
-    let upgrade = compare_semver(&installed_version, latest_version.as_deref());
+    let cache_path = openclaw_update_cache_path(paths);
+    let mut cache = resolve_openclaw_latest_release_cached(paths, force).unwrap_or_else(|_| {
+        OpenclawUpdateCache {
+            checked_at: unix_timestamp_secs(),
+            latest_version: None,
+            channel: None,
+            details: Some("failed to detect latest GitHub release".into()),
+            source: "github-release".into(),
+            installed_version: None,
+            ttl_seconds: 60 * 60 * 6,
+        }
+    });
+    if cache.installed_version.as_deref() != Some(installed_version.as_str()) {
+        cache.installed_version = Some(installed_version.clone());
+        save_openclaw_update_cache(&cache_path, &cache)?;
+    }
+    let upgrade = compare_semver(&installed_version, cache.latest_version.as_deref());
     Ok(OpenclawUpdateCheck {
         installed_version,
-        latest_version,
-        upgrade_available: upgrade || upgrade_available,
+        latest_version: cache.latest_version,
+        upgrade_available: upgrade,
         channel: cache.channel,
-        details,
-        source,
-        checked_at,
+        details: cache.details,
+        source: cache.source,
+        checked_at: format_timestamp_from_unix(cache.checked_at),
     })
 }
 
-fn detect_openclaw_update_cached(
-    installed_version: &str,
-) -> Option<(Option<String>, Option<String>, Option<String>, String, bool)> {
-    let output = run_openclaw_raw(&["update", "status"]).ok()?;
-    if let Some((latest_version, channel, details, upgrade_available)) =
-        parse_openclaw_update_json(&output.stdout, installed_version)
-    {
-        return Some((
-            latest_version,
-            Some(channel),
-            Some(details),
-            "openclaw update status --json".into(),
-            upgrade_available,
-        ));
+fn resolve_openclaw_latest_release_cached(
+    paths: &crate::models::OpenClawPaths,
+    force: bool,
+) -> Result<OpenclawUpdateCache, String> {
+    let cache_path = openclaw_update_cache_path(paths);
+    let now = unix_timestamp_secs();
+    let existing = read_openclaw_update_cache(&cache_path);
+    if !force {
+        if let Some(cached) = existing.as_ref() {
+            if now.saturating_sub(cached.checked_at) < cached.ttl_seconds {
+                return Ok(cached.clone());
+            }
+        }
     }
-    let parsed = parse_openclaw_update_text(&output.stdout);
-    if let Some((latest_version, channel, details)) = parsed {
-        let source = "openclaw update status".into();
-        let available = latest_version
-            .as_ref()
-            .is_some_and(|latest| compare_semver(installed_version, Some(latest)));
-        return Some((
-            latest_version,
-            Some(channel),
-            Some(details),
-            source,
-            available,
-        ));
-    }
-    let latest_version = query_openclaw_latest_npm().ok().flatten();
-    let details = latest_version
-        .as_ref()
-        .map(|value| format!("npm latest {value}"))
-        .unwrap_or_else(|| "update status not available".into());
-    let upgrade = latest_version
-        .as_ref()
-        .is_some_and(|latest| compare_semver(installed_version, Some(latest.as_str())));
-    Some((latest_version, None, Some(details), "npm".into(), upgrade))
-}
 
-fn parse_openclaw_update_json(
-    raw: &str,
-    installed_version: &str,
-) -> Option<(Option<String>, String, String, bool)> {
-    let json_str = clawpal_core::doctor::extract_json_from_output(raw)?;
-    let payload: Value = serde_json::from_str(json_str).ok()?;
-    let channel = payload
-        .pointer("/channel/value")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-
-    let latest_from_update = payload
-        .pointer("/update/registry/latestVersion")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
-    let latest = payload
-        .pointer("/availability/latestVersion")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
-        .or(latest_from_update);
-    let has_update = payload
-        .pointer("/availability/available")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let details = payload
-        .pointer("/availability/latestVersion")
-        .and_then(Value::as_str)
-        .map(|value| format!("npm latest {value}"))
-        .or_else(|| {
-            if has_update {
-                Some("update available".into())
+    match query_openclaw_latest_github_release() {
+        Ok(latest_version) => {
+            let cache = OpenclawUpdateCache {
+                checked_at: now,
+                latest_version: latest_version.clone(),
+                channel: None,
+                details: latest_version
+                    .as_ref()
+                    .map(|value| format!("GitHub release {value}"))
+                    .or_else(|| Some("GitHub release unavailable".into())),
+                source: "github-release".into(),
+                installed_version: existing.and_then(|cache| cache.installed_version),
+                ttl_seconds: 60 * 60 * 6,
+            };
+            save_openclaw_update_cache(&cache_path, &cache)?;
+            Ok(cache)
+        }
+        Err(error) => {
+            if let Some(cached) = existing {
+                Ok(cached)
             } else {
-                Some("up to date".into())
+                Err(error)
             }
-        })
-        .unwrap_or_else(|| "update status unavailable".into());
-
-    let upgrade_available = if let Some(latest_version) = latest.as_deref() {
-        compare_semver(installed_version, Some(latest_version))
-    } else {
-        has_update
-    };
-
-    Some((latest, channel, details, upgrade_available))
-}
-
-fn parse_openclaw_update_text(raw: &str) -> Option<(Option<String>, String, String)> {
-    let mut channel = String::from("unknown");
-    for line in raw.lines() {
-        if line.contains("Channel") {
-            let right = line.split('│').last().or_else(|| line.split('|').last())?;
-            channel = right.trim().to_string();
-        }
-        if line.to_lowercase().contains("update") && line.contains("npm latest") {
-            if let Some(token) = extract_version_from_text(line) {
-                return Some((Some(token), channel, line.trim().to_string()));
-            }
-            return Some((None, channel, line.trim().to_string()));
-        }
-        if line.to_lowercase().contains("update") && line.contains("unknown") {
-            return Some((None, channel, line.trim().to_string()));
         }
     }
-    None
 }
 
-fn query_openclaw_latest_npm() -> Result<Option<String>, String> {
-    // Query npm registry directly via HTTP — no local npm CLI needed
+fn normalize_openclaw_release_tag(raw: &str) -> Option<String> {
+    extract_version_from_text(raw).or_else(|| {
+        let trimmed = raw.trim().trim_start_matches(['v', 'V']);
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn query_openclaw_latest_github_release() -> Result<Option<String>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .user_agent("ClawPal Update Checker (+https://github.com/zhixianio/clawpal)")
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
     let resp = client
-        .get("https://registry.npmjs.org/openclaw/latest")
-        .header("Accept", "application/json")
+        .get("https://api.github.com/repos/openclaw/openclaw/releases/latest")
+        .header("Accept", "application/vnd.github+json")
         .send()
-        .map_err(|e| format!("npm registry request failed: {e}"))?;
+        .map_err(|e| format!("GitHub releases request failed: {e}"))?;
     if !resp.status().is_success() {
         return Ok(None);
     }
     let body: Value = resp
         .json()
-        .map_err(|e| format!("npm registry parse failed: {e}"))?;
+        .map_err(|e| format!("GitHub releases parse failed: {e}"))?;
     let version = body
-        .get("version")
+        .get("tag_name")
         .and_then(Value::as_str)
-        .map(String::from);
+        .and_then(normalize_openclaw_release_tag)
+        .or_else(|| {
+            body.get("name")
+                .and_then(Value::as_str)
+                .and_then(normalize_openclaw_release_tag)
+        });
     Ok(version)
 }
 
@@ -3237,6 +4606,19 @@ fn profile_to_model_value(profile: &ModelProfile) -> String {
 pub struct ResolvedApiKey {
     pub profile_id: String,
     pub masked_key: String,
+    pub credential_kind: ResolvedCredentialKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_ref: Option<String>,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedCredentialKind {
+    OAuth,
+    EnvRef,
+    Manual,
+    Unset,
 }
 
 fn truncate_error_text(input: &str, max_chars: usize) -> String {
@@ -3249,10 +4631,23 @@ fn truncate_error_text(input: &str, max_chars: usize) -> String {
 
 const MAX_ERROR_SNIPPET_CHARS: usize = 280;
 
+pub(crate) fn provider_supports_optional_api_key(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "ollama" | "lmstudio" | "lm-studio" | "localai" | "vllm" | "llamacpp" | "llama.cpp"
+    )
+}
+
 fn default_base_url_for_provider(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
-        "openai" => Some("https://api.openai.com/v1"),
+        "openai" | "openai-codex" | "github-copilot" | "copilot" => {
+            Some("https://api.openai.com/v1")
+        }
         "openrouter" => Some("https://openrouter.ai/api/v1"),
+        "ollama" => Some("http://127.0.0.1:11434/v1"),
+        "lmstudio" | "lm-studio" => Some("http://127.0.0.1:1234/v1"),
+        "localai" => Some("http://127.0.0.1:8080/v1"),
+        "vllm" => Some("http://127.0.0.1:8000/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "deepseek" => Some("https://api.deepseek.com/v1"),
         "xai" | "grok" => Some("https://api.x.ai/v1"),
@@ -3271,6 +4666,7 @@ fn run_provider_probe(
 ) -> Result<(), String> {
     let provider_trimmed = provider.trim().to_string();
     let mut model_trimmed = model.trim().to_string();
+    let lower = provider_trimmed.to_ascii_lowercase();
     if provider_trimmed.is_empty() || model_trimmed.is_empty() {
         return Err("provider and model are required".into());
     }
@@ -3284,7 +4680,7 @@ fn run_provider_probe(
             return Err("model is empty after provider prefix normalization".into());
         }
     }
-    if api_key.trim().is_empty() {
+    if api_key.trim().is_empty() && !provider_supports_optional_api_key(&provider_trimmed) {
         return Err("API key is not configured for this profile".into());
     }
 
@@ -3305,33 +4701,55 @@ fn run_provider_probe(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
-    let lower = provider_trimmed.to_ascii_lowercase();
     let auth_kind = infer_auth_kind(&provider_trimmed, api_key.trim(), InternalAuthKind::ApiKey);
-    let response = if lower == "anthropic" {
+    let looks_like_claude_model = model_trimmed.to_ascii_lowercase().contains("claude");
+    let use_anthropic_probe_for_openai_codex = lower == "openai-codex" && looks_like_claude_model;
+    let response = if lower == "anthropic" || use_anthropic_probe_for_openai_codex {
+        let normalized_model = model_trimmed
+            .rsplit('/')
+            .next()
+            .unwrap_or(model_trimmed.as_str())
+            .to_string();
         let url = format!("{}/messages", resolved_base);
-        let mut req = client
-            .post(&url)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json");
-        req = match auth_kind {
-            InternalAuthKind::Authorization => {
-                req.header("Authorization", format!("Bearer {}", api_key.trim()))
-            }
-            InternalAuthKind::ApiKey => req.header("x-api-key", api_key.trim()),
-        };
-        req.json(&serde_json::json!({
-            "model": model_trimmed,
+        let payload = serde_json::json!({
+            "model": normalized_model,
             "max_tokens": 1,
             "stream": true,
             "messages": [{"role": "user", "content": "ping"}]
-        }))
-        .send()
-        .map_err(|e| format!("Provider request failed: {e}"))?
+        });
+        let build_request = |use_bearer: bool| -> Result<reqwest::blocking::Response, String> {
+            let mut req = client
+                .post(&url)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json");
+            req = if use_bearer {
+                req.header("Authorization", format!("Bearer {}", api_key.trim()))
+            } else {
+                req.header("x-api-key", api_key.trim())
+            };
+            req.json(&payload)
+                .send()
+                .map_err(|e| format!("Provider request failed: {e}"))
+        };
+        let response = match auth_kind {
+            InternalAuthKind::Authorization => build_request(true)?,
+            InternalAuthKind::ApiKey => build_request(false)?,
+        };
+        if !response.status().is_success()
+            && (response.status().as_u16() == 401 || response.status().as_u16() == 403)
+        {
+            let fallback_use_bearer = matches!(auth_kind, InternalAuthKind::ApiKey);
+            if let Ok(fallback_response) = build_request(fallback_use_bearer) {
+                if fallback_response.status().is_success() {
+                    return Ok(());
+                }
+            }
+        }
+        response
     } else {
         let url = format!("{}/chat/completions", resolved_base);
         let mut req = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key.trim()))
             .header("content-type", "application/json")
             .json(&serde_json::json!({
                 "model": model_trimmed,
@@ -3339,6 +4757,9 @@ fn run_provider_probe(
                 "max_tokens": 1,
                 "stream": true
             }));
+        if !api_key.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
+        }
         if lower == "openrouter" {
             req = req
                 .header("HTTP-Referer", "https://clawpal.zhixian.io")
@@ -3357,6 +4778,15 @@ fn run_provider_probe(
         .text()
         .unwrap_or_else(|e| format!("(could not read response body: {e})"));
     let snippet = truncate_error_text(body.trim(), MAX_ERROR_SNIPPET_CHARS);
+    let snippet_lower = snippet.to_ascii_lowercase();
+    if lower == "anthropic"
+        && snippet_lower.contains("oauth authentication is currently not supported")
+    {
+        return Err(
+            "Anthropic provider does not accept Claude setup-token OAuth tokens. Use an Anthropic API key (sk-ant-...) for provider=anthropic."
+                .to_string(),
+        );
+    }
     if snippet.is_empty() {
         Err(format!("Provider rejected credentials (HTTP {status})"))
     } else {
@@ -3371,13 +4801,21 @@ fn resolve_profile_api_key_with_priority(
     base_dir: &Path,
 ) -> Option<(String, u8)> {
     resolve_profile_credential_with_priority(profile, base_dir)
-        .map(|(credential, priority)| (credential.secret, priority))
+        .map(|(credential, priority, _)| (credential.secret, priority))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InternalAuthKind {
     ApiKey,
     Authorization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedCredentialSource {
+    ExplicitAuthRef,
+    ManualApiKey,
+    ProviderFallbackAuthRef,
+    ProviderEnvVar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3396,37 +4834,129 @@ fn infer_auth_kind(provider: &str, secret: &str, fallback: InternalAuthKind) -> 
     fallback
 }
 
-fn resolve_profile_credential_with_priority(
+pub(crate) fn provider_env_var_candidates(provider: &str) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    let mut push_unique = |name: &str| {
+        if !name.is_empty() && !out.iter().any(|existing| existing == name) {
+            out.push(name.to_string());
+        }
+    };
+
+    let normalized = provider.trim().to_ascii_lowercase();
+    let provider_env = normalized.to_uppercase().replace('-', "_");
+    if !provider_env.is_empty() {
+        push_unique(&format!("{provider_env}_API_KEY"));
+        push_unique(&format!("{provider_env}_KEY"));
+        push_unique(&format!("{provider_env}_TOKEN"));
+    }
+
+    if normalized == "anthropic" {
+        push_unique("ANTHROPIC_OAUTH_TOKEN");
+        push_unique("ANTHROPIC_AUTH_TOKEN");
+    }
+    if normalized == "openai-codex"
+        || normalized == "openai_codex"
+        || normalized == "github-copilot"
+        || normalized == "copilot"
+    {
+        push_unique("OPENAI_CODEX_TOKEN");
+        push_unique("OPENAI_CODEX_AUTH_TOKEN");
+    }
+
+    out
+}
+
+fn is_oauth_provider_alias(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "openai-codex" | "openai_codex" | "github-copilot" | "copilot"
+    )
+}
+
+fn is_oauth_auth_ref(provider: &str, auth_ref: &str) -> bool {
+    if !is_oauth_provider_alias(provider) {
+        return false;
+    }
+    let lower = auth_ref.trim().to_ascii_lowercase();
+    lower.starts_with("openai-codex:") || lower.starts_with("openai:")
+}
+
+pub(crate) fn infer_resolved_credential_kind(
     profile: &ModelProfile,
-    base_dir: &Path,
-) -> Option<(InternalProviderCredential, u8)> {
-    // 1. Try auth_ref as env var name directly (e.g. "OPENAI_API_KEY")
+    source: Option<ResolvedCredentialSource>,
+) -> ResolvedCredentialKind {
     let auth_ref = profile.auth_ref.trim();
-    if !auth_ref.is_empty() {
-        if let Ok(val) = std::env::var(auth_ref) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                let kind = infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
-                return Some((
-                    InternalProviderCredential {
-                        secret: trimmed.to_string(),
-                        kind,
-                    },
-                    40,
-                ));
+    match source {
+        Some(ResolvedCredentialSource::ManualApiKey) => ResolvedCredentialKind::Manual,
+        Some(ResolvedCredentialSource::ProviderEnvVar) => ResolvedCredentialKind::EnvRef,
+        Some(ResolvedCredentialSource::ExplicitAuthRef) => {
+            if is_oauth_auth_ref(&profile.provider, auth_ref) {
+                ResolvedCredentialKind::OAuth
+            } else {
+                ResolvedCredentialKind::EnvRef
+            }
+        }
+        Some(ResolvedCredentialSource::ProviderFallbackAuthRef) => {
+            let fallback_ref = format!("{}:default", profile.provider.trim().to_ascii_lowercase());
+            if is_oauth_auth_ref(&profile.provider, &fallback_ref) {
+                ResolvedCredentialKind::OAuth
+            } else {
+                ResolvedCredentialKind::EnvRef
+            }
+        }
+        None => {
+            if !auth_ref.is_empty() {
+                if is_oauth_auth_ref(&profile.provider, auth_ref) {
+                    ResolvedCredentialKind::OAuth
+                } else {
+                    ResolvedCredentialKind::EnvRef
+                }
+            } else if profile
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|v| !v.is_empty())
+            {
+                ResolvedCredentialKind::Manual
+            } else {
+                ResolvedCredentialKind::Unset
             }
         }
     }
+}
 
-    // 2. Look up auth_ref in agent-level auth store files
-    //    Keys are stored at: {base_dir}/agents/{agent}/agent/{auth-profiles.json|auth.json}
-    if !auth_ref.is_empty() {
+fn resolve_profile_credential_with_priority(
+    profile: &ModelProfile,
+    base_dir: &Path,
+) -> Option<(InternalProviderCredential, u8, ResolvedCredentialSource)> {
+    // 1. Try explicit auth_ref (user-specified) as env var, then auth store.
+    let auth_ref = profile.auth_ref.trim();
+    let has_explicit_auth_ref = !auth_ref.is_empty();
+    if has_explicit_auth_ref {
+        if is_valid_env_var_name(auth_ref) {
+            if let Ok(val) = std::env::var(auth_ref) {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    let kind =
+                        infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
+                    return Some((
+                        InternalProviderCredential {
+                            secret: trimmed.to_string(),
+                            kind,
+                        },
+                        40,
+                        ResolvedCredentialSource::ExplicitAuthRef,
+                    ));
+                }
+            }
+        }
         if let Some(credential) = resolve_credential_from_agent_auth_profiles(base_dir, auth_ref) {
-            return Some((credential, 30));
+            return Some((credential, 30, ResolvedCredentialSource::ExplicitAuthRef));
         }
     }
 
-    // 3. Direct api_key field (legacy/manual ClawPal input)
+    // 2. Direct api_key field — takes priority over fallback auth_ref candidates
+    //    so a user-entered key is never shadowed by stale auth-store entries.
     if let Some(ref key) = profile.api_key {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
@@ -3437,32 +4967,65 @@ fn resolve_profile_credential_with_priority(
                     kind,
                 },
                 20,
+                ResolvedCredentialSource::ManualApiKey,
             ));
         }
     }
 
-    // 4. Try common env var naming conventions based on provider
-    let provider = profile.provider.trim().to_uppercase().replace('-', "_");
-    if !provider.is_empty() {
-        for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-            let env_name = format!("{provider}{suffix}");
-            if let Ok(val) = std::env::var(&env_name) {
-                let trimmed = val.trim();
-                if !trimmed.is_empty() {
-                    let fallback_kind = if suffix == "_TOKEN" {
-                        InternalAuthKind::Authorization
-                    } else {
-                        InternalAuthKind::ApiKey
-                    };
-                    let kind = infer_auth_kind(&profile.provider, trimmed, fallback_kind);
-                    return Some((
-                        InternalProviderCredential {
-                            secret: trimmed.to_string(),
-                            kind,
-                        },
-                        10,
-                    ));
+    // 3. Fallback: provider:default auth_ref (auto-generated) — env var then auth store.
+    let provider_fallback = profile.provider.trim().to_ascii_lowercase();
+    if !provider_fallback.is_empty() {
+        let fallback_ref = format!("{provider_fallback}:default");
+        let skip = has_explicit_auth_ref && auth_ref == fallback_ref;
+        if !skip {
+            if is_valid_env_var_name(&fallback_ref) {
+                if let Ok(val) = std::env::var(&fallback_ref) {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        let kind =
+                            infer_auth_kind(&profile.provider, trimmed, InternalAuthKind::ApiKey);
+                        return Some((
+                            InternalProviderCredential {
+                                secret: trimmed.to_string(),
+                                kind,
+                            },
+                            15,
+                            ResolvedCredentialSource::ProviderFallbackAuthRef,
+                        ));
+                    }
                 }
+            }
+            if let Some(credential) =
+                resolve_credential_from_agent_auth_profiles(base_dir, &fallback_ref)
+            {
+                return Some((
+                    credential,
+                    15,
+                    ResolvedCredentialSource::ProviderFallbackAuthRef,
+                ));
+            }
+        }
+    }
+
+    // 4. Provider-based env var conventions.
+    for env_name in provider_env_var_candidates(&profile.provider) {
+        if let Ok(val) = std::env::var(&env_name) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let fallback_kind = if env_name.ends_with("_TOKEN") {
+                    InternalAuthKind::Authorization
+                } else {
+                    InternalAuthKind::ApiKey
+                };
+                let kind = infer_auth_kind(&profile.provider, trimmed, fallback_kind);
+                return Some((
+                    InternalProviderCredential {
+                        secret: trimmed.to_string(),
+                        kind,
+                    },
+                    10,
+                    ResolvedCredentialSource::ProviderEnvVar,
+                ));
             }
         }
     }
@@ -3486,7 +5049,9 @@ pub(crate) fn collect_provider_credentials_from_paths(
     paths: &crate::models::OpenClawPaths,
 ) -> HashMap<String, InternalProviderCredential> {
     let profiles = load_model_profiles(&paths);
-    collect_provider_credentials_from_profiles(&profiles, &paths.base_dir)
+    let mut out = collect_provider_credentials_from_profiles(&profiles, &paths.base_dir);
+    augment_provider_credentials_from_openclaw_config(paths, &mut out);
+    out
 }
 
 fn collect_provider_credentials_from_profiles(
@@ -3495,7 +5060,7 @@ fn collect_provider_credentials_from_profiles(
 ) -> HashMap<String, InternalProviderCredential> {
     let mut out = HashMap::<String, (InternalProviderCredential, u8)>::new();
     for profile in profiles.iter().filter(|p| p.enabled) {
-        let Some((credential, priority)) =
+        let Some((credential, priority, _)) =
             resolve_profile_credential_with_priority(profile, base_dir)
         else {
             continue;
@@ -3514,6 +5079,77 @@ fn collect_provider_credentials_from_profiles(
         }
     }
     out.into_iter().map(|(k, (v, _))| (k, v)).collect()
+}
+
+fn augment_provider_credentials_from_openclaw_config(
+    paths: &crate::models::OpenClawPaths,
+    out: &mut HashMap<String, InternalProviderCredential>,
+) {
+    let cfg = match read_openclaw_config(paths) {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    let Some(providers) = cfg.pointer("/models/providers").and_then(Value::as_object) else {
+        return;
+    };
+
+    for (provider, provider_cfg) in providers {
+        let provider_key = provider.trim().to_ascii_lowercase();
+        if provider_key.is_empty() || out.contains_key(&provider_key) {
+            continue;
+        }
+        let Some(provider_obj) = provider_cfg.as_object() else {
+            continue;
+        };
+        if let Some(credential) =
+            resolve_provider_credential_from_config_entry(&cfg, provider, provider_obj)
+        {
+            out.insert(provider_key, credential);
+        }
+    }
+}
+
+fn resolve_provider_credential_from_config_entry(
+    cfg: &Value,
+    provider: &str,
+    provider_cfg: &Map<String, Value>,
+) -> Option<InternalProviderCredential> {
+    for (field, fallback_kind, allow_plaintext) in [
+        ("apiKey", InternalAuthKind::ApiKey, true),
+        ("api_key", InternalAuthKind::ApiKey, true),
+        ("key", InternalAuthKind::ApiKey, true),
+        ("token", InternalAuthKind::Authorization, true),
+        ("access", InternalAuthKind::Authorization, true),
+        ("secretRef", InternalAuthKind::ApiKey, false),
+        ("keyRef", InternalAuthKind::ApiKey, false),
+        ("tokenRef", InternalAuthKind::Authorization, false),
+        ("apiKeyRef", InternalAuthKind::ApiKey, false),
+        ("api_key_ref", InternalAuthKind::ApiKey, false),
+        ("accessRef", InternalAuthKind::Authorization, false),
+    ] {
+        let Some(raw_val) = provider_cfg.get(field) else {
+            continue;
+        };
+
+        if allow_plaintext {
+            if let Some(secret) = raw_val.as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                let kind = infer_auth_kind(provider, secret, fallback_kind);
+                return Some(InternalProviderCredential {
+                    secret: secret.to_string(),
+                    kind,
+                });
+            }
+        }
+        if let Some(secret_ref) = try_parse_secret_ref(raw_val) {
+            if let Some(secret) =
+                resolve_secret_ref_with_provider_config(&secret_ref, cfg, &local_env_lookup)
+            {
+                let kind = infer_auth_kind(provider, &secret, fallback_kind);
+                return Some(InternalProviderCredential { secret, kind });
+            }
+        }
+    }
+    None
 }
 
 fn resolve_credential_from_agent_auth_profiles(
@@ -3609,9 +5245,26 @@ fn resolve_key_from_auth_store_json(data: &Value, auth_ref: &str) -> Option<Stri
     resolve_credential_from_auth_store_json(data, auth_ref).map(|credential| credential.secret)
 }
 
+fn resolve_key_from_auth_store_json_with_env(
+    data: &Value,
+    auth_ref: &str,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    resolve_credential_from_auth_store_json_with_env(data, auth_ref, env_lookup)
+        .map(|credential| credential.secret)
+}
+
 fn resolve_credential_from_auth_store_json(
     data: &Value,
     auth_ref: &str,
+) -> Option<InternalProviderCredential> {
+    resolve_credential_from_auth_store_json_with_env(data, auth_ref, &local_env_lookup)
+}
+
+fn resolve_credential_from_auth_store_json_with_env(
+    data: &Value,
+    auth_ref: &str,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<InternalProviderCredential> {
     let keys = auth_ref_lookup_keys(auth_ref);
     if keys.is_empty() {
@@ -3621,7 +5274,9 @@ fn resolve_credential_from_auth_store_json(
     if let Some(profiles) = data.get("profiles").and_then(Value::as_object) {
         for key in &keys {
             if let Some(auth_entry) = profiles.get(key) {
-                if let Some(credential) = extract_credential_from_auth_entry(auth_entry) {
+                if let Some(credential) =
+                    extract_credential_from_auth_entry_with_env(auth_entry, env_lookup)
+                {
                     return Some(credential);
                 }
             }
@@ -3631,7 +5286,9 @@ fn resolve_credential_from_auth_store_json(
     if let Some(root_obj) = data.as_object() {
         for key in &keys {
             if let Some(auth_entry) = root_obj.get(key) {
-                if let Some(credential) = extract_credential_from_auth_entry(auth_entry) {
+                if let Some(credential) =
+                    extract_credential_from_auth_entry_with_env(auth_entry, env_lookup)
+                {
                     return Some(credential);
                 }
             }
@@ -3641,9 +5298,452 @@ fn resolve_credential_from_auth_store_json(
     None
 }
 
+// ---------------------------------------------------------------------------
+// SecretRef resolution — OpenClaw secrets management compatibility
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct SecretRef {
+    source: String,
+    provider: Option<String>,
+    id: String,
+}
+
+fn try_parse_secret_ref(value: &Value) -> Option<SecretRef> {
+    let obj = value.as_object()?;
+    let source = obj.get("source")?.as_str()?.trim();
+    let provider = obj
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_ascii_lowercase);
+    let id = obj.get("id")?.as_str()?.trim();
+    if source.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some(SecretRef {
+        source: source.to_string(),
+        provider,
+        id: id.to_string(),
+    })
+}
+
+fn normalize_secret_provider_name(cfg: &Value, secret_ref: &SecretRef) -> Option<String> {
+    if let Some(provider) = secret_ref.provider.as_deref().map(str::trim) {
+        if !provider.is_empty() {
+            return Some(provider.to_ascii_lowercase());
+        }
+    }
+    let defaults_key = format!("/secrets/defaults/{}", secret_ref.source.trim());
+    cfg.pointer(&defaults_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn load_secret_provider_config<'a>(
+    cfg: &'a Value,
+    provider: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    cfg.pointer("/secrets/providers")
+        .and_then(Value::as_object)
+        .and_then(|providers| providers.get(provider))
+        .and_then(Value::as_object)
+}
+
+fn secret_ref_allowed_in_provider_cfg(
+    provider_cfg: &serde_json::Map<String, Value>,
+    id: &str,
+) -> bool {
+    let Some(ids) = provider_cfg.get("ids").and_then(Value::as_array) else {
+        return true;
+    };
+    ids.iter()
+        .filter_map(Value::as_str)
+        .any(|candidate| candidate.trim() == id)
+}
+
+fn expand_home_path(raw: &str) -> PathBuf {
+    PathBuf::from(shellexpand::tilde(raw).to_string())
+}
+
+fn resolve_secret_ref_file_with_provider_config(
+    secret_ref: &SecretRef,
+    provider_cfg: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let source = provider_cfg
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !source.is_empty() && source != "file" {
+        return None;
+    }
+    if !secret_ref_allowed_in_provider_cfg(provider_cfg, &secret_ref.id) {
+        return None;
+    }
+    let path = provider_cfg.get("path").and_then(Value::as_str)?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let file_path = expand_home_path(path);
+    let content = fs::read_to_string(&file_path).ok()?;
+    let mode = provider_cfg
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("json")
+        .trim()
+        .to_ascii_lowercase();
+    if mode == "singlevalue" {
+        if secret_ref.id.trim() != "value" {
+            eprintln!(
+                "SecretRef file source: singlevalue mode requires id 'value', got '{}'",
+                secret_ref.id.trim()
+            );
+            return None;
+        }
+        let trimmed = content.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    let parsed: Value = serde_json::from_str(&content).ok()?;
+    let id = secret_ref.id.trim();
+    if !id.starts_with('/') {
+        eprintln!("SecretRef file source: JSON mode expects id to start with '/', got '{id}'");
+        return None;
+    }
+    let resolved = parsed.pointer(id)?;
+    let out = match resolved {
+        Value::String(v) => v.trim().to_string(),
+        Value::Number(v) => v.to_string(),
+        Value::Bool(v) => v.to_string(),
+        _ => String::new(),
+    };
+    (!out.is_empty()).then_some(out)
+}
+
+fn read_trusted_dirs(provider_cfg: &serde_json::Map<String, Value>) -> Vec<PathBuf> {
+    provider_cfg
+        .get("trustedDirs")
+        .and_then(Value::as_array)
+        .map(|dirs| {
+            dirs.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|dir| !dir.is_empty())
+                .map(expand_home_path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn resolve_secret_ref_exec_with_provider_config(
+    secret_ref: &SecretRef,
+    provider_name: &str,
+    provider_cfg: &serde_json::Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let source = provider_cfg
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !source.is_empty() && source != "exec" {
+        return None;
+    }
+    if !secret_ref_allowed_in_provider_cfg(provider_cfg, &secret_ref.id) {
+        return None;
+    }
+    let command_path = provider_cfg.get("command").and_then(Value::as_str)?.trim();
+    if command_path.is_empty() {
+        return None;
+    }
+    let expanded_command = expand_home_path(command_path);
+    if !expanded_command.is_absolute() {
+        return None;
+    }
+    let allow_symlink_command = provider_cfg
+        .get("allowSymlinkCommand")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Ok(meta) = fs::symlink_metadata(&expanded_command) {
+        if meta.file_type().is_symlink() {
+            if !allow_symlink_command {
+                return None;
+            }
+            let trusted = read_trusted_dirs(provider_cfg);
+            if !trusted.is_empty() {
+                let Ok(canonical_command) = expanded_command.canonicalize() else {
+                    return None;
+                };
+                let is_trusted = trusted.into_iter().any(|dir| {
+                    dir.canonicalize()
+                        .ok()
+                        .is_some_and(|canonical_dir| canonical_command.starts_with(canonical_dir))
+                });
+                if !is_trusted {
+                    return None;
+                }
+            }
+        }
+    }
+
+    let args = provider_cfg
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let pass_env = provider_cfg
+        .get("passEnv")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let json_only = provider_cfg
+        .get("jsonOnly")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let timeout = provider_cfg
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .map(|ms| Duration::from_millis(ms.clamp(100, 120_000)))
+        .or_else(|| {
+            provider_cfg
+                .get("timeoutSeconds")
+                .or_else(|| provider_cfg.get("timeoutSec"))
+                .or_else(|| provider_cfg.get("timeout"))
+                .and_then(Value::as_u64)
+                .map(|secs| Duration::from_secs(secs.clamp(1, 120)))
+        })
+        .unwrap_or_else(|| Duration::from_secs(10));
+
+    let mut cmd = Command::new(expanded_command);
+    cmd.args(args);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if !pass_env.is_empty() {
+        cmd.env_clear();
+        for name in pass_env {
+            if let Some(value) = env_lookup(&name) {
+                cmd.env(name, value);
+            }
+        }
+    }
+
+    let mut child = cmd.spawn().ok()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        let payload = serde_json::json!({
+            "protocolVersion": 1,
+            "provider": provider_name,
+            "ids": [secret_ref.id.clone()],
+        });
+        let _ = stdin.write_all(payload.to_string().as_bytes());
+    }
+    let _ = child.stdin.take();
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait().ok()? {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    if timed_out {
+        return None;
+    }
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return None;
+    }
+
+    if let Ok(json) = serde_json::from_str::<Value>(&stdout) {
+        if let Some(value) = json
+            .get("values")
+            .and_then(Value::as_object)
+            .and_then(|values| values.get(secret_ref.id.trim()))
+        {
+            let resolved = value
+                .as_str()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    if value.is_number() || value.is_boolean() {
+                        Some(value.to_string())
+                    } else {
+                        None
+                    }
+                });
+            if resolved.is_some() {
+                return resolved;
+            }
+        }
+    }
+    if json_only {
+        return None;
+    }
+    for line in stdout.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim() == secret_ref.id.trim() {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    if secret_ref.id.trim() == "value" {
+        let trimmed = stdout.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn resolve_secret_ref_with_provider_config(
+    secret_ref: &SecretRef,
+    cfg: &Value,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let source = secret_ref.source.trim().to_ascii_lowercase();
+    if source.is_empty() {
+        return None;
+    }
+    if source == "env" {
+        return env_lookup(secret_ref.id.trim());
+    }
+
+    let provider_name = normalize_secret_provider_name(cfg, secret_ref)?;
+    let provider_cfg = load_secret_provider_config(cfg, &provider_name)?;
+
+    match source.as_str() {
+        "file" => resolve_secret_ref_file_with_provider_config(secret_ref, provider_cfg),
+        "exec" => resolve_secret_ref_exec_with_provider_config(
+            secret_ref,
+            &provider_name,
+            provider_cfg,
+            env_lookup,
+        ),
+        _ => None,
+    }
+}
+
+fn resolve_secret_ref_with_env(
+    secret_ref: &SecretRef,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    match secret_ref.source.as_str() {
+        "env" => env_lookup(&secret_ref.id),
+        "file" => resolve_secret_ref_file(&secret_ref.id),
+        _ => None, // "exec" requires trusted binary + provider config, not supported here
+    }
+}
+
+fn resolve_secret_ref_file(path_str: &str) -> Option<String> {
+    let path = std::path::Path::new(path_str);
+    if !path.is_absolute() {
+        eprintln!("SecretRef file source: ignoring non-absolute path '{path_str}'");
+        return None;
+    }
+    if !path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn local_env_lookup(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn collect_secret_ref_env_names_from_entry(entry: &Value, names: &mut Vec<String>) {
+    for ref_field in [
+        "secretRef",
+        "keyRef",
+        "tokenRef",
+        "apiKeyRef",
+        "api_key_ref",
+        "accessRef",
+    ] {
+        if let Some(sr) = entry.get(ref_field).and_then(try_parse_secret_ref) {
+            if sr.source.eq_ignore_ascii_case("env") {
+                names.push(sr.id);
+            }
+        }
+    }
+    for field in ["token", "key", "apiKey", "api_key", "access"] {
+        if let Some(field_val) = entry.get(field) {
+            if let Some(sr) = try_parse_secret_ref(field_val) {
+                if sr.source.eq_ignore_ascii_case("env") {
+                    names.push(sr.id);
+                }
+            }
+        }
+    }
+}
+
+fn collect_secret_ref_env_names_from_auth_store(data: &Value) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(profiles) = data.get("profiles").and_then(Value::as_object) {
+        for entry in profiles.values() {
+            collect_secret_ref_env_names_from_entry(entry, &mut names);
+        }
+    }
+    if let Some(root_obj) = data.as_object() {
+        for (key, entry) in root_obj {
+            if key != "profiles" && key != "version" {
+                collect_secret_ref_env_names_from_entry(entry, &mut names);
+            }
+        }
+    }
+    names
+}
+
 /// Extract the actual key/token from an agent auth-profiles entry.
-/// Handles different auth types: token, api_key, oauth.
+/// Handles different auth types: token, api_key, oauth, and SecretRef objects.
+#[allow(dead_code)]
 fn extract_credential_from_auth_entry(entry: &Value) -> Option<InternalProviderCredential> {
+    extract_credential_from_auth_entry_with_env(entry, &local_env_lookup)
+}
+
+fn extract_credential_from_auth_entry_with_env(
+    entry: &Value,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<InternalProviderCredential> {
     let auth_type = entry
         .get("type")
         .and_then(Value::as_str)
@@ -3660,23 +5760,69 @@ fn extract_credential_from_auth_entry(entry: &Value) -> Option<InternalProviderC
         "api_key" | "api-key" | "apikey" => Some(InternalAuthKind::ApiKey),
         _ => None,
     };
+
+    // SecretRef at entry level takes precedence (OpenClaw secrets management).
+    for (ref_field, ref_kind) in [
+        ("secretRef", kind_from_type),
+        ("keyRef", Some(InternalAuthKind::ApiKey)),
+        ("tokenRef", Some(InternalAuthKind::Authorization)),
+        ("apiKeyRef", Some(InternalAuthKind::ApiKey)),
+        ("api_key_ref", Some(InternalAuthKind::ApiKey)),
+        ("accessRef", Some(InternalAuthKind::Authorization)),
+    ] {
+        if let Some(secret_ref) = entry.get(ref_field).and_then(try_parse_secret_ref) {
+            if let Some(resolved) = resolve_secret_ref_with_env(&secret_ref, env_lookup) {
+                let kind = infer_auth_kind(
+                    provider,
+                    &resolved,
+                    ref_kind.unwrap_or(InternalAuthKind::ApiKey),
+                );
+                return Some(InternalProviderCredential {
+                    secret: resolved,
+                    kind,
+                });
+            }
+        }
+    }
+
     // "token" type → "token" field (e.g. anthropic)
     // "api_key" type → "key" field (e.g. kimi-coding)
     // "oauth" type → "access" field (e.g. minimax-portal, openai-codex)
     for field in ["token", "key", "apiKey", "api_key", "access"] {
-        if let Some(val) = entry.get(field).and_then(Value::as_str) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                let fallback_kind = match field {
-                    "token" | "access" => InternalAuthKind::Authorization,
-                    _ => InternalAuthKind::ApiKey,
-                };
-                let kind =
-                    infer_auth_kind(provider, trimmed, kind_from_type.unwrap_or(fallback_kind));
-                return Some(InternalProviderCredential {
-                    secret: trimmed.to_string(),
-                    kind,
-                });
+        if let Some(field_val) = entry.get(field) {
+            // Plaintext string value.
+            if let Some(val) = field_val.as_str() {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    let fallback_kind = match field {
+                        "token" | "access" => InternalAuthKind::Authorization,
+                        _ => InternalAuthKind::ApiKey,
+                    };
+                    let kind =
+                        infer_auth_kind(provider, trimmed, kind_from_type.unwrap_or(fallback_kind));
+                    return Some(InternalProviderCredential {
+                        secret: trimmed.to_string(),
+                        kind,
+                    });
+                }
+            }
+            // SecretRef object in credential field (OpenClaw secrets management).
+            if let Some(secret_ref) = try_parse_secret_ref(field_val) {
+                if let Some(resolved) = resolve_secret_ref_with_env(&secret_ref, env_lookup) {
+                    let fallback_kind = match field {
+                        "token" | "access" => InternalAuthKind::Authorization,
+                        _ => InternalAuthKind::ApiKey,
+                    };
+                    let kind = infer_auth_kind(
+                        provider,
+                        &resolved,
+                        kind_from_type.unwrap_or(fallback_kind),
+                    );
+                    return Some(InternalProviderCredential {
+                        secret: resolved,
+                        kind,
+                    });
+                }
             }
         }
     }
@@ -4240,6 +6386,22 @@ mod model_value_tests {
             "openrouter/moonshotai/kimi-k2.5",
         );
     }
+
+    #[test]
+    fn test_default_base_url_supports_openai_codex_family() {
+        assert_eq!(
+            default_base_url_for_provider("openai-codex"),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            default_base_url_for_provider("github-copilot"),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            default_base_url_for_provider("copilot"),
+            Some("https://api.openai.com/v1")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4272,16 +6434,65 @@ mod rescue_bot_tests {
                 "19789",
                 "--json",
             ],
-            vec!["--profile", "rescue", "gateway", "install"],
-            vec!["--profile", "rescue", "gateway", "restart"],
             vec![
                 "--profile",
                 "rescue",
-                "gateway",
-                "status",
-                "--no-probe",
+                "config",
+                "set",
+                "tools.profile",
+                "\"full\"",
                 "--json",
             ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.sessions.visibility",
+                "\"all\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.allow",
+                "[\"*\"]",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.host",
+                "\"gateway\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.security",
+                "\"full\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.ask",
+                "\"off\"",
+                "--json",
+            ],
+            vec!["--profile", "rescue", "gateway", "stop"],
+            vec!["--profile", "rescue", "gateway", "uninstall"],
+            vec!["--profile", "rescue", "gateway", "install"],
+            vec!["--profile", "rescue", "gateway", "start"],
+            vec!["--profile", "rescue", "gateway", "status", "--json"],
         ]
         .into_iter()
         .map(|items| items.into_iter().map(String::from).collect::<Vec<_>>())
@@ -4294,6 +6505,60 @@ mod rescue_bot_tests {
         let commands =
             build_rescue_bot_command_plan(RescueBotAction::Activate, "rescue", 19789, false);
         let expected = vec![
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.profile",
+                "\"full\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.sessions.visibility",
+                "\"all\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.allow",
+                "[\"*\"]",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.host",
+                "\"gateway\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.security",
+                "\"full\"",
+                "--json",
+            ],
+            vec![
+                "--profile",
+                "rescue",
+                "config",
+                "set",
+                "tools.exec.ask",
+                "\"off\"",
+                "--json",
+            ],
             vec!["--profile", "rescue", "gateway", "install"],
             vec!["--profile", "rescue", "gateway", "restart"],
             vec![
@@ -4436,6 +6701,68 @@ mod rescue_bot_tests {
     }
 
     #[test]
+    fn test_gateway_command_output_incompatible_matches_unknown_json_option() {
+        let output = OpenclawCommandOutput {
+            stdout: String::new(),
+            stderr: "error: unknown option '--json'".into(),
+            exit_code: 1,
+        };
+        let command = vec![
+            "--profile",
+            "rescue",
+            "gateway",
+            "status",
+            "--no-probe",
+            "--json",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<String>>();
+        assert!(is_gateway_status_command_output_incompatible(
+            &output, &command
+        ));
+    }
+
+    #[test]
+    fn test_rescue_config_command_output_incompatible_matches_unknown_json_option() {
+        let output = OpenclawCommandOutput {
+            stdout: String::new(),
+            stderr: "error: unknown option '--json'".into(),
+            exit_code: 1,
+        };
+        let command = vec![
+            "--profile",
+            "rescue",
+            "config",
+            "set",
+            "tools.profile",
+            "full",
+            "--json",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<String>>();
+        assert!(is_gateway_status_command_output_incompatible(
+            &output, &command
+        ));
+    }
+
+    #[test]
+    fn test_strip_gateway_status_json_flag_keeps_other_args() {
+        let command = vec!["gateway", "status", "--json", "--no-probe", "extra"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strip_gateway_status_json_flag(&command),
+            vec!["gateway", "status", "--no-probe", "extra"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn test_parse_doctor_issues_reads_camel_case_fields() {
         let report = serde_json::json!({
             "issues": [
@@ -4514,7 +6841,7 @@ mod rescue_bot_tests {
     }
 
     #[test]
-    fn test_collect_safe_primary_issue_ids_filters_non_primary_and_non_fixable() {
+    fn test_collect_repairable_primary_issue_ids_filters_non_primary_only() {
         let diagnosis = RescuePrimaryDiagnosisResult {
             status: "degraded".into(),
             checked_at: "2026-02-25T00:00:00Z".into(),
@@ -4522,6 +6849,19 @@ mod rescue_bot_tests {
             rescue_profile: "rescue".into(),
             rescue_configured: true,
             rescue_port: Some(19789),
+            summary: RescuePrimarySummary {
+                status: "degraded".into(),
+                headline: "Primary configuration needs attention".into(),
+                recommended_action: "Review fixable issues".into(),
+                fixable_issue_count: 1,
+                selected_fix_issue_ids: vec!["field.agents".into()],
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            },
+            sections: Vec::new(),
             checks: Vec::new(),
             issues: vec![
                 RescuePrimaryIssue {
@@ -4554,7 +6894,7 @@ mod rescue_bot_tests {
             ],
         };
 
-        let (selected, skipped) = collect_safe_primary_issue_ids(
+        let (selected, skipped) = collect_repairable_primary_issue_ids(
             &diagnosis,
             &[
                 "field.agents".into(),
@@ -4562,8 +6902,8 @@ mod rescue_bot_tests {
                 "rescue.gateway.unhealthy".into(),
             ],
         );
-        assert_eq!(selected, vec!["field.agents"]);
-        assert_eq!(skipped, vec!["field.port", "rescue.gateway.unhealthy"]);
+        assert_eq!(selected, vec!["field.port"]);
+        assert_eq!(skipped, vec!["field.agents", "rescue.gateway.unhealthy"]);
     }
 
     #[test]
@@ -4572,18 +6912,451 @@ mod rescue_bot_tests {
             .expect("field.port should have safe fix command");
         assert_eq!(
             command,
+            vec!["config", "set", "gateway.port", "18789", "--json"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_build_primary_doctor_fix_command_for_profile() {
+        let command = build_primary_doctor_fix_command("primary");
+        assert_eq!(
+            command,
+            vec!["doctor", "--fix", "--yes"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_build_gateway_status_command_uses_probe_for_primary_diagnosis_only() {
+        assert_eq!(
+            build_gateway_status_command("primary", true),
+            vec!["gateway", "status", "--json"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            build_gateway_status_command("rescue", false),
             vec![
                 "--profile",
-                "primary",
-                "config",
-                "set",
-                "gateway.port",
-                "18789",
+                "rescue",
+                "gateway",
+                "status",
+                "--no-probe",
                 "--json"
             ]
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_build_profile_command_omits_primary_profile_flag() {
+        assert_eq!(
+            build_profile_command("primary", &["doctor", "--json", "--yes"]),
+            vec!["doctor", "--json", "--yes"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            build_profile_command("rescue", &["gateway", "status", "--no-probe", "--json"]),
+            vec![
+                "--profile",
+                "rescue",
+                "gateway",
+                "status",
+                "--no-probe",
+                "--json"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_should_run_primary_doctor_fix_for_non_healthy_sections() {
+        let mut diagnosis = RescuePrimaryDiagnosisResult {
+            status: "degraded".into(),
+            checked_at: "2026-03-08T00:00:00Z".into(),
+            target_profile: "primary".into(),
+            rescue_profile: "rescue".into(),
+            rescue_configured: true,
+            rescue_port: Some(19789),
+            summary: RescuePrimarySummary {
+                status: "degraded".into(),
+                headline: "Review recommendations".into(),
+                recommended_action: "Review recommendations".into(),
+                fixable_issue_count: 0,
+                selected_fix_issue_ids: Vec::new(),
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            },
+            sections: vec![
+                RescuePrimarySectionResult {
+                    key: "gateway".into(),
+                    title: "Gateway".into(),
+                    status: "healthy".into(),
+                    summary: "Gateway is healthy".into(),
+                    docs_url: String::new(),
+                    items: Vec::new(),
+                    root_cause_hypotheses: Vec::new(),
+                    fix_steps: Vec::new(),
+                    confidence: None,
+                    citations: Vec::new(),
+                    version_awareness: None,
+                },
+                RescuePrimarySectionResult {
+                    key: "channels".into(),
+                    title: "Channels".into(),
+                    status: "inactive".into(),
+                    summary: "Channels are inactive".into(),
+                    docs_url: String::new(),
+                    items: Vec::new(),
+                    root_cause_hypotheses: Vec::new(),
+                    fix_steps: Vec::new(),
+                    confidence: None,
+                    citations: Vec::new(),
+                    version_awareness: None,
+                },
+            ],
+            checks: Vec::new(),
+            issues: Vec::new(),
+        };
+
+        assert!(should_run_primary_doctor_fix(&diagnosis));
+
+        diagnosis.status = "healthy".into();
+        diagnosis.summary.status = "healthy".into();
+        diagnosis.sections[1].status = "degraded".into();
+        assert!(should_run_primary_doctor_fix(&diagnosis));
+
+        diagnosis.sections[1].status = "healthy".into();
+        assert!(!should_run_primary_doctor_fix(&diagnosis));
+    }
+
+    #[test]
+    fn test_should_refresh_rescue_helper_permissions_when_permission_issue_is_selected() {
+        let diagnosis = RescuePrimaryDiagnosisResult {
+            status: "degraded".into(),
+            checked_at: "2026-03-08T00:00:00Z".into(),
+            target_profile: "primary".into(),
+            rescue_profile: "rescue".into(),
+            rescue_configured: true,
+            rescue_port: Some(19789),
+            summary: RescuePrimarySummary {
+                status: "degraded".into(),
+                headline: "Tools have recommended improvements".into(),
+                recommended_action: "Apply 1 optimization".into(),
+                fixable_issue_count: 1,
+                selected_fix_issue_ids: vec!["tools.allowlist.review".into()],
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            },
+            sections: Vec::new(),
+            checks: Vec::new(),
+            issues: vec![RescuePrimaryIssue {
+                id: "tools.allowlist.review".into(),
+                code: "tools.allowlist.review".into(),
+                severity: "warn".into(),
+                message: "Allowlist blocks rescue helper access".into(),
+                auto_fixable: true,
+                fix_hint: Some("Expand tools.allow and sessions visibility".into()),
+                source: "primary".into(),
+            }],
+        };
+
+        assert!(should_refresh_rescue_helper_permissions(
+            &diagnosis,
+            &["tools.allowlist.review".into()],
+        ));
+    }
+
+    #[test]
+    fn test_infer_rescue_bot_runtime_state_distinguishes_profile_states() {
+        let active_output = OpenclawCommandOutput {
+            stdout: "{\"running\":true,\"healthy\":true}".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        let inactive_output = OpenclawCommandOutput {
+            stdout: String::new(),
+            stderr: "Gateway is not running".into(),
+            exit_code: 1,
+        };
+        let inactive_json_output = OpenclawCommandOutput {
+            stdout: "{\"running\":false,\"healthy\":false}".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+
+        assert_eq!(
+            infer_rescue_bot_runtime_state(false, None, None),
+            "unconfigured"
+        );
+        assert_eq!(
+            infer_rescue_bot_runtime_state(true, Some(&inactive_output), None),
+            "configured_inactive"
+        );
+        assert_eq!(
+            infer_rescue_bot_runtime_state(true, Some(&active_output), None),
+            "active"
+        );
+        assert_eq!(
+            infer_rescue_bot_runtime_state(true, Some(&inactive_json_output), None),
+            "configured_inactive"
+        );
+        assert_eq!(
+            infer_rescue_bot_runtime_state(true, None, Some("probe failed")),
+            "error"
+        );
+    }
+
+    #[test]
+    fn test_build_rescue_primary_sections_and_summary_returns_global_fix_shape() {
+        let cfg = serde_json::json!({
+            "gateway": { "port": 18789 },
+            "models": {
+                "providers": {
+                    "openai": { "apiKey": "sk-test" }
+                }
+            },
+            "tools": {
+                "allowlist": ["git status", "git diff"],
+                "execution": { "mode": "manual" }
+            },
+            "agents": {
+                "defaults": { "model": "openai/gpt-5" },
+                "list": [{ "id": "writer", "model": "openai/gpt-5" }]
+            },
+            "channels": {
+                "discord": {
+                    "botToken": "discord-token",
+                    "guilds": {
+                        "guild-1": {
+                            "channels": {
+                                "general": { "model": "openai/gpt-5" }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let checks = vec![
+            RescuePrimaryCheckItem {
+                id: "rescue.profile.configured".into(),
+                title: "Rescue profile configured".into(),
+                ok: true,
+                detail: "profile=rescue, port=19789".into(),
+            },
+            RescuePrimaryCheckItem {
+                id: "primary.gateway.status".into(),
+                title: "Primary gateway status".into(),
+                ok: false,
+                detail: "gateway not healthy".into(),
+            },
+        ];
+        let issues = vec![
+            RescuePrimaryIssue {
+                id: "primary.gateway.unhealthy".into(),
+                code: "primary.gateway.unhealthy".into(),
+                severity: "error".into(),
+                message: "Primary gateway is not healthy".into(),
+                auto_fixable: false,
+                fix_hint: Some("Restart primary gateway".into()),
+                source: "primary".into(),
+            },
+            RescuePrimaryIssue {
+                id: "field.agents".into(),
+                code: "required.field".into(),
+                severity: "warn".into(),
+                message: "missing agents".into(),
+                auto_fixable: true,
+                fix_hint: Some("Initialize agents.defaults.model".into()),
+                source: "primary".into(),
+            },
+            RescuePrimaryIssue {
+                id: "tools.allowlist.review".into(),
+                code: "tools.allowlist.review".into(),
+                severity: "warn".into(),
+                message: "Review tool allowlist".into(),
+                auto_fixable: false,
+                fix_hint: Some("Narrow tool scope".into()),
+                source: "primary".into(),
+            },
+        ];
+
+        let sections = build_rescue_primary_sections(Some(&cfg), &checks, &issues);
+        let summary = build_rescue_primary_summary(&sections, &issues);
+
+        let keys = sections
+            .iter()
+            .map(|section| section.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec!["gateway", "models", "tools", "agents", "channels"]
+        );
+        assert_eq!(sections[0].status, "broken");
+        assert_eq!(sections[2].status, "degraded");
+        assert_eq!(sections[3].status, "degraded");
+        assert_eq!(summary.status, "broken");
+        assert_eq!(summary.fixable_issue_count, 1);
+        assert_eq!(
+            summary.selected_fix_issue_ids,
+            vec!["primary.gateway.unhealthy"]
+        );
+        assert!(summary.headline.contains("Gateway"));
+        assert!(summary.recommended_action.contains("Apply 1 fix(es)"));
+    }
+
+    #[test]
+    fn test_build_rescue_primary_summary_marks_unreadable_config_as_degraded_when_gateway_is_healthy(
+    ) {
+        let checks = vec![RescuePrimaryCheckItem {
+            id: "primary.gateway.status".into(),
+            title: "Primary gateway status".into(),
+            ok: true,
+            detail: "running=true, healthy=true, port=18789".into(),
+        }];
+
+        let sections = build_rescue_primary_sections(None, &checks, &[]);
+        let summary = build_rescue_primary_summary(&sections, &[]);
+
+        assert_eq!(summary.status, "degraded");
+        assert!(
+            summary.headline.contains("Configuration")
+                || summary.headline.contains("Gateway")
+                || summary.headline.contains("recommended")
+        );
+    }
+
+    #[test]
+    fn test_build_rescue_primary_summary_marks_unreadable_config_and_gateway_down_as_broken() {
+        let checks = vec![RescuePrimaryCheckItem {
+            id: "primary.gateway.status".into(),
+            title: "Primary gateway status".into(),
+            ok: false,
+            detail: "Gateway is not running".into(),
+        }];
+        let issues = vec![RescuePrimaryIssue {
+            id: "primary.gateway.unhealthy".into(),
+            code: "primary.gateway.unhealthy".into(),
+            severity: "error".into(),
+            message: "Primary gateway is not healthy".into(),
+            auto_fixable: true,
+            fix_hint: Some("Restart primary gateway".into()),
+            source: "primary".into(),
+        }];
+
+        let sections = build_rescue_primary_sections(None, &checks, &issues);
+        let summary = build_rescue_primary_summary(&sections, &issues);
+
+        assert_eq!(summary.status, "broken");
+        assert!(summary.headline.contains("Gateway"));
+    }
+
+    #[test]
+    fn test_apply_doc_guidance_attaches_to_summary_and_matching_section() {
+        let diagnosis = RescuePrimaryDiagnosisResult {
+            status: "degraded".into(),
+            checked_at: "2026-03-08T00:00:00Z".into(),
+            target_profile: "primary".into(),
+            rescue_profile: "rescue".into(),
+            rescue_configured: true,
+            rescue_port: Some(19789),
+            summary: RescuePrimarySummary {
+                status: "degraded".into(),
+                headline: "Agents has recommended improvements".into(),
+                recommended_action: "Review agent recommendations".into(),
+                fixable_issue_count: 1,
+                selected_fix_issue_ids: vec!["field.agents".into()],
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            },
+            sections: vec![RescuePrimarySectionResult {
+                key: "agents".into(),
+                title: "Agents".into(),
+                status: "degraded".into(),
+                summary: "Agents has 1 recommended change".into(),
+                docs_url: "https://docs.openclaw.ai/agents".into(),
+                items: Vec::new(),
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            }],
+            checks: Vec::new(),
+            issues: vec![RescuePrimaryIssue {
+                id: "field.agents".into(),
+                code: "required.field".into(),
+                severity: "warn".into(),
+                message: "missing agents".into(),
+                auto_fixable: true,
+                fix_hint: Some("Initialize agents.defaults.model".into()),
+                source: "primary".into(),
+            }],
+        };
+        let guidance = DocGuidance {
+            status: "ok".into(),
+            source_strategy: "local-docs-first".into(),
+            root_cause_hypotheses: vec![RootCauseHypothesis {
+                title: "Agent defaults are missing".into(),
+                reason: "The primary profile has no agents.defaults.model binding.".into(),
+                score: 0.91,
+            }],
+            fix_steps: vec![
+                "Set agents.defaults.model to a valid provider/model pair.".into(),
+                "Re-run the primary check after saving the config.".into(),
+            ],
+            confidence: 0.91,
+            citations: vec![DocCitation {
+                url: "https://docs.openclaw.ai/agents".into(),
+                section: "defaults".into(),
+            }],
+            version_awareness: "Guidance matches OpenClaw 2026.3.x.".into(),
+            resolver_meta: crate::openclaw_doc_resolver::ResolverMeta {
+                cache_hit: false,
+                sources_checked: vec!["target-local-docs".into()],
+                rules_matched: vec!["agent_workspace_conflict".into()],
+                fetched_pages: 1,
+                fallback_used: false,
+            },
+        };
+
+        let enriched = apply_doc_guidance_to_diagnosis(diagnosis, Some(guidance));
+
+        assert_eq!(enriched.summary.root_cause_hypotheses.len(), 1);
+        assert_eq!(
+            enriched.summary.fix_steps.first().map(String::as_str),
+            Some("Set agents.defaults.model to a valid provider/model pair.")
+        );
+        assert_eq!(
+            enriched.summary.recommended_action,
+            "Set agents.defaults.model to a valid provider/model pair."
+        );
+        assert_eq!(enriched.sections[0].key, "agents");
+        assert_eq!(enriched.sections[0].citations.len(), 1);
+        assert_eq!(
+            enriched.sections[0].version_awareness.as_deref(),
+            Some("Guidance matches OpenClaw 2026.3.x.")
         );
     }
 }
@@ -4882,6 +7655,481 @@ mod model_profile_upsert_tests {
                 "anthropic/claude-opus-4-6".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_oauth_ref() {
+        let profile = mk_profile(
+            "p-oauth",
+            "openai-codex",
+            "gpt-5",
+            "openai-codex:default",
+            None,
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::OAuth
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_env_ref() {
+        let profile = mk_profile("p-env", "openai", "gpt-4o", "OPENAI_API_KEY", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_detects_manual_and_unset() {
+        let manual = mk_profile(
+            "p-manual",
+            "openrouter",
+            "deepseek-v3",
+            "",
+            Some("sk-manual"),
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, Some(ResolvedCredentialSource::ManualApiKey)),
+            ResolvedCredentialKind::Manual
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, None),
+            ResolvedCredentialKind::Manual
+        );
+
+        let unset = mk_profile("p-unset", "openrouter", "deepseek-v3", "", None);
+        assert_eq!(
+            infer_resolved_credential_kind(&unset, None),
+            ResolvedCredentialKind::Unset
+        );
+    }
+
+    #[test]
+    fn infer_resolved_credential_kind_does_not_treat_plain_openai_as_oauth() {
+        let profile = mk_profile("p-openai", "openai", "gpt-4o", "openai:default", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
+}
+
+#[cfg(test)]
+mod secret_ref_tests {
+    use super::*;
+
+    #[test]
+    fn try_parse_secret_ref_parses_valid_env_ref() {
+        let val = serde_json::json!({ "source": "env", "id": "ANTHROPIC_API_KEY" });
+        let sr = try_parse_secret_ref(&val).expect("should parse");
+        assert_eq!(sr.source, "env");
+        assert_eq!(sr.id, "ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn try_parse_secret_ref_parses_valid_file_ref() {
+        let val = serde_json::json!({ "source": "file", "provider": "filemain", "id": "/tmp/secret.txt" });
+        let sr = try_parse_secret_ref(&val).expect("should parse");
+        assert_eq!(sr.source, "file");
+        assert_eq!(sr.id, "/tmp/secret.txt");
+    }
+
+    #[test]
+    fn try_parse_secret_ref_returns_none_for_plain_string() {
+        let val = serde_json::json!("sk-ant-plaintext");
+        assert!(try_parse_secret_ref(&val).is_none());
+    }
+
+    #[test]
+    fn try_parse_secret_ref_returns_none_for_missing_source() {
+        let val = serde_json::json!({ "id": "SOME_KEY" });
+        assert!(try_parse_secret_ref(&val).is_none());
+    }
+
+    #[test]
+    fn try_parse_secret_ref_returns_none_for_missing_id() {
+        let val = serde_json::json!({ "source": "env" });
+        assert!(try_parse_secret_ref(&val).is_none());
+    }
+
+    #[test]
+    fn extract_credential_resolves_env_secret_ref_in_key_field() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "kimi-coding",
+            "key": { "source": "env", "id": "KIMI_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "KIMI_API_KEY" {
+                Some("sk-resolved-kimi".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-resolved-kimi");
+        assert_eq!(credential.kind, InternalAuthKind::ApiKey);
+    }
+
+    #[test]
+    fn extract_credential_resolves_env_secret_ref_in_key_ref_field() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "openai",
+            "keyRef": { "source": "env", "id": "OPENAI_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "OPENAI_API_KEY" {
+                Some("sk-keyref-openai".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-keyref-openai");
+        assert_eq!(credential.kind, InternalAuthKind::ApiKey);
+    }
+
+    #[test]
+    fn extract_credential_resolves_env_secret_ref_in_token_field() {
+        let entry = serde_json::json!({
+            "type": "token",
+            "provider": "anthropic",
+            "token": { "source": "env", "id": "ANTHROPIC_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "ANTHROPIC_API_KEY" {
+                Some("sk-ant-resolved".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-ant-resolved");
+        assert_eq!(credential.kind, InternalAuthKind::Authorization);
+    }
+
+    #[test]
+    fn extract_credential_resolves_env_secret_ref_in_token_ref_field() {
+        let entry = serde_json::json!({
+            "type": "token",
+            "provider": "anthropic",
+            "tokenRef": { "source": "env", "id": "ANTHROPIC_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "ANTHROPIC_API_KEY" {
+                Some("sk-ant-tokenref".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-ant-tokenref");
+        assert_eq!(credential.kind, InternalAuthKind::Authorization);
+    }
+
+    #[test]
+    fn extract_credential_resolves_top_level_secret_ref() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "openai",
+            "secretRef": { "source": "env", "id": "OPENAI_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "OPENAI_API_KEY" {
+                Some("sk-openai-resolved".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-openai-resolved");
+        assert_eq!(credential.kind, InternalAuthKind::ApiKey);
+    }
+
+    #[test]
+    fn top_level_secret_ref_takes_precedence_over_plaintext_field() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "openai",
+            "key": "sk-plaintext-stale",
+            "secretRef": { "source": "env", "id": "OPENAI_API_KEY" }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "OPENAI_API_KEY" {
+                Some("sk-ref-fresh".to_string())
+            } else {
+                None
+            }
+        };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-ref-fresh");
+    }
+
+    #[test]
+    fn falls_back_to_plaintext_when_secret_ref_env_unresolved() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "openai",
+            "key": "sk-plaintext-fallback",
+            "secretRef": { "source": "env", "id": "MISSING_VAR" }
+        });
+        let env_lookup = |_: &str| -> Option<String> { None };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup)
+            .expect("should resolve");
+        assert_eq!(credential.secret, "sk-plaintext-fallback");
+    }
+
+    #[test]
+    fn resolve_key_from_auth_store_with_env_resolves_secret_ref() {
+        let store = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": { "source": "env", "id": "ANTHROPIC_API_KEY" }
+                }
+            }
+        });
+        let env_lookup = |name: &str| -> Option<String> {
+            if name == "ANTHROPIC_API_KEY" {
+                Some("sk-ant-from-env".to_string())
+            } else {
+                None
+            }
+        };
+        let key =
+            resolve_key_from_auth_store_json_with_env(&store, "anthropic:default", &env_lookup);
+        assert_eq!(key, Some("sk-ant-from-env".to_string()));
+    }
+
+    #[test]
+    fn collect_secret_ref_env_names_finds_names_from_profiles_and_root() {
+        let store = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": { "source": "env", "id": "ANTHROPIC_API_KEY" }
+                },
+                "openai:default": {
+                    "type": "api_key",
+                    "provider": "openai",
+                    "secretRef": { "source": "env", "id": "OPENAI_API_KEY" }
+                }
+            }
+        });
+        let mut names = collect_secret_ref_env_names_from_auth_store(&store);
+        names.sort();
+        assert_eq!(names, vec!["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+    }
+
+    #[test]
+    fn collect_secret_ref_env_names_includes_keyref_and_tokenref_fields() {
+        let store = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "openai:default": {
+                    "type": "api_key",
+                    "provider": "openai",
+                    "keyRef": { "source": "env", "id": "OPENAI_API_KEY" }
+                },
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "tokenRef": { "source": "env", "id": "ANTHROPIC_API_KEY" }
+                }
+            }
+        });
+        let mut names = collect_secret_ref_env_names_from_auth_store(&store);
+        names.sort();
+        assert_eq!(names, vec!["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+    }
+
+    #[test]
+    fn resolve_secret_ref_file_reads_file_content() {
+        let tmp =
+            std::env::temp_dir().join(format!("clawpal-secretref-file-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).expect("create tmp dir");
+        let secret_file = tmp.join("api-key.txt");
+        fs::write(&secret_file, "  sk-from-file\n").expect("write secret file");
+
+        let resolved = resolve_secret_ref_file(secret_file.to_str().unwrap());
+        assert_eq!(resolved, Some("sk-from-file".to_string()));
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn resolve_secret_ref_file_returns_none_for_missing_file() {
+        assert!(resolve_secret_ref_file("/nonexistent/path/secret.txt").is_none());
+    }
+
+    #[test]
+    fn resolve_secret_ref_file_returns_none_for_relative_path() {
+        assert!(resolve_secret_ref_file("relative/secret.txt").is_none());
+    }
+
+    #[test]
+    fn resolve_secret_ref_with_provider_config_reads_file_json_pointer() {
+        let tmp = std::env::temp_dir().join(format!(
+            "clawpal-secretref-provider-file-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).expect("create tmp dir");
+        let secret_file = tmp.join("provider-secrets.json");
+        fs::write(
+            &secret_file,
+            r#"{"providers":{"openai":{"api_key":"sk-file-provider"}}}"#,
+        )
+        .expect("write provider secret json");
+
+        let cfg = serde_json::json!({
+            "secrets": {
+                "defaults": { "file": "file-main" },
+                "providers": {
+                    "file-main": {
+                        "source": "file",
+                        "path": secret_file.to_string_lossy().to_string(),
+                        "mode": "json"
+                    }
+                }
+            }
+        });
+        let secret_ref = SecretRef {
+            source: "file".to_string(),
+            provider: None,
+            id: "/providers/openai/api_key".to_string(),
+        };
+        let env_lookup = |_: &str| -> Option<String> { None };
+        let resolved = resolve_secret_ref_with_provider_config(&secret_ref, &cfg, &env_lookup);
+        assert_eq!(resolved.as_deref(), Some("sk-file-provider"));
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_secret_ref_with_provider_config_runs_exec_provider() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "clawpal-secretref-provider-exec-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).expect("create tmp dir");
+        let exec_file = tmp.join("secret-provider.sh");
+        fs::write(
+            &exec_file,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"values\":{\"my-api-key\":\"sk-from-exec-provider\"}}'\n",
+        )
+        .expect("write exec script");
+        let mut perms = fs::metadata(&exec_file)
+            .expect("exec metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&exec_file, perms).expect("chmod");
+
+        let cfg = serde_json::json!({
+            "secrets": {
+                "defaults": { "exec": "vault-cli" },
+                "providers": {
+                    "vault-cli": {
+                        "source": "exec",
+                        "command": exec_file.to_string_lossy().to_string(),
+                        "jsonOnly": true
+                    }
+                }
+            }
+        });
+        let secret_ref = SecretRef {
+            source: "exec".to_string(),
+            provider: None,
+            id: "my-api-key".to_string(),
+        };
+        let env_lookup = |_: &str| -> Option<String> { None };
+        let resolved = resolve_secret_ref_with_provider_config(&secret_ref, &cfg, &env_lookup);
+        assert_eq!(resolved.as_deref(), Some("sk-from-exec-provider"));
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_secret_ref_with_provider_config_exec_times_out() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "clawpal-secretref-provider-exec-timeout-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).expect("create tmp dir");
+        let exec_file = tmp.join("secret-provider-timeout.sh");
+        fs::write(
+            &exec_file,
+            "#!/bin/sh\ncat >/dev/null\nsleep 2\nprintf '%s' '{\"values\":{\"my-api-key\":\"sk-too-late\"}}'\n",
+        )
+        .expect("write exec script");
+        let mut perms = fs::metadata(&exec_file)
+            .expect("exec metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&exec_file, perms).expect("chmod");
+
+        let cfg = serde_json::json!({
+            "secrets": {
+                "defaults": { "exec": "vault-cli" },
+                "providers": {
+                    "vault-cli": {
+                        "source": "exec",
+                        "command": exec_file.to_string_lossy().to_string(),
+                        "jsonOnly": true,
+                        "timeoutSec": 1
+                    }
+                }
+            }
+        });
+        let secret_ref = SecretRef {
+            source: "exec".to_string(),
+            provider: None,
+            id: "my-api-key".to_string(),
+        };
+        let env_lookup = |_: &str| -> Option<String> { None };
+        let resolved = resolve_secret_ref_with_provider_config(&secret_ref, &cfg, &env_lookup);
+        assert!(resolved.is_none());
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn exec_source_secret_ref_is_not_resolved() {
+        let entry = serde_json::json!({
+            "type": "api_key",
+            "provider": "vault",
+            "key": { "source": "exec", "provider": "vault", "id": "my-api-key" }
+        });
+        let env_lookup = |_: &str| -> Option<String> { None };
+        let credential = extract_credential_from_auth_entry_with_env(&entry, &env_lookup);
+        assert!(credential.is_none());
     }
 }
 
@@ -5855,10 +9103,157 @@ pub fn delete_ssh_host(host_id: String) -> Result<bool, String> {
 // Task 4: SSH connect / disconnect / status
 // ---------------------------------------------------------------------------
 
+fn emit_ssh_diagnostic(app: &AppHandle, report: &SshDiagnosticReport) {
+    let code = report.error_code.map(|value| value.as_str().to_string());
+    let payload = json!({
+        "stage": report.stage,
+        "intent": report.intent,
+        "status": report.status,
+        "errorCode": code,
+        "summary": report.summary,
+        "repairPlan": report.repair_plan,
+        "confidence": report.confidence,
+    });
+    let _ = app.emit("ssh:diagnostic", payload.clone());
+    if !report.repair_plan.is_empty() {
+        let _ = app.emit("ssh:repair-suggested", payload.clone());
+    }
+    crate::logging::log_info(&format!("[ssh:diagnostic] {payload}"));
+}
+
+fn make_ssh_command_error(
+    app: &AppHandle,
+    stage: SshStage,
+    intent: SshIntent,
+    raw: impl Into<String>,
+) -> String {
+    let message = raw.into();
+    let diagnostic = from_any_error(stage, intent, message.clone());
+    emit_ssh_diagnostic(app, &diagnostic);
+    message
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SshDiagnosticSuccessTrigger {
+    ConnectEstablished,
+    ConnectReuse,
+    ExplicitProbe,
+    RoutineOperation,
+}
+
+fn should_emit_success_ssh_diagnostic(trigger: SshDiagnosticSuccessTrigger) -> bool {
+    matches!(
+        trigger,
+        SshDiagnosticSuccessTrigger::ConnectEstablished
+            | SshDiagnosticSuccessTrigger::ExplicitProbe
+    )
+}
+
+fn success_ssh_diagnostic(
+    app: &AppHandle,
+    stage: SshStage,
+    intent: SshIntent,
+    summary: impl Into<String>,
+    trigger: SshDiagnosticSuccessTrigger,
+) -> SshDiagnosticReport {
+    let report = SshDiagnosticReport::success(stage, intent, summary);
+    if should_emit_success_ssh_diagnostic(trigger) {
+        emit_ssh_diagnostic(app, &report);
+    }
+    report
+}
+
+fn skipped_probe_diagnostic(
+    stage: SshStage,
+    intent: SshIntent,
+    summary: impl Into<String>,
+) -> SshDiagnosticReport {
+    SshDiagnosticReport {
+        stage,
+        intent,
+        status: SshDiagnosticStatus::Degraded,
+        error_code: None,
+        summary: summary.into(),
+        evidence: Vec::new(),
+        repair_plan: Vec::new(),
+        confidence: 0.5,
+    }
+}
+
+fn ssh_stage_for_error_code(code: SshErrorCode) -> SshStage {
+    match code {
+        SshErrorCode::HostUnreachable | SshErrorCode::ConnectionRefused | SshErrorCode::Timeout => {
+            SshStage::TcpReachability
+        }
+        SshErrorCode::HostKeyFailed => SshStage::HostKeyVerification,
+        SshErrorCode::KeyfileMissing
+        | SshErrorCode::PassphraseRequired
+        | SshErrorCode::AuthFailed
+        | SshErrorCode::SftpPermissionDenied => SshStage::AuthNegotiation,
+        SshErrorCode::SessionStale => SshStage::SessionOpen,
+        SshErrorCode::RemoteCommandFailed => SshStage::RemoteExec,
+        SshErrorCode::Unknown => SshStage::TcpReachability,
+    }
+}
+
+fn ssh_stage_for_intent(intent: SshIntent) -> SshStage {
+    match intent {
+        SshIntent::Connect => SshStage::SessionOpen,
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => SshStage::RemoteExec,
+        SshIntent::SftpRead => SshStage::SftpRead,
+        SshIntent::SftpWrite => SshStage::SftpWrite,
+        SshIntent::SftpRemove => SshStage::SftpRemove,
+    }
+}
+
+#[cfg(test)]
+mod ssh_diagnostic_policy_tests {
+    use super::{
+        should_emit_success_ssh_diagnostic, skipped_probe_diagnostic, SshDiagnosticSuccessTrigger,
+    };
+    use clawpal_core::ssh::diagnostic::{SshDiagnosticStatus, SshIntent, SshStage};
+
+    #[test]
+    fn suppresses_routine_success_diagnostics() {
+        assert!(!should_emit_success_ssh_diagnostic(
+            SshDiagnosticSuccessTrigger::RoutineOperation
+        ));
+        assert!(!should_emit_success_ssh_diagnostic(
+            SshDiagnosticSuccessTrigger::ConnectReuse
+        ));
+    }
+
+    #[test]
+    fn keeps_meaningful_success_diagnostics() {
+        assert!(should_emit_success_ssh_diagnostic(
+            SshDiagnosticSuccessTrigger::ConnectEstablished
+        ));
+        assert!(should_emit_success_ssh_diagnostic(
+            SshDiagnosticSuccessTrigger::ExplicitProbe
+        ));
+    }
+
+    #[test]
+    fn skipped_probes_report_degraded_status() {
+        let report = skipped_probe_diagnostic(
+            SshStage::SftpWrite,
+            SshIntent::SftpWrite,
+            "SFTP write probe skipped (no-op)",
+        );
+
+        assert_eq!(report.status, SshDiagnosticStatus::Degraded);
+        assert_eq!(report.error_code, None);
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_connect(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
     crate::commands::logs::log_dev(format!("[dev][ssh_connect] begin host_id={host_id}"));
     // If already connected and handle is alive, reuse
@@ -5866,9 +9261,18 @@ pub async fn ssh_connect(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect] reuse existing connection host_id={host_id}"
         ));
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SessionOpen,
+            SshIntent::Connect,
+            "SSH session already connected",
+            SshDiagnosticSuccessTrigger::ConnectReuse,
+        );
         return Ok(true);
     }
-    let hosts = read_hosts_from_registry()?;
+    let hosts = read_hosts_from_registry().map_err(|error| {
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+    })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect] host registry is empty");
     }
@@ -5880,7 +9284,12 @@ pub async fn ssh_connect(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
         ));
-        format!("No SSH host config with id: {host_id}")
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
     })?;
     // If the host has a stored passphrase, use it directly
     let connect_result = if let Some(ref pp) = host.passphrase {
@@ -5900,9 +9309,26 @@ pub async fn ssh_connect(
             "[dev][ssh_connect] failed host_id={} host={} user={} port={} auth_method={} error={}",
             host_id, host.host, host.username, host.port, host.auth_method, error
         ));
-        return Err(format!("ssh connect failed: {error}"));
+        let message = format!("ssh connect failed: {error}");
+        let mut diagnostic = from_any_error(
+            SshStage::TcpReachability,
+            SshIntent::Connect,
+            message.clone(),
+        );
+        if let Some(code) = diagnostic.error_code {
+            diagnostic.stage = ssh_stage_for_error_code(code);
+        }
+        emit_ssh_diagnostic(&app, &diagnostic);
+        return Err(message);
     }
     crate::commands::logs::log_dev(format!("[dev][ssh_connect] success host_id={host_id}"));
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SessionOpen,
+        SshIntent::Connect,
+        "SSH connection established",
+        SshDiagnosticSuccessTrigger::ConnectEstablished,
+    );
     Ok(true)
 }
 
@@ -5911,6 +9337,7 @@ pub async fn ssh_connect_with_passphrase(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     passphrase: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
     crate::commands::logs::log_dev(format!(
         "[dev][ssh_connect_with_passphrase] begin host_id={host_id}"
@@ -5919,9 +9346,18 @@ pub async fn ssh_connect_with_passphrase(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect_with_passphrase] reuse existing connection host_id={host_id}"
         ));
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SessionOpen,
+            SshIntent::Connect,
+            "SSH session already connected",
+            SshDiagnosticSuccessTrigger::ConnectReuse,
+        );
         return Ok(true);
     }
-    let hosts = read_hosts_from_registry()?;
+    let hosts = read_hosts_from_registry().map_err(|error| {
+        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+    })?;
     if hosts.is_empty() {
         crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
     }
@@ -5933,7 +9369,12 @@ pub async fn ssh_connect_with_passphrase(
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
         ));
-        format!("No SSH host config with id: {host_id}")
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("No SSH host config with id: {host_id}"),
+        )
     })?;
     if let Err(error) = pool
         .connect_with_passphrase(&host, Some(passphrase.as_str()))
@@ -5948,11 +9389,23 @@ pub async fn ssh_connect_with_passphrase(
             host.auth_method,
             error
         ));
-        return Err(format!("ssh connect failed: {error}"));
+        return Err(make_ssh_command_error(
+            &app,
+            SshStage::AuthNegotiation,
+            SshIntent::Connect,
+            format!("ssh connect failed: {error}"),
+        ));
     }
     crate::commands::logs::log_dev(format!(
         "[dev][ssh_connect_with_passphrase] success host_id={host_id}"
     ));
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SessionOpen,
+        SshIntent::Connect,
+        "SSH connection established",
+        SshDiagnosticSuccessTrigger::ConnectEstablished,
+    );
     Ok(true)
 }
 
@@ -5977,6 +9430,14 @@ pub async fn ssh_status(
     }
 }
 
+#[tauri::command]
+pub async fn get_ssh_transfer_stats(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<SshTransferStats, String> {
+    Ok(pool.get_transfer_stats(&host_id).await)
+}
+
 // ---------------------------------------------------------------------------
 // Task 5: SSH exec and SFTP Tauri commands
 // ---------------------------------------------------------------------------
@@ -5986,8 +9447,21 @@ pub async fn ssh_exec(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     command: String,
+    app: AppHandle,
 ) -> Result<SshExecResult, String> {
-    pool.exec(&host_id, &command).await
+    pool.exec(&host_id, &command)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::RemoteExec,
+                SshIntent::Exec,
+                "Remote SSH command executed",
+                SshDiagnosticSuccessTrigger::RoutineOperation,
+            );
+            result
+        })
+        .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
 }
 
 #[tauri::command]
@@ -5995,8 +9469,23 @@ pub async fn sftp_read_file(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<String, String> {
-    pool.sftp_read(&host_id, &path).await
+    pool.sftp_read(&host_id, &path)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SftpRead,
+                SshIntent::SftpRead,
+                "SFTP read succeeded",
+                SshDiagnosticSuccessTrigger::RoutineOperation,
+            );
+            result
+        })
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -6005,8 +9494,20 @@ pub async fn sftp_write_file(
     host_id: String,
     path: String,
     content: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
-    pool.sftp_write(&host_id, &path, &content).await?;
+    pool.sftp_write(&host_id, &path, &content)
+        .await
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpWrite, SshIntent::SftpWrite, error)
+        })?;
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SftpWrite,
+        SshIntent::SftpWrite,
+        "SFTP write succeeded",
+        SshDiagnosticSuccessTrigger::RoutineOperation,
+    );
     Ok(true)
 }
 
@@ -6015,8 +9516,23 @@ pub async fn sftp_list_dir(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<Vec<SftpEntry>, String> {
-    pool.sftp_list(&host_id, &path).await
+    pool.sftp_list(&host_id, &path)
+        .await
+        .map(|result| {
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SftpRead,
+                SshIntent::SftpRead,
+                "SFTP list succeeded",
+                SshDiagnosticSuccessTrigger::RoutineOperation,
+            );
+            result
+        })
+        .map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+        })
 }
 
 #[tauri::command]
@@ -6024,9 +9540,109 @@ pub async fn sftp_remove_file(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
     path: String,
+    app: AppHandle,
 ) -> Result<bool, String> {
-    pool.sftp_remove(&host_id, &path).await?;
+    pool.sftp_remove(&host_id, &path).await.map_err(|error| {
+        make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
+    })?;
+    let _ = success_ssh_diagnostic(
+        &app,
+        SshStage::SftpRemove,
+        SshIntent::SftpRemove,
+        "SFTP remove succeeded",
+        SshDiagnosticSuccessTrigger::RoutineOperation,
+    );
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn diagnose_ssh(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    intent: String,
+    app: AppHandle,
+) -> Result<SshDiagnosticReport, String> {
+    let intent = intent.parse::<SshIntent>().map_err(|_| {
+        make_ssh_command_error(
+            &app,
+            SshStage::ResolveHostConfig,
+            SshIntent::Connect,
+            format!("Invalid SSH diagnostic intent: {intent}"),
+        )
+    })?;
+
+    let stage = ssh_stage_for_intent(intent);
+    if matches!(intent, SshIntent::Connect) {
+        if pool.is_connected(&host_id).await {
+            return Ok(success_ssh_diagnostic(
+                &app,
+                stage,
+                intent,
+                "SSH connection is healthy",
+                SshDiagnosticSuccessTrigger::ExplicitProbe,
+            ));
+        }
+        let hosts = read_hosts_from_registry().map_err(|error| {
+            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+        })?;
+        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+            make_ssh_command_error(
+                &app,
+                SshStage::ResolveHostConfig,
+                SshIntent::Connect,
+                format!("No SSH host config with id: {host_id}"),
+            )
+        })?;
+        return Ok(match pool.connect(&host).await {
+            Ok(_) => success_ssh_diagnostic(
+                &app,
+                SshStage::SessionOpen,
+                SshIntent::Connect,
+                "SSH connect probe succeeded",
+                SshDiagnosticSuccessTrigger::ExplicitProbe,
+            ),
+            Err(error) => {
+                let mut report =
+                    from_any_error(SshStage::TcpReachability, SshIntent::Connect, error);
+                if let Some(code) = report.error_code {
+                    report.stage = ssh_stage_for_error_code(code);
+                }
+                emit_ssh_diagnostic(&app, &report);
+                report
+            }
+        });
+    }
+
+    if !pool.is_connected(&host_id).await {
+        let report = from_any_error(stage, intent, format!("No connection for id: {host_id}"));
+        emit_ssh_diagnostic(&app, &report);
+        return Ok(report);
+    }
+
+    let report = match intent {
+        SshIntent::Exec
+        | SshIntent::InstallStep
+        | SshIntent::DoctorRemote
+        | SshIntent::HealthCheck => {
+            match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
+                Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
+                Err(error) => from_any_error(stage, intent, error),
+            }
+        }
+        SshIntent::SftpRead => match pool.sftp_list(&host_id, "~").await {
+            Ok(_) => SshDiagnosticReport::success(stage, intent, "SFTP read probe succeeded"),
+            Err(error) => from_any_error(stage, intent, error),
+        },
+        SshIntent::SftpWrite => {
+            skipped_probe_diagnostic(stage, intent, "SFTP write probe skipped (no-op)")
+        }
+        SshIntent::SftpRemove => {
+            skipped_probe_diagnostic(stage, intent, "SFTP remove probe skipped (no-op)")
+        }
+        SshIntent::Connect => unreachable!(),
+    };
+    emit_ssh_diagnostic(&app, &report);
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -6095,6 +9711,13 @@ async fn remote_resolve_openclaw_config_path(
     pool: &SshConnectionPool,
     host_id: &str,
 ) -> Result<String, String> {
+    if let Ok(cache) = REMOTE_OPENCLAW_CONFIG_PATH_CACHE.lock() {
+        if let Some((path, cached_at)) = cache.get(host_id) {
+            if cached_at.elapsed() < REMOTE_OPENCLAW_CONFIG_PATH_CACHE_TTL {
+                return Ok(path.clone());
+            }
+        }
+    }
     let result = pool
         .exec_login(
             host_id,
@@ -6112,6 +9735,9 @@ async fn remote_resolve_openclaw_config_path(
     let path = result.stdout.trim();
     if path.is_empty() {
         return Err("Remote openclaw config path probe returned empty output".into());
+    }
+    if let Ok(mut cache) = REMOTE_OPENCLAW_CONFIG_PATH_CACHE.lock() {
+        cache.insert(host_id.to_string(), (path.to_string(), Instant::now()));
     }
     Ok(path.to_string())
 }
@@ -6132,19 +9758,31 @@ async fn run_remote_rescue_bot_command(
     host_id: &str,
     command: Vec<String>,
 ) -> Result<RescueBotCommandResult, String> {
-    let mut remote_cmd = String::from("openclaw");
-    for arg in &command {
-        remote_cmd.push(' ');
-        remote_cmd.push_str(&shell_escape(arg));
+    let output = run_remote_openclaw_raw(pool, host_id, &command).await?;
+    if is_gateway_status_command_output_incompatible(&output, &command) {
+        let fallback_command = strip_gateway_status_json_flag(&command);
+        if fallback_command != command {
+            let fallback_output = run_remote_openclaw_raw(pool, host_id, &fallback_command).await?;
+            return Ok(RescueBotCommandResult {
+                command: fallback_command,
+                output: fallback_output,
+            });
+        }
     }
-    let raw = pool.exec_login(host_id, &remote_cmd).await?;
-    Ok(RescueBotCommandResult {
-        command,
-        output: OpenclawCommandOutput {
-            stdout: raw.stdout,
-            stderr: raw.stderr,
-            exit_code: raw.exit_code as i32,
-        },
+    Ok(RescueBotCommandResult { command, output })
+}
+
+async fn run_remote_openclaw_raw(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    command: &[String],
+) -> Result<OpenclawCommandOutput, String> {
+    let args = command.iter().map(String::as_str).collect::<Vec<_>>();
+    let raw = crate::cli_runner::run_openclaw_remote(pool, host_id, &args).await?;
+    Ok(OpenclawCommandOutput {
+        stdout: raw.stdout,
+        stderr: raw.stderr,
+        exit_code: raw.exit_code,
     })
 }
 
@@ -6163,12 +9801,12 @@ async fn run_remote_primary_doctor_with_fallback(
     host_id: &str,
     profile: &str,
 ) -> Result<OpenclawCommandOutput, String> {
-    let json_command = build_profile_command(profile, &["doctor", "--json"]);
+    let json_command = build_profile_command(profile, &["doctor", "--json", "--yes"]);
     let output = run_remote_openclaw_dynamic(pool, host_id, json_command).await?;
     if output.exit_code != 0
         && clawpal_core::doctor::doctor_json_option_unsupported(&output.stderr, &output.stdout)
     {
-        let plain_command = build_profile_command(profile, &["doctor"]);
+        let plain_command = build_profile_command(profile, &["doctor", "--yes"]);
         return run_remote_openclaw_dynamic(pool, host_id, plain_command).await;
     }
     Ok(output)
@@ -6287,8 +9925,24 @@ async fn resolve_remote_key_from_agent_auth_profiles(
                 let data: Value = serde_json::from_str(&text).map_err(|e| {
                     format!("Failed to parse remote auth store at {auth_file}: {e}")
                 })?;
+                // Try plaintext first, then resolve SecretRef env vars from remote.
                 if let Some(key) = resolve_key_from_auth_store_json(&data, auth_ref) {
                     return Ok(Some(key));
+                }
+                // Collect env-source SecretRef names and fetch them from remote host.
+                let sr_env_names = collect_secret_ref_env_names_from_auth_store(&data);
+                if !sr_env_names.is_empty() {
+                    let remote_env =
+                        RemoteAuthCache::batch_read_env_vars(pool, host_id, &sr_env_names)
+                            .await
+                            .unwrap_or_default();
+                    let env_lookup =
+                        |name: &str| -> Option<String> { remote_env.get(name).cloned() };
+                    if let Some(key) =
+                        resolve_key_from_auth_store_json_with_env(&data, auth_ref, &env_lookup)
+                    {
+                        return Ok(Some(key));
+                    }
                 }
             }
         }
@@ -6379,31 +10033,16 @@ async fn resolve_remote_profile_api_key(
     host_id: &str,
     profile: &ModelProfile,
 ) -> Result<String, String> {
-    let mut auth_refs = Vec::<String>::new();
     let auth_ref = profile.auth_ref.trim();
-    if !auth_ref.is_empty() {
-        auth_refs.push(auth_ref.to_string());
-    }
-    let provider = profile.provider.trim().to_lowercase();
-    if !provider.is_empty() {
-        let fallback = format!("{provider}:default");
-        if !auth_refs.iter().any(|candidate| candidate == &fallback) {
-            auth_refs.push(fallback);
-        }
-    }
+    let has_explicit_auth_ref = !auth_ref.is_empty();
 
-    for auth_ref in &auth_refs {
-        // Try auth_ref as remote env var name directly (e.g. OPENAI_API_KEY)
-        if auth_ref
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+    // 1. Explicit auth_ref (user-specified): env var, then auth store.
+    if has_explicit_auth_ref {
+        if is_valid_env_var_name(auth_ref) {
             if let Some(key) = read_remote_env_var(pool, host_id, auth_ref).await? {
                 return Ok(key);
             }
         }
-
-        // Try auth_ref from remote agent auth-profiles.json
         if let Some(key) =
             resolve_remote_key_from_agent_auth_profiles(pool, host_id, auth_ref).await?
         {
@@ -6411,18 +10050,7 @@ async fn resolve_remote_profile_api_key(
         }
     }
 
-    // Try provider-based env conventions as fallback
-    let provider_env = profile.provider.trim().to_uppercase().replace('-', "_");
-    if !provider_env.is_empty() {
-        for suffix in ["_API_KEY", "_KEY", "_TOKEN"] {
-            let env_name = format!("{provider_env}{suffix}");
-            if let Some(key) = read_remote_env_var(pool, host_id, &env_name).await? {
-                return Ok(key);
-            }
-        }
-    }
-
-    // Fallback to direct apiKey only when no authoritative source is resolved.
+    // 2. Direct api_key before fallback auth refs/env conventions.
     if let Some(key) = &profile.api_key {
         let trimmed_key = key.trim();
         if !trimmed_key.is_empty() {
@@ -6430,7 +10058,228 @@ async fn resolve_remote_profile_api_key(
         }
     }
 
+    // 3. Fallback provider:default auth_ref from auth store.
+    let provider = profile.provider.trim().to_lowercase();
+    if !provider.is_empty() {
+        let fallback = format!("{provider}:default");
+        let skip = has_explicit_auth_ref && auth_ref == fallback;
+        if !skip {
+            if let Some(key) =
+                resolve_remote_key_from_agent_auth_profiles(pool, host_id, &fallback).await?
+            {
+                return Ok(key);
+            }
+        }
+    }
+
+    // 4. Provider env var conventions.
+    for env_name in provider_env_var_candidates(&profile.provider) {
+        if let Some(key) = read_remote_env_var(pool, host_id, &env_name).await? {
+            return Ok(key);
+        }
+    }
+
     Ok(String::new())
+}
+
+// ---------------------------------------------------------------------------
+// Batched remote auth resolution — pre-fetches env vars and auth store files
+// in bulk (2-3 SSH calls total) instead of 5-7 per profile.
+// ---------------------------------------------------------------------------
+
+struct RemoteAuthCache {
+    env_vars: HashMap<String, String>,
+    auth_store_files: Vec<Value>,
+}
+
+impl RemoteAuthCache {
+    /// Build cache by collecting all needed env var names from all profiles
+    /// (including SecretRef env vars from auth stores) and reading them +
+    /// all auth-store files in bulk.
+    async fn build(
+        pool: &SshConnectionPool,
+        host_id: &str,
+        profiles: &[ModelProfile],
+    ) -> Result<Self, String> {
+        // Collect env var names needed from profile auth_refs and provider conventions.
+        let mut env_var_names = Vec::<String>::new();
+        let mut seen_env = std::collections::HashSet::<String>::new();
+        for profile in profiles {
+            let auth_ref = profile.auth_ref.trim();
+            if !auth_ref.is_empty()
+                && is_valid_env_var_name(auth_ref)
+                && seen_env.insert(auth_ref.to_string())
+            {
+                env_var_names.push(auth_ref.to_string());
+            }
+            for env_name in provider_env_var_candidates(&profile.provider) {
+                if seen_env.insert(env_name.clone()) {
+                    env_var_names.push(env_name);
+                }
+            }
+        }
+
+        // Read all auth-store files from remote agents first so we can
+        // discover additional env var names referenced by SecretRefs.
+        let auth_store_files = Self::read_auth_store_files(pool, host_id).await?;
+
+        // Scan auth store files for env-source SecretRef references and
+        // include their env var names in the batch read.
+        for data in &auth_store_files {
+            for name in collect_secret_ref_env_names_from_auth_store(data) {
+                if seen_env.insert(name.clone()) {
+                    env_var_names.push(name);
+                }
+            }
+        }
+
+        // Batch-read all env vars in a single SSH call.
+        let env_vars = if env_var_names.is_empty() {
+            HashMap::new()
+        } else {
+            Self::batch_read_env_vars(pool, host_id, &env_var_names).await?
+        };
+
+        Ok(Self {
+            env_vars,
+            auth_store_files,
+        })
+    }
+
+    async fn batch_read_env_vars(
+        pool: &SshConnectionPool,
+        host_id: &str,
+        names: &[String],
+    ) -> Result<HashMap<String, String>, String> {
+        // Build a shell script that prints "NAME=VALUE\0" for each set var.
+        // Using NUL delimiter avoids issues with newlines in values.
+        let mut script = String::from("for __v in");
+        for name in names {
+            // All names are validated by is_valid_env_var_name, safe to interpolate.
+            script.push(' ');
+            script.push_str(name);
+        }
+        script.push_str("; do eval \"__val=\\${$__v+__SET__}\\${$__v}\"; ");
+        script.push_str("case \"$__val\" in __SET__*) printf '%s=%s\\n' \"$__v\" \"${__val#__SET__}\";; esac; done");
+
+        let out = pool
+            .exec_login(host_id, &script)
+            .await
+            .map_err(|e| format!("Failed to batch-read remote env vars: {e}"))?;
+
+        let mut map = HashMap::new();
+        for line in out.stdout.lines() {
+            if let Some(eq_pos) = line.find('=') {
+                let key = &line[..eq_pos];
+                let val = line[eq_pos + 1..].trim();
+                if !val.is_empty() {
+                    map.insert(key.to_string(), val.to_string());
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    async fn read_auth_store_files(
+        pool: &SshConnectionPool,
+        host_id: &str,
+    ) -> Result<Vec<Value>, String> {
+        let roots = resolve_remote_openclaw_roots(pool, host_id).await?;
+        let mut store_files = Vec::new();
+
+        for root in &roots {
+            let agents_path = format!("{}/agents", root.trim_end_matches('/'));
+            let entries = match pool.sftp_list(host_id, &agents_path).await {
+                Ok(entries) => entries,
+                Err(e) if is_remote_missing_path_error(&e) => continue,
+                Err(_) => continue,
+            };
+
+            for agent in entries.into_iter().filter(|entry| entry.is_dir) {
+                let agent_dir =
+                    format!("{}/agents/{}/agent", root.trim_end_matches('/'), agent.name);
+                for file_name in ["auth-profiles.json", "auth.json"] {
+                    let auth_file = format!("{agent_dir}/{file_name}");
+                    let text = match pool.sftp_read(host_id, &auth_file).await {
+                        Ok(text) => text,
+                        Err(_) => continue,
+                    };
+                    if let Ok(data) = serde_json::from_str::<Value>(&text) {
+                        store_files.push(data);
+                    }
+                }
+            }
+        }
+        Ok(store_files)
+    }
+
+    /// Resolve API key for a single profile using cached data.
+    fn resolve_for_profile_with_source(
+        &self,
+        profile: &ModelProfile,
+    ) -> Option<(String, ResolvedCredentialSource)> {
+        let auth_ref = profile.auth_ref.trim();
+        let has_explicit_auth_ref = !auth_ref.is_empty();
+
+        // 1. Explicit auth_ref as env var, then auth store.
+        if has_explicit_auth_ref {
+            if is_valid_env_var_name(auth_ref) {
+                if let Some(val) = self.env_vars.get(auth_ref) {
+                    return Some((val.clone(), ResolvedCredentialSource::ExplicitAuthRef));
+                }
+            }
+            if let Some(key) = self.find_in_auth_stores(auth_ref) {
+                return Some((key, ResolvedCredentialSource::ExplicitAuthRef));
+            }
+        }
+
+        // 2. Direct api_key — before fallback auth_ref.
+        if let Some(ref key) = profile.api_key {
+            let trimmed = key.trim();
+            if !trimmed.is_empty() {
+                return Some((trimmed.to_string(), ResolvedCredentialSource::ManualApiKey));
+            }
+        }
+
+        // 3. Fallback provider:default auth_ref.
+        let provider = profile.provider.trim().to_lowercase();
+        if !provider.is_empty() {
+            let fallback = format!("{provider}:default");
+            let skip = has_explicit_auth_ref && auth_ref == fallback;
+            if !skip {
+                if let Some(key) = self.find_in_auth_stores(&fallback) {
+                    return Some((key, ResolvedCredentialSource::ProviderFallbackAuthRef));
+                }
+            }
+        }
+
+        // 4. Provider env var conventions.
+        for env_name in provider_env_var_candidates(&profile.provider) {
+            if let Some(val) = self.env_vars.get(&env_name) {
+                return Some((val.clone(), ResolvedCredentialSource::ProviderEnvVar));
+            }
+        }
+
+        None
+    }
+
+    fn resolve_for_profile(&self, profile: &ModelProfile) -> String {
+        self.resolve_for_profile_with_source(profile)
+            .map(|(key, _)| key)
+            .unwrap_or_default()
+    }
+
+    fn find_in_auth_stores(&self, auth_ref: &str) -> Option<String> {
+        let env_lookup = |name: &str| -> Option<String> { self.env_vars.get(name).cloned() };
+        for data in &self.auth_store_files {
+            if let Some(key) =
+                resolve_key_from_auth_store_json_with_env(data, auth_ref, &env_lookup)
+            {
+                return Some(key);
+            }
+        }
+        None
+    }
 }
 
 #[tauri::command]
@@ -6656,6 +10505,11 @@ pub fn read_app_log(lines: Option<usize>) -> Result<String, String> {
 #[tauri::command]
 pub fn read_error_log(lines: Option<usize>) -> Result<String, String> {
     crate::logging::read_log_tail("error.log", clamp_log_lines(lines))
+}
+
+#[tauri::command]
+pub fn read_helper_log(lines: Option<usize>) -> Result<String, String> {
+    crate::logging::read_log_tail("helper.log", clamp_log_lines(lines))
 }
 
 #[tauri::command]

@@ -3,7 +3,10 @@ import type { ChannelNode, DiscordGuildChannel } from "./types";
 
 interface InstanceContextValue {
   instanceId: string;
+  instanceViewToken: string;
   instanceToken: number;
+  persistenceScope: string | null;
+  persistenceResolved: boolean;
   isRemote: boolean;
   isDocker: boolean;
   isConnected: boolean;
@@ -17,7 +20,10 @@ interface InstanceContextValue {
 
 export const InstanceContext = createContext<InstanceContextValue>({
   instanceId: "local",
+  instanceViewToken: "local",
   instanceToken: 0,
+  persistenceScope: "local",
+  persistenceResolved: true,
   isRemote: false,
   isDocker: false,
   isConnected: true,

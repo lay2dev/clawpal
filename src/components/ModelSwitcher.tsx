@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,24 +8,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-const AVAILABLE_MODELS = [
-  "gpt-4o",
-  "gpt-4o-mini",
-  "gpt-4.1",
-  "claude-3.7-sonnet",
-  "claude-3.5-haiku",
-  "gemini-2.0-flash",
-  "kimi-k2.5",
-];
-
 interface ModelSwitcherProps {
   sessionId: string;
   defaultModel?: string;
+  availableModels?: string[];
   /** Notifies parent when the effective model changes (override set/cleared). */
   onModelChange?: (model: string | undefined) => void;
 }
 
-export function ModelSwitcher({ sessionId, defaultModel, onModelChange }: ModelSwitcherProps) {
+export function ModelSwitcher({ sessionId, defaultModel, availableModels, onModelChange }: ModelSwitcherProps) {
   const [override, setOverride] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -37,6 +28,17 @@ export function ModelSwitcher({ sessionId, defaultModel, onModelChange }: ModelS
   }, [sessionId]);
 
   const currentModel = override ?? defaultModel ?? "auto";
+
+  const models = useMemo(() => {
+    const uniqueModels = new Map<string, string>();
+    for (const model of availableModels || []) {
+      const normalized = model.trim();
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (!uniqueModels.has(key)) uniqueModels.set(key, normalized);
+    }
+    return Array.from(uniqueModels.values()).sort((a, b) => a.localeCompare(b));
+  }, [availableModels]);
 
   const handleSelect = async (model: string) => {
     try {
@@ -73,17 +75,23 @@ export function ModelSwitcher({ sessionId, defaultModel, onModelChange }: ModelS
             Switch model for this session
           </div>
           <div className="space-y-0.5">
-            {AVAILABLE_MODELS.map((model) => (
-              <button
-                key={model}
-                className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors ${
-                  currentModel === model ? "bg-muted font-medium" : ""
-                }`}
-                onClick={() => handleSelect(model)}
-              >
-                {model}
-              </button>
-            ))}
+            {models.length === 0 ? (
+              <div className="text-xs text-muted-foreground px-2 py-2">
+                No available model profiles configured
+              </div>
+            ) : (
+              models.map((model) => (
+                <button
+                  key={model}
+                  className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors ${
+                    currentModel === model ? "bg-muted font-medium" : ""
+                  }`}
+                  onClick={() => handleSelect(model)}
+                >
+                  {model}
+                </button>
+              ))
+            )}
           </div>
           {override && (
             <div className="mt-2 pt-2 border-t">
