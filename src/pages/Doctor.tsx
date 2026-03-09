@@ -113,6 +113,12 @@ export function Doctor(_: DoctorProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!busy && diagnosis && !needsRepair && !error && !pendingTempProviderSetup) {
+      setStatusLine(null);
+    }
+  }, [busy, diagnosis, error, needsRepair, pendingTempProviderSetup]);
+
   const openLogs = useCallback((source: "clawpal" | "gateway" | "helper" = "gateway") => {
     setLogsSource(source);
     setLogsOpen(true);
@@ -149,7 +155,7 @@ export function Doctor(_: DoctorProps) {
       setStatusLine(
         diagnosisNeedsRepair(result)
           ? result.summary.recommendedAction
-          : t("doctor.primaryStatusHealthy", { defaultValue: "Healthy" }),
+          : null,
       );
       emitDataLoadMetric({
         requestId,
@@ -310,9 +316,11 @@ export function Doctor(_: DoctorProps) {
     pendingTempProviderSetup?.reason
     ?? (needsRepair
       ? diagnosis?.summary.recommendedAction ?? null
-      : t("doctor.primaryRecoveryHint", {
-          defaultValue: "Run OpenClaw Doctor first, then merge the current checklist into one report.",
-        }))
+      : diagnosis
+        ? null
+        : t("doctor.primaryRecoveryHint", {
+            defaultValue: "Run OpenClaw Doctor first, then merge the current checklist into one report.",
+          }))
   );
 
   const handlePrimaryAction = useCallback(() => {
