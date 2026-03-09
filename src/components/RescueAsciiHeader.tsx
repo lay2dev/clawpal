@@ -4,8 +4,10 @@ import type { RescueBotRuntimeState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const BOT_MATRIX = [
-  "......bb......bb......",
-  ".....bccb....bccb.....",
+  "......................",
+  ".......b......b.......",
+  "......bcb....bcb......",
+  ".....bcccb..bcccb.....",
   ".....bbbbbbbbbbbb.....",
   "....bbbbbbbbbbbbbb....",
   "...bbb..........bbb...",
@@ -15,7 +17,6 @@ const BOT_MATRIX = [
   "...bbb..........bbb...",
   "....bbbbbbbbbbbbbb....",
   ".....tttttttttttt.....",
-  "......................",
   "......................",
 ] as const;
 
