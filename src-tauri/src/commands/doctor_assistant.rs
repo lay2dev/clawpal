@@ -6,16 +6,12 @@ use uuid::Uuid;
 
 const DOCTOR_ASSISTANT_TARGET_PROFILE: &str = "primary";
 const DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL: &str = "local";
-const DOCTOR_ASSISTANT_DIRECT_FIX_ATTEMPTS: usize = 3;
 const DOCTOR_ASSISTANT_TEMP_REPAIR_ROUNDS: usize = 10;
 const DOCTOR_ASSISTANT_TEMP_PROFILE_PREFIX: &str = "clawpal-doctor-";
 const DOCTOR_ASSISTANT_TEMP_MARKER_FILE: &str = ".clawpal-doctor-temp";
 const DOCTOR_ASSISTANT_TEMP_PROVIDER_SETUP_REQUIRED_PREFIX: &str =
     "__doctor_assistant_temp_provider_setup_required__:";
-const DOCTOR_ASSISTANT_REMOTE_SKIP_DIRECT_FIX: bool = true;
-const DOCTOR_ASSISTANT_REMOTE_SKIP_PRIMARY_REALIGN: bool = true;
 const DOCTOR_ASSISTANT_REMOTE_SKIP_AGENT_REPAIR: bool = false;
-const DOCTOR_ASSISTANT_REMOTE_SKIP_CLEANUP: bool = false;
 const DOCTOR_ASSISTANT_REMOTE_TIMEOUT_RECOVERY_ATTEMPTS: usize = 8;
 const DOCTOR_ASSISTANT_REMOTE_TIMEOUT_RECOVERY_DELAY_MS: u64 = 3_000;
 
@@ -55,6 +51,14 @@ struct RemoteAuthStoreCandidate {
     provider: String,
     auth_ref: String,
     credential: InternalProviderCredential,
+}
+
+#[derive(Debug, Clone)]
+struct LocalDonorConfigLoad {
+    main_config_path: String,
+    donor_cfg: serde_json::Value,
+    source_mode: &'static str,
+    defaults_source_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -667,6 +671,7 @@ fn salvage_donor_cfg_from_text(text: &str) -> serde_json::Value {
     serde_json::Value::Object(root)
 }
 
+#[cfg(test)]
 fn overlay_agent_defaults_from_first_valid_json(
     root: &mut serde_json::Value,
     candidate_texts: &[String],
@@ -814,16 +819,59 @@ async fn read_remote_openclaw_json_candidates(
     out
 }
 
-fn load_local_donor_cfg_fallback() -> serde_json::Value {
+fn collect_provider_keys(donor_cfg: &serde_json::Value) -> Vec<String> {
+    donor_cfg
+        .pointer("/models/providers")
+        .and_then(serde_json::Value::as_object)
+        .map(|providers| {
+            let mut keys = providers.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys
+        })
+        .unwrap_or_default()
+}
+
+fn load_local_donor_cfg_fallback() -> LocalDonorConfigLoad {
     let paths = resolve_paths();
-    read_openclaw_config(&paths).unwrap_or_else(|_| {
-        let mut donor = salvage_donor_cfg_from_text(&read_local_primary_config_text(
-            DOCTOR_ASSISTANT_TARGET_PROFILE,
-        ));
-        let candidate_texts = read_local_openclaw_json_candidates(&paths.openclaw_dir);
-        let _ = overlay_agent_defaults_from_named_candidates(&mut donor, &candidate_texts);
-        donor
-    })
+    let config_path = paths.config_path.to_string_lossy().to_string();
+    match read_openclaw_config(&paths) {
+        Ok(cfg) => LocalDonorConfigLoad {
+            main_config_path: config_path.clone(),
+            donor_cfg: cfg,
+            source_mode: "parsed_main_config",
+            defaults_source_path: Some(config_path),
+        },
+        Err(_) => {
+            let mut donor = salvage_donor_cfg_from_text(&read_local_primary_config_text(
+                DOCTOR_ASSISTANT_TARGET_PROFILE,
+            ));
+            let candidate_texts = read_local_openclaw_json_candidates(&paths.openclaw_dir);
+            let defaults_source_path =
+                overlay_agent_defaults_from_named_candidates(&mut donor, &candidate_texts);
+            crate::commands::logs::log_dev(format!(
+                "[dev][doctor_assistant] local donor candidates root={} files={} selected={}",
+                paths.openclaw_dir.display(),
+                if candidate_texts.is_empty() {
+                    "none".to_string()
+                } else {
+                    candidate_texts
+                        .iter()
+                        .map(|(path, _)| path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+                defaults_source_path
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string())
+            ));
+            LocalDonorConfigLoad {
+                main_config_path: config_path,
+                donor_cfg: donor,
+                source_mode: "salvaged_main_config",
+                defaults_source_path,
+            }
+        }
+    }
 }
 
 async fn load_remote_donor_cfg_fallback(
@@ -901,6 +949,23 @@ async fn resolve_remote_main_root(pool: &SshConnectionPool, host_id: &str) -> St
                 .map(|path| path.to_string_lossy().to_string())
         })
         .unwrap_or_else(|| format!("{}/.openclaw", home_dir.trim_end_matches('/')))
+}
+
+async fn resolve_remote_openclaw_version(
+    pool: &SshConnectionPool,
+    host_id: &str,
+) -> Option<String> {
+    crate::cli_runner::run_openclaw_remote(pool, host_id, &["--version"])
+        .await
+        .ok()
+        .and_then(|output| {
+            let text = if output.stdout.trim().is_empty() {
+                output.stderr.trim()
+            } else {
+                output.stdout.trim()
+            };
+            (!text.is_empty()).then(|| text.to_string())
+        })
 }
 
 fn load_local_doctor_provider_profiles() -> Vec<ModelProfile> {
@@ -1146,6 +1211,7 @@ fn build_auth_profiles_for_provider(profile: &ModelProfile) -> serde_json::Value
     serde_json::Value::Object(profiles)
 }
 
+#[allow(dead_code)]
 fn repair_local_main_gateway_provider_consistency(
     explicit_profile_id: Option<&str>,
     steps: &mut Vec<RescuePrimaryRepairStep>,
@@ -1235,6 +1301,7 @@ fn repair_local_main_gateway_provider_consistency(
     Ok(true)
 }
 
+#[allow(dead_code)]
 async fn repair_remote_main_gateway_provider_consistency(
     pool: &SshConnectionPool,
     host_id: &str,
@@ -1335,6 +1402,7 @@ async fn repair_remote_main_gateway_provider_consistency(
     Ok(true)
 }
 
+#[allow(dead_code)]
 fn doctor_fix_flag_unsupported(output: &OpenclawCommandOutput) -> bool {
     let text = format!("{}\n{}", output.stderr, output.stdout).to_ascii_lowercase();
     (text.contains("unknown option")
@@ -1658,12 +1726,7 @@ async fn diagnose_doctor_assistant_remote_impl(
         &primary_doctor_output,
         &primary_gateway_output,
     );
-    let remote_version = pool
-        .exec_login(host_id, "openclaw --version 2>/dev/null || true")
-        .await
-        .ok()
-        .map(|output| output.stdout.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let remote_version = resolve_remote_openclaw_version(pool, host_id).await;
     let guidance = resolve_remote_doc_guidance(
         pool,
         host_id,
@@ -1710,6 +1773,7 @@ fn append_step(
     });
 }
 
+#[allow(dead_code)]
 fn run_local_direct_doctor_fix_attempt(
     profile: &str,
     attempt: usize,
@@ -1747,6 +1811,7 @@ fn run_local_direct_doctor_fix_attempt(
     Ok(fallback_ok)
 }
 
+#[allow(dead_code)]
 async fn run_remote_direct_doctor_fix_attempt(
     pool: &SshConnectionPool,
     host_id: &str,
@@ -2250,6 +2315,7 @@ fn apply_local_profile_json_value(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn apply_remote_profile_json_value(
     pool: &SshConnectionPool,
     host_id: &str,
@@ -2929,13 +2995,108 @@ fn probe_local_temp_gateway_inference(
     }
 }
 
+fn inspect_local_temp_gateway_config_snapshot(
+    openclaw_dir: &std::path::Path,
+    temp_profile: &str,
+) -> Result<(String, bool, bool, bool, bool), String> {
+    let config_path = derive_profile_root_path(openclaw_dir, temp_profile).join("openclaw.json");
+    let raw = std::fs::read_to_string(&config_path).map_err(|error| error.to_string())?;
+    let json =
+        serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| error.to_string())?;
+    Ok((
+        config_path.display().to_string(),
+        json.pointer("/models/providers")
+            .and_then(serde_json::Value::as_object)
+            .map(|value| !value.is_empty())
+            .unwrap_or(false),
+        json.pointer("/auth/profiles")
+            .and_then(serde_json::Value::as_object)
+            .map(|value| !value.is_empty())
+            .unwrap_or(false),
+        json.pointer("/agents/defaults/model").is_some(),
+        json.pointer("/agents/defaults/models").is_some(),
+    ))
+}
+
+fn probe_local_temp_gateway_agent_smoke(
+    temp_profile: &str,
+    steps: &mut Vec<RescuePrimaryRepairStep>,
+) -> Result<(String, String), String> {
+    let command = vec![
+        "--profile".to_string(),
+        temp_profile.to_string(),
+        "agent".to_string(),
+        "--local".to_string(),
+        "--agent".to_string(),
+        "main".to_string(),
+        "--message".to_string(),
+        "Reply with exactly READY.".to_string(),
+        "--json".to_string(),
+        "--no-color".to_string(),
+    ];
+    let output = run_openclaw_dynamic(&command)?;
+    let ok = output.exit_code == 0;
+    let detail = clawpal_core::doctor::command_output_detail(&output.stderr, &output.stdout);
+    append_step(
+        steps,
+        "temp.probe.agent",
+        "Probe temporary gateway agent inference",
+        ok,
+        detail.clone(),
+        None,
+    );
+    if !ok {
+        if let Some(reason) = temp_gateway_provider_setup_reason_from_output(&detail) {
+            return Err(doctor_assistant_temp_provider_setup_required(reason));
+        }
+        return Err(command_failure_message(&command, &output));
+    }
+    let Some((provider, model)) = extract_agent_provider_identity(&output.stdout) else {
+        return Err(doctor_assistant_temp_provider_setup_required(
+            "Temporary gateway provider check failed: the temp agent responded, but provider/model metadata was missing.",
+        ));
+    };
+    append_step(
+        steps,
+        "temp.probe.agent.identity",
+        "Inspect temporary gateway provider identity",
+        true,
+        format!("Temporary gateway replied using {provider}/{model}"),
+        None,
+    );
+    Ok((provider, model))
+}
+
 fn sync_local_temp_gateway_provider_context(
     temp_profile: &str,
     explicit_profile_id: Option<&str>,
     steps: &mut Vec<RescuePrimaryRepairStep>,
-) -> Result<(), String> {
+) -> Result<(String, String), String> {
     let paths = resolve_paths();
-    let donor_cfg = load_local_donor_cfg_fallback();
+    let donor_load = load_local_donor_cfg_fallback();
+    let donor_cfg = donor_load.donor_cfg.clone();
+    let provider_keys = collect_provider_keys(&donor_cfg);
+    append_step(
+        steps,
+        "temp.sync.donor_source",
+        "Detect donor configuration source",
+        true,
+        format!(
+            "Main donor config={} mode={} defaults_source={} providers={}",
+            donor_load.main_config_path,
+            donor_load.source_mode,
+            donor_load
+                .defaults_source_path
+                .clone()
+                .unwrap_or_else(|| "none".into()),
+            if provider_keys.is_empty() {
+                "none".into()
+            } else {
+                provider_keys.join(", ")
+            }
+        ),
+        None,
+    );
     let selected_profile = select_doctor_provider_profile(&donor_cfg, explicit_profile_id)?;
     let donor_profiles = selected_profile
         .clone()
@@ -3003,8 +3164,8 @@ fn sync_local_temp_gateway_provider_context(
         default_model.as_ref(),
     );
 
-    if let Some(default_model) = default_model {
-        apply_local_profile_json_value(temp_profile, "agents.defaults.model", &default_model)?;
+    if let Some(default_model_value) = default_model.as_ref() {
+        apply_local_profile_json_value(temp_profile, "agents.defaults.model", default_model_value)?;
         append_step(
             steps,
             "temp.sync.default_model",
@@ -3014,8 +3175,12 @@ fn sync_local_temp_gateway_provider_context(
             None,
         );
     }
-    if let Some(default_models) = default_models {
-        apply_local_profile_json_value(temp_profile, "agents.defaults.models", &default_models)?;
+    if let Some(default_models_value) = default_models.as_ref() {
+        apply_local_profile_json_value(
+            temp_profile,
+            "agents.defaults.models",
+            default_models_value,
+        )?;
         append_step(
             steps,
             "temp.sync.default_models",
@@ -3024,6 +3189,53 @@ fn sync_local_temp_gateway_provider_context(
             "Temporary gateway inherited the primary default model registry",
             None,
         );
+    }
+
+    let (
+        written_config_path,
+        has_providers,
+        has_auth_profiles,
+        has_default_model,
+        has_default_models,
+    ) = inspect_local_temp_gateway_config_snapshot(&paths.openclaw_dir, temp_profile)?;
+    append_step(
+        steps,
+        "temp.sync.verify_snapshot",
+        "Verify temporary openclaw.json snapshot",
+        true,
+        format!(
+            "Wrote {} -> providers={} auth_profiles={} default_model={} default_models={}",
+            written_config_path,
+            has_providers,
+            has_auth_profiles,
+            has_default_model,
+            has_default_models
+        ),
+        None,
+    );
+    if !has_providers {
+        return Err(format!(
+            "Temporary gateway snapshot write did not persist models.providers to {}",
+            written_config_path
+        ));
+    }
+    if donor_cfg.pointer("/auth/profiles").is_some() && !has_auth_profiles {
+        return Err(format!(
+            "Temporary gateway snapshot write did not persist auth.profiles to {}",
+            written_config_path
+        ));
+    }
+    if default_model.is_some() && !has_default_model {
+        return Err(format!(
+            "Temporary gateway snapshot write did not persist agents.defaults.model to {}",
+            written_config_path
+        ));
+    }
+    if default_models.is_some() && !has_default_models {
+        return Err(format!(
+            "Temporary gateway snapshot write did not persist agents.defaults.models to {}",
+            written_config_path
+        ));
     }
 
     let copied = copy_local_auth_store_into_profile(
@@ -3040,8 +3252,8 @@ fn sync_local_temp_gateway_provider_context(
             None,
         );
     }
-    probe_local_temp_gateway_inference(&donor_cfg, &donor_profiles, steps)?;
-    Ok(())
+    let _ = probe_local_temp_gateway_inference(&donor_cfg, &donor_profiles, steps);
+    probe_local_temp_gateway_agent_smoke(temp_profile, steps)
 }
 
 async fn sync_remote_temp_gateway_provider_context(
@@ -3541,6 +3753,10 @@ fn run_local_temp_gateway_agent_repair_round(
         None,
     );
     if !ok {
+        let detail = clawpal_core::doctor::command_output_detail(&output.stderr, &output.stdout);
+        if let Some(reason) = temp_gateway_provider_setup_reason_from_output(&detail) {
+            return Err(doctor_assistant_temp_provider_setup_required(reason));
+        }
         return Err(command_failure_message(&command, &output));
     }
     Ok(())
@@ -3560,12 +3776,7 @@ async fn run_remote_temp_gateway_agent_repair_round(
     let log_excerpt = collect_remote_gateway_log_excerpt(pool, host_id).await;
     let config_content =
         read_remote_primary_config_text(pool, host_id, DOCTOR_ASSISTANT_TARGET_PROFILE).await;
-    let remote_version = pool
-        .exec_login(host_id, "openclaw --version 2>/dev/null || true")
-        .await
-        .ok()
-        .map(|output| output.stdout.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let remote_version = resolve_remote_openclaw_version(pool, host_id).await;
     let guidance = resolve_remote_doc_guidance(
         pool,
         host_id,
@@ -3718,122 +3929,6 @@ pub fn repair_doctor_assistant(
         ));
     }
 
-    for attempt in 1..=DOCTOR_ASSISTANT_DIRECT_FIX_ATTEMPTS {
-        emit_doctor_assistant_progress(
-            &app,
-            &run_id,
-            "repair_doctor",
-            format!("Running OpenClaw doctor auto-fix ({attempt}/{DOCTOR_ASSISTANT_DIRECT_FIX_ATTEMPTS})"),
-            0.1 + (attempt as f32 * 0.12),
-            attempt,
-            None,
-            None,
-        );
-        let _ = run_local_direct_doctor_fix_attempt(
-            DOCTOR_ASSISTANT_TARGET_PROFILE,
-            attempt,
-            &mut steps,
-        )?;
-        let next =
-            diagnose_doctor_assistant_local_impl(&app, &run_id, DOCTOR_ASSISTANT_TARGET_PROFILE)?;
-        for (issue_id, label) in collect_resolved_issues(&current, &next) {
-            merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
-            emit_doctor_assistant_progress(
-                &app,
-                &run_id,
-                "repair_doctor",
-                format!("{label} fixed"),
-                0.2 + (attempt as f32 * 0.14),
-                attempt,
-                Some(issue_id),
-                Some(label),
-            );
-        }
-        current = next;
-        if diagnose_doctor_assistant_status(&current) {
-            break;
-        }
-    }
-
-    if !diagnose_doctor_assistant_status(&current) {
-        emit_doctor_assistant_progress(
-            &app,
-            &run_id,
-            "repair_doctor",
-            "Realigning primary gateway provider/auth configuration",
-            0.52,
-            0,
-            None,
-            None,
-        );
-        match repair_local_main_gateway_provider_consistency(
-            temp_provider_profile_id.as_deref(),
-            &mut steps,
-        ) {
-            Ok(true) => {
-                let next = diagnose_doctor_assistant_local_impl(
-                    &app,
-                    &run_id,
-                    DOCTOR_ASSISTANT_TARGET_PROFILE,
-                )?;
-                for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                    merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
-                    emit_doctor_assistant_progress(
-                        &app,
-                        &run_id,
-                        "repair_doctor",
-                        format!("{label} fixed"),
-                        0.56,
-                        0,
-                        Some(issue_id),
-                        Some(label),
-                    );
-                }
-                current = next;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                if let Some(reason) = doctor_assistant_extract_temp_provider_setup_reason(&error) {
-                    emit_doctor_assistant_progress(
-                        &app,
-                        &run_id,
-                        "repair_doctor",
-                        &reason,
-                        0.56,
-                        0,
-                        None,
-                        None,
-                    );
-                    return Ok(doctor_assistant_pending_temp_provider_result(
-                        attempted_at,
-                        current.rescue_profile.clone(),
-                        selected_issue_ids.clone(),
-                        applied_issue_ids.clone(),
-                        skipped_issue_ids.clone(),
-                        selected_issue_ids
-                            .iter()
-                            .filter(|id| !applied_issue_ids.contains(id))
-                            .cloned()
-                            .collect(),
-                        steps,
-                        before,
-                        current,
-                        temp_provider_profile_id,
-                        reason,
-                    ));
-                }
-                append_step(
-                    &mut steps,
-                    "primary.provider_consistency",
-                    "Realign primary gateway provider/auth configuration",
-                    false,
-                    error,
-                    None,
-                );
-            }
-        }
-    }
-
     if !diagnose_doctor_assistant_status(&current) {
         let temp_profile = choose_temp_gateway_profile_name();
         let temp_port = choose_temp_gateway_port(resolve_main_port_from_diagnosis(&current));
@@ -3855,7 +3950,7 @@ pub fn repair_doctor_assistant(
                 temp_port,
                 "bootstrapping",
                 resolve_main_port_from_diagnosis(&current),
-                Some("activate".into()),
+                Some("bootstrap".into()),
             ),
         )?;
 
@@ -3883,19 +3978,21 @@ pub fn repair_doctor_assistant(
                 None,
                 None,
             );
-            sync_local_temp_gateway_provider_context(
+            let (provider, model) = sync_local_temp_gateway_provider_context(
                 &temp_profile,
                 temp_provider_profile_id.as_deref(),
                 &mut steps,
             )?;
-            run_local_temp_gateway_action(
-                RescueBotAction::Activate,
-                &temp_profile,
-                temp_port,
-                false,
-                &mut steps,
-                "temp.activate.synced",
-            )?;
+            emit_doctor_assistant_progress(
+                &app,
+                &run_id,
+                "bootstrap_temp_gateway",
+                format!("Temporary gateway ready: {provider}/{model}"),
+                0.64,
+                0,
+                None,
+                None,
+            );
             upsert_doctor_temp_gateway_record(
                 &paths,
                 build_temp_gateway_record(
@@ -3946,43 +4043,6 @@ pub fn repair_doctor_assistant(
             .as_ref()
             .err()
             .and_then(|error| doctor_assistant_extract_temp_provider_setup_reason(error));
-
-        if DOCTOR_ASSISTANT_REMOTE_SKIP_CLEANUP && temp_flow.is_ok() {
-            append_step(
-                &mut steps,
-                "temp.debug.leave_running",
-                "Leave temporary gateway for SSH inspection",
-                true,
-                "Remote Doctor debug mode skips cleanup so the temporary gateway profile can be inspected directly over SSH.",
-                None,
-            );
-            emit_doctor_assistant_progress(
-                &app,
-                &run_id,
-                "agent_repair",
-                "Temporary gateway left in place for SSH inspection",
-                0.94,
-                0,
-                None,
-                None,
-            );
-            failed_issue_ids = selected_issue_ids
-                .iter()
-                .filter(|id| !applied_issue_ids.contains(id))
-                .cloned()
-                .collect();
-            return Ok(doctor_assistant_completed_result(
-                attempted_at,
-                temp_profile,
-                selected_issue_ids,
-                applied_issue_ids,
-                skipped_issue_ids,
-                failed_issue_ids,
-                steps,
-                before,
-                current,
-            ));
-        }
 
         emit_doctor_assistant_progress(
             &app,
@@ -4159,141 +4219,6 @@ pub async fn remote_repair_doctor_assistant(
         ));
     }
 
-    if !DOCTOR_ASSISTANT_REMOTE_SKIP_DIRECT_FIX {
-        for attempt in 1..=DOCTOR_ASSISTANT_DIRECT_FIX_ATTEMPTS {
-            emit_doctor_assistant_progress(
-                &app,
-                &run_id,
-                "repair_doctor",
-                format!("Running OpenClaw doctor auto-fix ({attempt}/{DOCTOR_ASSISTANT_DIRECT_FIX_ATTEMPTS})"),
-                0.1 + (attempt as f32 * 0.12),
-                attempt,
-                None,
-                None,
-            );
-            let _ = run_remote_direct_doctor_fix_attempt(
-                &pool,
-                &host_id,
-                DOCTOR_ASSISTANT_TARGET_PROFILE,
-                attempt,
-                &mut steps,
-            )
-            .await?;
-            let next = diagnose_doctor_assistant_remote_impl(
-                &pool,
-                &host_id,
-                &app,
-                &run_id,
-                DOCTOR_ASSISTANT_TARGET_PROFILE,
-            )
-            .await?;
-            for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
-                emit_doctor_assistant_progress(
-                    &app,
-                    &run_id,
-                    "repair_doctor",
-                    format!("{label} fixed"),
-                    0.2 + (attempt as f32 * 0.14),
-                    attempt,
-                    Some(issue_id),
-                    Some(label),
-                );
-            }
-            current = next;
-            if diagnose_doctor_assistant_status(&current) {
-                break;
-            }
-        }
-    }
-
-    if !DOCTOR_ASSISTANT_REMOTE_SKIP_PRIMARY_REALIGN && !diagnose_doctor_assistant_status(&current)
-    {
-        emit_doctor_assistant_progress(
-            &app,
-            &run_id,
-            "repair_doctor",
-            "Realigning primary gateway provider/auth configuration",
-            0.52,
-            0,
-            None,
-            None,
-        );
-        match repair_remote_main_gateway_provider_consistency(
-            &pool,
-            &host_id,
-            temp_provider_profile_id.as_deref(),
-            &mut steps,
-        )
-        .await
-        {
-            Ok(true) => {
-                let next = diagnose_doctor_assistant_remote_impl(
-                    &pool,
-                    &host_id,
-                    &app,
-                    &run_id,
-                    DOCTOR_ASSISTANT_TARGET_PROFILE,
-                )
-                .await?;
-                for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                    merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
-                    emit_doctor_assistant_progress(
-                        &app,
-                        &run_id,
-                        "repair_doctor",
-                        format!("{label} fixed"),
-                        0.56,
-                        0,
-                        Some(issue_id),
-                        Some(label),
-                    );
-                }
-                current = next;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                if let Some(reason) = doctor_assistant_extract_temp_provider_setup_reason(&error) {
-                    emit_doctor_assistant_progress(
-                        &app,
-                        &run_id,
-                        "repair_doctor",
-                        &reason,
-                        0.56,
-                        0,
-                        None,
-                        None,
-                    );
-                    return Ok(doctor_assistant_pending_temp_provider_result(
-                        attempted_at,
-                        current.rescue_profile.clone(),
-                        selected_issue_ids.clone(),
-                        applied_issue_ids.clone(),
-                        skipped_issue_ids.clone(),
-                        selected_issue_ids
-                            .iter()
-                            .filter(|id| !applied_issue_ids.contains(id))
-                            .cloned()
-                            .collect(),
-                        steps,
-                        before,
-                        current,
-                        temp_provider_profile_id,
-                        reason,
-                    ));
-                }
-                append_step(
-                    &mut steps,
-                    "primary.provider_consistency",
-                    "Realign primary gateway provider/auth configuration",
-                    false,
-                    error,
-                    None,
-                );
-            }
-        }
-    }
-
     if !diagnose_doctor_assistant_status(&current) {
         let temp_profile = choose_temp_gateway_profile_name();
         let temp_port = choose_temp_gateway_port(resolve_main_port_from_diagnosis(&current));
@@ -4315,7 +4240,7 @@ pub async fn remote_repair_doctor_assistant(
                 temp_port,
                 "bootstrapping",
                 resolve_main_port_from_diagnosis(&current),
-                Some("activate".into()),
+                Some("bootstrap".into()),
             ),
         )?;
 

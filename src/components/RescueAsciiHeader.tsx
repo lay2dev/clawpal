@@ -25,27 +25,35 @@ const PROGRESS_SLOTS = 12;
 type BotCellToken = "." | "b" | "c" | "e" | "l" | "t";
 
 const bodyToneByState: Record<RescueBotRuntimeState, string> = {
-  unconfigured: "bg-neutral-700",
-  configured_inactive: "bg-neutral-900",
-  active: "bg-neutral-900",
-  checking: "bg-neutral-900",
-  error: "bg-neutral-900",
+  unconfigured: "bg-[#B8A696]",
+  configured_inactive: "bg-[#8A796B]",
+  active: "bg-[#7A695B]",
+  checking: "bg-[#7A695B]",
+  error: "bg-[#9A6A5A]",
+};
+
+const crownToneByState: Record<RescueBotRuntimeState, string> = {
+  unconfigured: "bg-[#D8C7B5]",
+  configured_inactive: "bg-[#C9B39B]",
+  active: "bg-[#E9DED2]",
+  checking: "bg-[#E9DED2]",
+  error: "bg-[#E5C9BE]",
 };
 
 const eyeToneByState: Record<RescueBotRuntimeState, string> = {
-  unconfigured: "bg-neutral-500",
-  configured_inactive: "bg-neutral-500",
-  active: "bg-neutral-900",
-  checking: "bg-neutral-700",
-  error: "bg-red-700",
+  unconfigured: "bg-[#8B5E34]",
+  configured_inactive: "bg-[#8B5E34]",
+  active: "bg-[#C97A1A]",
+  checking: "bg-[#C97A1A]",
+  error: "bg-[#C65A3A]",
 };
 
 const progressFillToneByState: Record<RescueBotRuntimeState, string> = {
-  unconfigured: "bg-neutral-500",
-  configured_inactive: "bg-neutral-700",
-  active: "bg-neutral-900",
-  checking: "bg-neutral-800",
-  error: "bg-neutral-900",
+  unconfigured: "bg-[#B38A54]",
+  configured_inactive: "bg-[#B38A54]",
+  active: "bg-[#78A287]",
+  checking: "bg-[#C97A1A]",
+  error: "bg-[#C65A3A]",
 };
 
 interface RescueAsciiHeaderProps {
@@ -139,9 +147,10 @@ export function RescueAsciiHeader({
                 className={cn(
                   "inline-flex h-[10px] w-[10px] items-center justify-center sm:h-[12px] sm:w-[12px]",
                   typedToken === "." && "opacity-0",
-                  (typedToken === "b" || typedToken === "c") && bodyToneByState[state],
-                  typedToken === "l" && "bg-stone-400",
-                  isProgress && "bg-neutral-300",
+                  typedToken === "b" && bodyToneByState[state],
+                  typedToken === "c" && crownToneByState[state],
+                  typedToken === "l" && "bg-[#C9B8A6]",
+                  isProgress && "bg-[#E9DED2]",
                   isFilledProgress &&
                     cn(
                       progressFillToneByState[state],

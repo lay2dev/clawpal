@@ -271,4 +271,75 @@ describe("DoctorRecoveryOverview", () => {
     expect(html.match(/>Broken</g)?.length ?? 0).toBe(1);
     expect(html).toContain("Primary configuration could not be read");
   });
+
+  test("hides the summary card entirely when diagnosis is already healthy", async () => {
+    await i18n.changeLanguage("en");
+    const diagnosis: RescuePrimaryDiagnosisResult = {
+      status: "healthy",
+      checkedAt: "2026-03-07T00:00:00Z",
+      targetProfile: "primary",
+      rescueProfile: "rescue",
+      rescueConfigured: true,
+      rescuePort: 19789,
+      summary: {
+        status: "healthy",
+        headline: "Primary recovery checks look healthy",
+        recommendedAction: "Keep monitoring Gateway and re-run checks after changes",
+        fixableIssueCount: 0,
+        selectedFixIssueIds: [],
+        rootCauseHypotheses: [],
+        fixSteps: [],
+        confidence: undefined,
+        citations: [],
+        versionAwareness: undefined,
+      },
+      sections: [
+        {
+          key: "gateway",
+          title: "Gateway",
+          status: "healthy",
+          summary: "Gateway checks look healthy",
+          docsUrl: "https://docs.openclaw.ai/gateway",
+          rootCauseHypotheses: [],
+          fixSteps: [],
+          confidence: undefined,
+          citations: [],
+          versionAwareness: undefined,
+          items: [
+            {
+              id: "gateway.port",
+              label: "Gateway port",
+              status: "ok",
+              detail: "Configured primary gateway port: 18789",
+              autoFixable: false,
+              issueId: null,
+            },
+          ],
+        },
+      ],
+      checks: [],
+      issues: [],
+    };
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(DoctorRecoveryOverview, {
+          diagnosis,
+          checkLoading: false,
+          repairing: false,
+          progressLine: null,
+          repairResult: null,
+          repairError: null,
+          onRepairAll: () => {},
+          onRepairIssue: () => {},
+        }),
+      }),
+    );
+
+    expect(html).not.toContain("Primary recovery checks look healthy");
+    expect(html).not.toContain("Keep monitoring Gateway and re-run checks after changes");
+    expect(html).toContain("Gateway");
+    expect(html).toContain("Gateway checks look healthy");
+  });
 });

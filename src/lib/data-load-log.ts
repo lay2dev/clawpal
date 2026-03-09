@@ -17,6 +17,10 @@ export interface DataLoadMetricPayload {
 }
 
 let requestCounter = 0;
+const SUPPRESSED_DATA_LOAD_LOG_RESOURCES = new Set([
+  "listSessionFiles",
+  "listBackups",
+]);
 
 export function createDataLoadRequestId(resource: string): string {
   requestCounter = (requestCounter + 1) % Number.MAX_SAFE_INTEGER;
@@ -27,7 +31,12 @@ export function buildDataLoadLogLine(payload: DataLoadMetricPayload): string {
   return `[metrics][data_load] ${JSON.stringify(payload)}`;
 }
 
+export function shouldEmitDataLoadMetric(payload: DataLoadMetricPayload): boolean {
+  return !SUPPRESSED_DATA_LOAD_LOG_RESOURCES.has(payload.resource);
+}
+
 export function emitDataLoadMetric(payload: DataLoadMetricPayload): void {
+  if (!shouldEmitDataLoadMetric(payload)) return;
   void invoke("log_app_event", { message: buildDataLoadLogLine(payload) }).catch((error) => {
     if (import.meta.env.DEV) {
       console.warn("[dev ignored error] emitDataLoadMetric", error);

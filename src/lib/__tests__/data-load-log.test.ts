@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildDataLoadLogLine,
   createDataLoadRequestId,
+  shouldEmitDataLoadMetric,
 } from "../data-load-log";
 
 describe("data load logging helpers", () => {
@@ -35,5 +36,47 @@ describe("data load logging helpers", () => {
     expect(line).toContain("\"source\":\"persisted\"");
     expect(line).toContain("\"phase\":\"success\"");
     expect(line).toContain("\"cacheHit\":true");
+  });
+
+  test("suppresses noisy session/backups metrics from app log output", () => {
+    expect(
+      shouldEmitDataLoadMetric({
+        requestId: "req-2",
+        resource: "listSessionFiles",
+        page: "app",
+        instanceId: "local",
+        instanceToken: null,
+        source: "cli",
+        phase: "start",
+        elapsedMs: 0,
+        cacheHit: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEmitDataLoadMetric({
+        requestId: "req-3",
+        resource: "listBackups",
+        page: "app",
+        instanceId: "local",
+        instanceToken: null,
+        source: "cli",
+        phase: "success",
+        elapsedMs: 12,
+        cacheHit: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEmitDataLoadMetric({
+        requestId: "req-4",
+        resource: "diagnoseDoctorAssistant",
+        page: "doctor",
+        instanceId: "local",
+        instanceToken: null,
+        source: "cli",
+        phase: "success",
+        elapsedMs: 12,
+        cacheHit: false,
+      }),
+    ).toBe(true);
   });
 });

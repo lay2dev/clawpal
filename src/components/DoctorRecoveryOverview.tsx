@@ -113,6 +113,7 @@ export function DoctorRecoveryOverview({
     () => (diagnosis.summary.fixSteps ?? []).slice(0, 3),
     [diagnosis.summary.fixSteps],
   );
+  const showSummaryCard = diagnosis.summary.status !== "healthy";
   const visibleSections = useMemo(
     () => diagnosis.sections
       .map((section) => {
@@ -151,7 +152,8 @@ export function DoctorRecoveryOverview({
 
   return (
     <div className="mt-4 space-y-4">
-      <Card className="border-border/60 bg-muted/20">
+      {showSummaryCard ? (
+        <Card className="border-border/60 bg-muted/20">
         <CardHeader className={cn("pb-3", !showRepairActions && "pb-2")}>
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1">
@@ -260,7 +262,8 @@ export function DoctorRecoveryOverview({
             </div>
           ) : null}
         </CardContent>
-      </Card>
+        </Card>
+      ) : null}
 
       <div className="grid gap-3">
         {visibleSections.map((section) => (

@@ -111,11 +111,60 @@ fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, Str
         }
     }
 
-    cmd_str.push_str(
-        "if command -v openclaw >/dev/null 2>&1; then OPENCLAW_BIN=\"$(command -v openclaw)\"; \
-         else echo \"openclaw command not found (PATH=$PATH SHELL=$SHELL)\" >&2; exit 127; fi; \
-         \"$OPENCLAW_BIN\"",
-    );
+    cmd_str.push_str(concat!(
+        "clawpal_find_openclaw() { ",
+        "if command -v openclaw >/dev/null 2>&1; then command -v openclaw; return 0; fi; ",
+        "for cand in ",
+        "\"$HOME/.npm-global/bin/openclaw\" ",
+        "\"$HOME/.local/bin/openclaw\" ",
+        "\"$HOME/.bun/bin/openclaw\" ",
+        "\"$HOME/.cargo/bin/openclaw\" ",
+        "\"/usr/local/bin/openclaw\" ",
+        "\"/opt/homebrew/bin/openclaw\" ",
+        "\"/usr/bin/openclaw\"; do ",
+        "[ -x \"$cand\" ] && { printf '%s' \"$cand\"; return 0; }; ",
+        "done; ",
+        "return 1; ",
+        "}; ",
+        "clawpal_install_openclaw() { ",
+        "platform=\"$(uname -s 2>/dev/null || printf unknown)\"; ",
+        "if [ \"$platform\" = \"Linux\" ] || [ \"$platform\" = \"Darwin\" ] || grep -qi microsoft /proc/version 2>/dev/null; then ",
+        "mkdir -p \"$HOME/.clawpal/install/cache\" && INSTALLER=\"$HOME/.clawpal/install/cache/openclaw-install.sh\" && ",
+        "if command -v curl >/dev/null 2>&1; then ",
+        "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$INSTALLER\"; ",
+        "elif command -v wget >/dev/null 2>&1; then ",
+        "wget -qO \"$INSTALLER\" https://openclaw.ai/install.sh; ",
+        "else ",
+        "echo 'openclaw install failed: curl or wget is required' >&2; return 1; ",
+        "fi && bash \"$INSTALLER\" --no-prompt --no-onboard; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v powershell.exe >/dev/null 2>&1; then ",
+        "powershell.exe -NoProfile -Command \"& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod npm -NoOnboard\"; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v powershell >/dev/null 2>&1; then ",
+        "powershell -NoProfile -Command \"& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod npm -NoOnboard\"; ",
+        "return $?; ",
+        "fi; ",
+        "if command -v cmd.exe >/dev/null 2>&1; then ",
+        "cmd.exe /c \"curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && install.cmd && del install.cmd\"; ",
+        "return $?; ",
+        "fi; ",
+        "echo \"openclaw command not found after probe/auto-install (PATH=$PATH SHELL=$SHELL PLATFORM=$platform)\" >&2; ",
+        "return 127; ",
+        "}; ",
+        "OPENCLAW_BIN=\"$(clawpal_find_openclaw 2>/dev/null || true)\"; ",
+        "if [ -z \"$OPENCLAW_BIN\" ]; then ",
+        "clawpal_install_openclaw || exit $?; ",
+        "OPENCLAW_BIN=\"$(clawpal_find_openclaw 2>/dev/null || true)\"; ",
+        "fi; ",
+        "if [ -z \"$OPENCLAW_BIN\" ]; then ",
+        "echo \"openclaw command not found after auto-install (PATH=$PATH SHELL=$SHELL)\" >&2; ",
+        "exit 127; ",
+        "fi; ",
+        "\"$OPENCLAW_BIN\""
+    ));
     for arg in args {
         cmd_str.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
     }
@@ -134,8 +183,12 @@ mod tests {
     #[test]
     fn build_remote_openclaw_command_reports_diagnostic_context_when_missing() {
         let cmd = build_remote_openclaw_command(&["agents", "list", "--json"], None);
-        assert!(cmd.contains("command -v openclaw"));
-        assert!(cmd.contains("openclaw command not found (PATH=$PATH SHELL=$SHELL)"));
+        assert!(cmd.contains("clawpal_find_openclaw"));
+        assert!(cmd.contains("https://openclaw.ai/install.sh"));
+        assert!(cmd.contains("--no-prompt --no-onboard"));
+        assert!(cmd.contains("https://openclaw.ai/install.ps1"));
+        assert!(cmd.contains("install.cmd"));
+        assert!(cmd.contains("openclaw command not found after auto-install"));
     }
 
     #[test]

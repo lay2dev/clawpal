@@ -731,10 +731,51 @@ fn agent_has_sessions(base_dir: &std::path::Path, agent_id: &str) -> bool {
     }
 }
 
+fn truncated_json_debug(value: &Value, max_chars: usize) -> String {
+    let raw = value.to_string();
+    if raw.chars().count() <= max_chars {
+        raw
+    } else {
+        let mut out = raw.chars().take(max_chars).collect::<String>();
+        out.push_str("...[truncated]");
+        out
+    }
+}
+
 fn agent_entries_from_cli_json(json: &Value) -> Result<&Vec<Value>, String> {
     json.as_array()
         .or_else(|| json.get("agents").and_then(Value::as_array))
-        .ok_or("agents list output is not an array".into())
+        .or_else(|| json.get("data").and_then(Value::as_array))
+        .or_else(|| json.get("items").and_then(Value::as_array))
+        .or_else(|| json.get("result").and_then(Value::as_array))
+        .or_else(|| {
+            json.get("data")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .or_else(|| {
+            json.get("result")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .ok_or_else(|| {
+            let shape = match json {
+                Value::Array(array) => format!("top-level array(len={})", array.len()),
+                Value::Object(map) => {
+                    let mut keys = map.keys().cloned().collect::<Vec<_>>();
+                    keys.sort();
+                    format!("top-level object keys=[{}]", keys.join(", "))
+                }
+                Value::Null => "top-level null".to_string(),
+                Value::Bool(_) => "top-level bool".to_string(),
+                Value::Number(_) => "top-level number".to_string(),
+                Value::String(_) => "top-level string".to_string(),
+            };
+            format!(
+                "agents list output is not an array ({shape}; raw={})",
+                truncated_json_debug(json, 240)
+            )
+        })
 }
 
 pub(crate) fn count_agent_entries_from_cli_json(json: &Value) -> Result<u32, String> {
@@ -808,6 +849,32 @@ mod parse_agents_cli_output_tests {
     fn counts_real_agent_entries_without_implicit_main() {
         let count = count_agent_entries_from_cli_json(&json!([])).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn accepts_wrapped_agent_arrays_from_multiple_cli_shapes() {
+        for payload in [
+            json!({ "agents": [{ "id": "main" }] }),
+            json!({ "data": [{ "id": "main" }] }),
+            json!({ "items": [{ "id": "main" }] }),
+            json!({ "result": [{ "id": "main" }] }),
+            json!({ "data": { "agents": [{ "id": "main" }] } }),
+            json!({ "result": { "agents": [{ "id": "main" }] } }),
+        ] {
+            let count = count_agent_entries_from_cli_json(&payload).unwrap();
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    fn invalid_agent_shapes_include_top_level_keys_in_error() {
+        let err = count_agent_entries_from_cli_json(&json!({
+            "status": "ok",
+            "payload": { "entries": [] }
+        }))
+        .unwrap_err();
+        assert!(err.contains("top-level object keys=[payload, status]"));
+        assert!(err.contains("\"payload\":{\"entries\":[]}"));
     }
 }
 
@@ -9709,16 +9776,12 @@ async fn run_remote_openclaw_raw(
     host_id: &str,
     command: &[String],
 ) -> Result<OpenclawCommandOutput, String> {
-    let mut remote_cmd = String::from("openclaw");
-    for arg in command {
-        remote_cmd.push(' ');
-        remote_cmd.push_str(&shell_escape(arg));
-    }
-    let raw = pool.exec_login(host_id, &remote_cmd).await?;
+    let args = command.iter().map(String::as_str).collect::<Vec<_>>();
+    let raw = crate::cli_runner::run_openclaw_remote(pool, host_id, &args).await?;
     Ok(OpenclawCommandOutput {
         stdout: raw.stdout,
         stderr: raw.stderr,
-        exit_code: raw.exit_code as i32,
+        exit_code: raw.exit_code,
     })
 }
 
