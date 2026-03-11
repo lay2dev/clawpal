@@ -6,6 +6,8 @@
 
 **Architecture:** 第一部分只做“声明、编译、校验、预览”，不做真正的新执行器。现有 `step-based recipe` 继续可用，但后端会多一层 IR，把现有 recipe 编译成结构化 plan，供审批摘要、diff 和执行摘要复用。
 
+**Deferred / Not in phase 1:** 本计划只覆盖 bundle/schema、兼容编译、静态校验和 plan preview。phase 1 明确不包含远端 `reciped`、workflow engine、durable scheduler state、OPA/Rego policy plane、secret broker 或 lock manager；`secrets` 在这一阶段只保留引用与校验，不引入集中密钥分发或并发协调能力。
+
 **Tech Stack:** Tauri 2, Rust, React 18, TypeScript, Bun, Cargo, JSON Schema, YAML/JSON parsing
 
 ---

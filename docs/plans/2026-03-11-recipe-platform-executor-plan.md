@@ -6,6 +6,8 @@
 
 **Architecture:** 这一部分不引入独立的 `reciped` 守护进程，而是把 `ExecutionSpec` 物化成当前系统已经擅长的命令计划。local 复用 `install/runners/local.rs`，remote 复用 `install/runners/remote_ssh.rs` 和现有 SSH/SFTP 能力。
 
+**Deferred / Not in phase 1:** 本计划只覆盖 `ExecutionSpec` 到现有 local/SSH runner 的直接物化和执行入口。phase 1 明确不包含远端 `reciped`、workflow engine、durable scheduler state、OPA/Rego policy plane、secret broker 或 lock manager；`schedule` 仅下发 systemd timer/unit，不承担持久调度控制面。
+
 **Tech Stack:** Rust, systemd, systemd-run, SSH/SFTP, Tauri commands, Cargo tests
 
 ---

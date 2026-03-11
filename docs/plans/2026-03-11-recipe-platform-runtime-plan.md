@@ -6,6 +6,8 @@
 
 **Architecture:** runtime 数据先落在本地 `.clawpal/recipe-runtime/` 的 JSON index 中，作为 phase 1 临时状态层。这样可以先打通实例列表、运行记录、产物视图和资源占用展示，后续再平滑迁到 VPS 侧 SQLite。
 
+**Deferred / Not in phase 1:** 本计划只覆盖本地 `.clawpal/recipe-runtime/` JSON store、实例/运行/产物索引和页面展示。phase 1 明确不包含远端 `reciped`、workflow engine、durable scheduler state、OPA/Rego policy plane、secret broker 或 lock manager；任何远端常驻控制面、集中策略决策、集中密钥分发和分布式锁统一留到 phase 2。
+
 **Tech Stack:** Rust, Tauri, React 18, TypeScript, JSON persistence, Bun, Cargo
 
 ---
