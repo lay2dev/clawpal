@@ -160,6 +160,7 @@ export interface RecipePlan {
   usedCapabilities: string[];
   concreteClaims: ExecutionResourceClaim[];
   executionSpecDigest: string;
+  executionSpec: ExecutionSpec;
   warnings: string[];
 }
 

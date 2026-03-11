@@ -677,6 +677,10 @@
   "cook.stepsCompleted": "{{done}} 个步骤已完成",
   "cook.stepsSkipped": "，{{skipped}} 个已跳过",
   "cook.applyHint": "使用侧栏中的「应用变更」重启网关并激活配置更改。",
+  "cook.executionFailed": "执行失败",
+  "cook.executionWarnings": "警告",
+  "cook.runId": "运行 ID",
+  "cook.missingExecutionSpec": "执行计划缺少结构化 spec。",
   "cook.done": "完成",
 
   "chat.new": "新对话",

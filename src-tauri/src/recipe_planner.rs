@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::execution_spec::ExecutionResourceClaim;
+use crate::execution_spec::{ExecutionResourceClaim, ExecutionSpec};
 use crate::recipe::{step_references_empty_param, Recipe};
 use crate::recipe_adapter::compile_legacy_recipe_to_spec;
 
@@ -23,6 +23,7 @@ pub struct RecipePlan {
     pub used_capabilities: Vec<String>,
     pub concrete_claims: Vec<ExecutionResourceClaim>,
     pub execution_spec_digest: String,
+    pub execution_spec: ExecutionSpec,
     pub warnings: Vec<String>,
 }
 
@@ -65,6 +66,7 @@ pub fn build_recipe_plan(
         used_capabilities: execution_spec.capabilities.used_capabilities.clone(),
         concrete_claims: execution_spec.resources.claims.clone(),
         execution_spec_digest,
+        execution_spec,
         warnings,
     })
 }

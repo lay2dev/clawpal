@@ -1268,8 +1268,18 @@ pub fn list_recipe_runs(instance_id: Option<String>) -> Result<Vec<RecipeRuntime
 }
 
 fn build_runtime_artifacts(
+    spec: &crate::execution_spec::ExecutionSpec,
     prepared: &crate::recipe_executor::ExecuteRecipePrepared,
 ) -> Vec<RecipeRuntimeArtifact> {
+    if spec
+        .source
+        .get("legacyRecipeId")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return Vec::new();
+    }
+
     if prepared.plan.unit_name.trim().is_empty() {
         return Vec::new();
     }
@@ -1327,11 +1337,332 @@ fn persist_recipe_run(
             summary: summary.to_string(),
             started_at: started_at.to_string(),
             finished_at: Some(finished_at.to_string()),
-            artifacts: build_runtime_artifacts(prepared),
+            artifacts: build_runtime_artifacts(spec, prepared),
             resource_claims: build_runtime_claims(spec),
             warnings: warnings.to_vec(),
         })
         .map(|_| ())
+}
+
+fn is_legacy_recipe_spec(spec: &crate::execution_spec::ExecutionSpec) -> bool {
+    spec.source
+        .get("legacyRecipeId")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn action_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    })
+}
+
+fn action_bool(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(value)) => *value,
+        Some(Value::String(value)) => value.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+fn append_config_patch_commands(
+    value: &Value,
+    path: &str,
+    commands: &mut Vec<(String, Vec<String>)>,
+) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                let next_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{}.{}", path, key)
+                };
+                append_config_patch_commands(nested, &next_path, commands)?;
+            }
+            Ok(())
+        }
+        _ => {
+            let full_path = if path.is_empty() {
+                ".".to_string()
+            } else {
+                path.to_string()
+            };
+            let json_value = serde_json::to_string(value).map_err(|error| error.to_string())?;
+            commands.push((
+                format!("Set {}", full_path),
+                vec![
+                    "openclaw".into(),
+                    "config".into(),
+                    "set".into(),
+                    full_path,
+                    json_value,
+                    "--json".into(),
+                ],
+            ));
+            Ok(())
+        }
+    }
+}
+
+fn rewrite_binding_entries(
+    bindings: Vec<Value>,
+    channel_type: &str,
+    peer_id: &str,
+    agent_id: &str,
+) -> Vec<Value> {
+    let mut next: Vec<Value> = bindings
+        .into_iter()
+        .filter(|binding| {
+            let Some(matcher) = binding.get("match").and_then(Value::as_object) else {
+                return true;
+            };
+            let Some(channel) = matcher.get("channel").and_then(Value::as_str) else {
+                return true;
+            };
+            let Some(peer) = matcher.get("peer").and_then(Value::as_object) else {
+                return true;
+            };
+            let Some(existing_peer_id) = peer.get("id").and_then(Value::as_str) else {
+                return true;
+            };
+            !(channel == channel_type && existing_peer_id == peer_id)
+        })
+        .collect();
+
+    next.push(json!({
+        "agentId": agent_id,
+        "match": {
+            "channel": channel_type,
+            "peer": {
+                "kind": "channel",
+                "id": peer_id,
+            }
+        }
+    }));
+    next
+}
+
+async fn resolve_model_value_for_route(
+    pool: &State<'_, SshConnectionPool>,
+    route: &crate::recipe_executor::ExecutionRoute,
+    profile_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(profile_id) = profile_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if profile_id == "__default__" {
+        return Ok(None);
+    }
+
+    let profiles = match route.runner.as_str() {
+        "remote_ssh" => {
+            let host_id = route
+                .host_id
+                .clone()
+                .ok_or_else(|| "remote execution target missing hostId".to_string())?;
+            remote_list_model_profiles(pool.clone(), host_id).await?
+        }
+        _ => list_model_profiles()?,
+    };
+
+    Ok(profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .map(profile_to_model_value)
+        .or_else(|| Some(profile_id.to_string())))
+}
+
+async fn resolve_workspace_for_route(
+    cache: &State<'_, crate::cli_runner::CliCache>,
+    pool: &State<'_, SshConnectionPool>,
+    route: &crate::recipe_executor::ExecutionRoute,
+    independent: bool,
+    agent_id: &str,
+) -> Result<Option<String>, String> {
+    if independent {
+        return Ok(Some(agent_id.to_string()));
+    }
+
+    match route.runner.as_str() {
+        "remote_ssh" => {
+            let host_id = route
+                .host_id
+                .clone()
+                .ok_or_else(|| "remote execution target missing hostId".to_string())?;
+            let (_, _, cfg) = remote_read_openclaw_config_text_and_json(pool, &host_id).await?;
+            if let Some(workspace) = cfg
+                .pointer("/agents/defaults/workspace")
+                .or_else(|| cfg.pointer("/agents/default/workspace"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Ok(Some(workspace.to_string()));
+            }
+
+            Ok(remote_list_agents_overview(pool.clone(), host_id)
+                .await?
+                .into_iter()
+                .find_map(|agent| agent.workspace.filter(|value| !value.trim().is_empty())))
+        }
+        _ => {
+            let paths = resolve_paths();
+            let cfg = read_openclaw_config(&paths)?;
+            if let Some(workspace) = cfg
+                .pointer("/agents/defaults/workspace")
+                .or_else(|| cfg.pointer("/agents/default/workspace"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Ok(Some(workspace.to_string()));
+            }
+
+            Ok(list_agents_overview(cache.clone())
+                .await?
+                .into_iter()
+                .find_map(|agent| agent.workspace.filter(|value| !value.trim().is_empty())))
+        }
+    }
+}
+
+async fn list_bindings_for_route(
+    cache: &State<'_, crate::cli_runner::CliCache>,
+    pool: &State<'_, SshConnectionPool>,
+    route: &crate::recipe_executor::ExecutionRoute,
+) -> Result<Vec<Value>, String> {
+    match route.runner.as_str() {
+        "remote_ssh" => {
+            let host_id = route
+                .host_id
+                .clone()
+                .ok_or_else(|| "remote execution target missing hostId".to_string())?;
+            remote_list_bindings(pool.clone(), host_id).await
+        }
+        _ => list_bindings(cache.clone()).await,
+    }
+}
+
+async fn legacy_action_commands(
+    action: &crate::execution_spec::ExecutionAction,
+    cache: &State<'_, crate::cli_runner::CliCache>,
+    pool: &State<'_, SshConnectionPool>,
+    route: &crate::recipe_executor::ExecutionRoute,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    let kind = action
+        .kind
+        .as_deref()
+        .ok_or_else(|| "legacy action is missing kind".to_string())?;
+    let args = action
+        .args
+        .as_object()
+        .ok_or_else(|| format!("legacy action '{}' is missing object args", kind))?;
+
+    match kind {
+        "create_agent" => {
+            let agent_id = action_string(args.get("agentId"))
+                .ok_or_else(|| "create_agent requires agentId".to_string())?;
+            let independent = action_bool(args.get("independent"));
+            let model_profile_id = action_string(args.get("modelProfileId"));
+            let model_value =
+                resolve_model_value_for_route(pool, route, model_profile_id.as_deref()).await?;
+            let workspace =
+                resolve_workspace_for_route(cache, pool, route, independent, &agent_id).await?;
+
+            let mut command = vec![
+                "openclaw".into(),
+                "agents".into(),
+                "add".into(),
+                agent_id.clone(),
+                "--non-interactive".into(),
+            ];
+            if let Some(model_value) = model_value {
+                command.push("--model".into());
+                command.push(model_value);
+            }
+            if let Some(workspace) = workspace {
+                command.push("--workspace".into());
+                command.push(workspace);
+            }
+
+            Ok(vec![(format!("Create agent: {}", agent_id), command)])
+        }
+        "setup_identity" => Ok(Vec::new()),
+        "bind_channel" => {
+            let channel_type = action_string(args.get("channelType"))
+                .ok_or_else(|| "bind_channel requires channelType".to_string())?;
+            let peer_id = action_string(args.get("peerId"))
+                .ok_or_else(|| "bind_channel requires peerId".to_string())?;
+            let agent_id = action_string(args.get("agentId"))
+                .ok_or_else(|| "bind_channel requires agentId".to_string())?;
+            let bindings = list_bindings_for_route(cache, pool, route).await?;
+            let payload = rewrite_binding_entries(bindings, &channel_type, &peer_id, &agent_id);
+            let payload_json =
+                serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+
+            Ok(vec![(
+                format!("Bind {}:{} -> {}", channel_type, peer_id, agent_id),
+                vec![
+                    "openclaw".into(),
+                    "config".into(),
+                    "set".into(),
+                    "bindings".into(),
+                    payload_json,
+                    "--json".into(),
+                ],
+            )])
+        }
+        "config_patch" => {
+            let patch = if let Some(patch) = args.get("patch") {
+                patch.clone()
+            } else if let Some(template) = action_string(args.get("patchTemplate")) {
+                json5::from_str::<Value>(&template).map_err(|error| error.to_string())?
+            } else {
+                return Err("config_patch requires patch or patchTemplate".into());
+            };
+
+            let mut commands = Vec::new();
+            append_config_patch_commands(&patch, "", &mut commands)?;
+            Ok(commands)
+        }
+        other => Err(format!("unsupported legacy action '{}'", other)),
+    }
+}
+
+async fn legacy_recipe_commands(
+    spec: &crate::execution_spec::ExecutionSpec,
+    cache: &State<'_, crate::cli_runner::CliCache>,
+    pool: &State<'_, SshConnectionPool>,
+    route: &crate::recipe_executor::ExecutionRoute,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    let mut commands = Vec::new();
+    for action in &spec.actions {
+        commands.extend(legacy_action_commands(action, cache, pool, route).await?);
+    }
+    Ok(commands)
+}
+
+fn legacy_execution_summary(
+    spec: &crate::execution_spec::ExecutionSpec,
+    route: &crate::recipe_executor::ExecutionRoute,
+) -> String {
+    format!(
+        "{} via {} ({} action{})",
+        infer_recipe_id(spec),
+        route.runner,
+        spec.actions.len(),
+        if spec.actions.len() == 1 { "" } else { "s" }
+    )
 }
 
 #[tauri::command]
@@ -1344,12 +1675,36 @@ pub async fn execute_recipe(
 ) -> Result<ExecuteRecipeResult, String> {
     let spec = request.spec.clone();
     let prepared = prepare_recipe_execution(request)?;
+    let legacy_spec = is_legacy_recipe_spec(&spec);
     let mut warnings = prepared.warnings.clone();
+    if legacy_spec {
+        warnings.retain(|warning| {
+            !warning.contains(
+                "attachment spec materialized without concrete systemdDropIn/envPatch operations",
+            )
+        });
+    }
     let started_at = Utc::now().to_rfc3339();
+    let summary = if legacy_spec {
+        legacy_execution_summary(&spec, &prepared.route)
+    } else {
+        prepared.summary.clone()
+    };
 
     match prepared.route.runner.as_str() {
         "local" => {
-            crate::cli_runner::enqueue_materialized_plan(queue.inner(), &prepared.plan);
+            if legacy_spec {
+                let commands =
+                    legacy_recipe_commands(&spec, &cache, &pool, &prepared.route).await?;
+                if commands.is_empty() {
+                    return Err("legacy recipe did not materialize executable commands".into());
+                }
+                for (label, command) in commands {
+                    queue.inner().enqueue(label, command);
+                }
+            } else {
+                crate::cli_runner::enqueue_materialized_plan(queue.inner(), &prepared.plan);
+            }
             let result = crate::cli_runner::apply_queued_commands(queue, cache).await?;
             let finished_at = Utc::now().to_rfc3339();
             if !result.ok {
@@ -1374,7 +1729,7 @@ pub async fn execute_recipe(
                 &prepared,
                 "local",
                 "succeeded",
-                &prepared.summary,
+                &summary,
                 &started_at,
                 &finished_at,
                 &warnings,
@@ -1385,7 +1740,7 @@ pub async fn execute_recipe(
             Ok(ExecuteRecipeResult {
                 run_id: prepared.run_id,
                 instance_id: "local".into(),
-                summary: prepared.summary,
+                summary,
                 warnings,
             })
         }
@@ -1395,11 +1750,22 @@ pub async fn execute_recipe(
                 .host_id
                 .clone()
                 .ok_or_else(|| "remote execution target missing hostId".to_string())?;
-            crate::cli_runner::enqueue_materialized_plan_remote(
-                remote_queues.inner(),
-                &host_id,
-                &prepared.plan,
-            );
+            if legacy_spec {
+                let commands =
+                    legacy_recipe_commands(&spec, &cache, &pool, &prepared.route).await?;
+                if commands.is_empty() {
+                    return Err("legacy recipe did not materialize executable commands".into());
+                }
+                for (label, command) in commands {
+                    remote_queues.inner().enqueue(&host_id, label, command);
+                }
+            } else {
+                crate::cli_runner::enqueue_materialized_plan_remote(
+                    remote_queues.inner(),
+                    &host_id,
+                    &prepared.plan,
+                );
+            }
             let result = crate::cli_runner::remote_apply_queued_commands(
                 pool,
                 remote_queues,
@@ -1429,7 +1795,7 @@ pub async fn execute_recipe(
                 &prepared,
                 &host_id,
                 "succeeded",
-                &prepared.summary,
+                &summary,
                 &started_at,
                 &finished_at,
                 &warnings,
@@ -1440,7 +1806,7 @@ pub async fn execute_recipe(
             Ok(ExecuteRecipeResult {
                 run_id: prepared.run_id,
                 instance_id: host_id,
-                summary: prepared.summary,
+                summary,
                 warnings,
             })
         }

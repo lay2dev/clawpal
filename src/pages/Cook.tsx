@@ -1,18 +1,21 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ParamForm } from "../components/ParamForm";
-import { resolveSteps, stepToCommands, type ResolvedStep } from "../lib/actions";
+import { resolveSteps, type ResolvedStep } from "../lib/actions";
 import { useApi } from "@/lib/use-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { Recipe, RecipePlan } from "../lib/types";
+import type { ExecuteRecipeResult, Recipe, RecipePlan } from "../lib/types";
 import { useInstance } from "@/lib/instance-context";
 import { RecipePlanPreview } from "@/components/RecipePlanPreview";
-
-
+import {
+  buildCookExecutionSpec,
+  markCookFailure,
+  markCookStatuses,
+  type CookStepStatus,
+} from "./cook-execution";
 type Phase = "params" | "confirm" | "execute" | "done";
-type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export function Cook({
   recipeId,
@@ -25,18 +28,18 @@ export function Cook({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { instanceId, isRemote } = useInstance();
+  const { instanceId, isRemote, isDocker } = useInstance();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [params, setParams] = useState<Record<string, string>>({});
   const [phase, setPhase] = useState<Phase>("params");
   const [plan, setPlan] = useState<RecipePlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
+  const [executionResult, setExecutionResult] = useState<ExecuteRecipeResult | null>(null);
   const [planning, setPlanning] = useState(false);
   const [resolvedStepList, setResolvedStepList] = useState<ResolvedStep[]>([]);
-  const [stepStatuses, setStepStatuses] = useState<StepStatus[]>([]);
-  const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
-  const [needsRestart, setNeedsRestart] = useState(false);
+  const [stepStatuses, setStepStatuses] = useState<CookStepStatus[]>([]);
 
   useEffect(() => {
     setLoading(true);
@@ -121,10 +124,10 @@ export function Cook({
       const nextPlan = await ua.planRecipe(recipe.id, params, recipeSource);
       const steps = resolveSteps(recipe.steps, params);
       setPlan(nextPlan);
+      setExecutionError(null);
+      setExecutionResult(null);
       setResolvedStepList(steps);
       setStepStatuses(steps.map((s) => (s.skippable ? "skipped" : "pending")));
-      setStepErrors({});
-      setNeedsRestart(steps.some((s) => !s.skippable));
       setPhase("confirm");
     } catch (error) {
       setPlan(null);
@@ -134,62 +137,36 @@ export function Cook({
     }
   };
 
-  const runFrom = async (startIndex: number, statuses: StepStatus[]) => {
-    for (let i = startIndex; i < resolvedStepList.length; i++) {
-      if (statuses[i] === "skipped") continue;
-      statuses[i] = "running";
-      setStepStatuses([...statuses]);
-      try {
-        const commands = await stepToCommands(resolvedStepList[i], { instanceId, isRemote });
-        for (const [label, cmd] of commands) {
-          await ua.queueCommand(label, cmd);
-        }
-        statuses[i] = "done";
-      } catch (err) {
-        statuses[i] = "failed";
-        setStepErrors((prev) => ({ ...prev, [i]: String(err) }));
-        setStepStatuses([...statuses]);
-        return;
-      }
-      setStepStatuses([...statuses]);
+  const handleExecute = async () => {
+    if (!plan) {
+      setExecutionError(t("cook.missingExecutionSpec"));
+      return;
     }
-    setPhase("done");
-  };
 
-  const handleExecute = () => {
     setPhase("execute");
-    const statuses = [...stepStatuses];
-    runFrom(0, statuses);
-  };
+    setExecutionError(null);
+    setExecutionResult(null);
+    setStepStatuses((current) => markCookStatuses(current, "running"));
 
-  const handleRetry = (index: number) => {
-    const statuses = [...stepStatuses];
-    setStepErrors((prev) => {
-      const next = { ...prev };
-      delete next[index];
-      return next;
-    });
-    runFrom(index, statuses);
-  };
-
-  const handleSkip = (index: number) => {
-    const statuses = [...stepStatuses];
-    statuses[index] = "skipped";
-    setStepStatuses(statuses);
-    setStepErrors((prev) => {
-      const next = { ...prev };
-      delete next[index];
-      return next;
-    });
-    const nextIndex = statuses.findIndex((s, i) => i > index && s !== "skipped");
-    if (nextIndex === -1) {
+    try {
+      const result = await ua.executeRecipe({
+        spec: buildCookExecutionSpec(plan.executionSpec, {
+          instanceId,
+          isRemote,
+          isDocker,
+        }),
+      });
+      setExecutionResult(result);
+      setStepStatuses((current) => markCookStatuses(current, "done"));
       setPhase("done");
-    } else {
-      runFrom(nextIndex, statuses);
+    } catch (error) {
+      setExecutionError(String(error));
+      setExecutionResult(null);
+      setStepStatuses((current) => markCookFailure(current));
     }
   };
 
-  const statusIcon = (s: StepStatus) => {
+  const statusIcon = (s: CookStepStatus) => {
     switch (s) {
       case "pending": return "\u25CB";
       case "running": return "\u25C9";
@@ -199,7 +176,7 @@ export function Cook({
     }
   };
 
-  const statusColor = (s: StepStatus) => {
+  const statusColor = (s: CookStepStatus) => {
     switch (s) {
       case "done": return "text-green-600";
       case "failed": return "text-destructive";
@@ -257,27 +234,26 @@ export function Cook({
                     {step.description !== step.label && stepStatuses[i] !== "skipped" && (
                       <div className="text-xs text-muted-foreground">{step.description}</div>
                     )}
-                    {stepErrors[i] && (
-                      <div className="text-xs text-destructive mt-1">{stepErrors[i]}</div>
-                    )}
-                    {stepStatuses[i] === "failed" && (
-                      <div className="flex gap-2 mt-1.5">
-                        <Button size="sm" variant="outline" onClick={() => handleRetry(i)}>
-                          {t('cook.retry')}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => handleSkip(i)}>
-                          {t('cook.skip')}
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 </div>
               ))}
             </div>
+            {phase === "execute" && executionError && (
+              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <div className="font-medium">{t("cook.executionFailed")}</div>
+                <div className="mt-1">{executionError}</div>
+              </div>
+            )}
             {phase === "confirm" && (
               <div className="flex gap-2 mt-4">
-                <Button onClick={handleExecute}>{t('cook.execute')}</Button>
+                <Button onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
                 <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.back')}</Button>
+              </div>
+            )}
+            {phase === "execute" && executionError && (
+              <div className="flex gap-2 mt-4">
+                <Button onClick={() => void handleExecute()}>{t('cook.retry')}</Button>
+                <Button variant="outline" onClick={() => setPhase("confirm")}>{t('cook.back')}</Button>
               </div>
             )}
           </CardContent>
@@ -292,10 +268,25 @@ export function Cook({
               {t('cook.stepsCompleted', { done: doneCount })}
               {skippedCount > 0 && t('cook.stepsSkipped', { skipped: skippedCount })}
             </p>
-            {needsRestart && (
-              <p className="text-sm text-muted-foreground mt-1">
-                {t('cook.applyHint')}
-              </p>
+            {executionResult && (
+              <>
+                <p className="text-sm text-muted-foreground mt-2">
+                  {executionResult.summary}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("cook.runId")}: {executionResult.runId}
+                </p>
+              </>
+            )}
+            {(executionResult?.warnings.length ?? 0) > 0 && (
+              <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-left text-sm text-amber-950">
+                <div className="font-medium">{t("cook.executionWarnings")}</div>
+                {executionResult?.warnings.map((warning) => (
+                  <div key={warning} className="mt-1">
+                    {warning}
+                  </div>
+                ))}
+              </div>
             )}
             <Button className="mt-4" onClick={onDone}>
               {t('cook.done')}

@@ -27,3 +27,16 @@ fn plan_recipe_returns_capabilities_claims_and_digest() {
     assert!(!plan.concrete_claims.is_empty());
     assert!(!plan.execution_spec_digest.is_empty());
 }
+
+#[test]
+fn plan_recipe_includes_execution_spec_for_executor_bridge() {
+    let recipe = builtin_recipes()
+        .into_iter()
+        .find(|recipe| recipe.id == "discord-channel-persona")
+        .expect("builtin recipe");
+
+    let plan = build_recipe_plan(&recipe, &sample_inputs()).expect("build plan");
+
+    assert_eq!(plan.execution_spec.kind, "ExecutionSpec");
+    assert!(!plan.execution_spec.actions.is_empty());
+}

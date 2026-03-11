@@ -680,6 +680,10 @@
   "cook.stepsCompleted": "{{done}} step(s) completed",
   "cook.stepsSkipped": ", {{skipped}} skipped",
   "cook.applyHint": "Use \"Apply Changes\" in the sidebar to restart the gateway and activate config changes.",
+  "cook.executionFailed": "Execution failed",
+  "cook.executionWarnings": "Warnings",
+  "cook.runId": "Run ID",
+  "cook.missingExecutionSpec": "Execution plan is missing a structured spec.",
   "cook.done": "Done",
 
   "chat.new": "New",

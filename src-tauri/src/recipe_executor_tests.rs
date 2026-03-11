@@ -109,6 +109,53 @@ fn sample_execution_request() -> ExecuteRecipeRequest {
     }
 }
 
+fn sample_legacy_bridge_spec() -> ExecutionSpec {
+    ExecutionSpec {
+        api_version: "strategy.platform/v1".into(),
+        kind: "ExecutionSpec".into(),
+        metadata: ExecutionMetadata {
+            name: Some("discord-channel-persona".into()),
+            digest: None,
+        },
+        source: json!({
+            "legacyRecipeId": "discord-channel-persona",
+            "legacyRecipeVersion": "1.0.0",
+        }),
+        target: json!({ "kind": "local" }),
+        execution: ExecutionTarget { kind: "job".into() },
+        capabilities: ExecutionCapabilities {
+            used_capabilities: vec!["config.write".into()],
+        },
+        resources: ExecutionResources::default(),
+        secrets: ExecutionSecrets::default(),
+        desired_state: json!({
+            "legacyStepCount": 1,
+        }),
+        actions: vec![ExecutionAction {
+            kind: Some("config_patch".into()),
+            name: Some("Set channel persona".into()),
+            args: json!({
+                "patch": {
+                    "channels": {
+                        "discord": {
+                            "guilds": {
+                                "guild-1": {
+                                    "channels": {
+                                        "channel-1": {
+                                            "systemPrompt": "Keep answers concise"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        }],
+        outputs: vec![],
+    }
+}
+
 #[test]
 fn job_spec_materializes_to_systemd_run_command() {
     let spec = sample_job_spec();
@@ -151,4 +198,14 @@ fn execute_recipe_returns_run_id_and_summary() {
 
     assert!(!result.run_id.is_empty());
     assert!(!result.summary.is_empty());
+}
+
+#[test]
+fn legacy_recipe_spec_can_prepare_without_command_payload() {
+    let result = execute_recipe(ExecuteRecipeRequest {
+        spec: sample_legacy_bridge_spec(),
+    })
+    .expect("prepare legacy recipe execution");
+
+    assert!(!result.run_id.is_empty());
 }

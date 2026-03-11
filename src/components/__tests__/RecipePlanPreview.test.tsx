@@ -19,6 +19,28 @@ describe("RecipePlanPreview", () => {
           usedCapabilities: ["service.manage"],
           concreteClaims: [{ kind: "path", path: "~/.openclaw/config.json" }],
           executionSpecDigest: "digest-123",
+          executionSpec: {
+            apiVersion: "strategy.platform/v1",
+            kind: "ExecutionSpec",
+            metadata: {},
+            source: {},
+            target: {},
+            execution: {
+              kind: "attachment",
+            },
+            capabilities: {
+              usedCapabilities: ["service.manage"],
+            },
+            resources: {
+              claims: [{ kind: "path", path: "~/.openclaw/config.json" }],
+            },
+            secrets: {
+              bindings: [],
+            },
+            desiredState: {},
+            actions: [],
+            outputs: [],
+          },
           warnings: [],
         },
       }),

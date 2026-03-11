@@ -48,9 +48,27 @@ pub struct ExecuteRecipeResult {
     pub warnings: Vec<String>,
 }
 
+fn is_legacy_recipe_spec(spec: &ExecutionSpec) -> bool {
+    spec.source
+        .get("legacyRecipeId")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub fn materialize_execution_plan(
     spec: &ExecutionSpec,
 ) -> Result<MaterializedExecutionPlan, String> {
+    if is_legacy_recipe_spec(spec) {
+        return Ok(MaterializedExecutionPlan {
+            execution_kind: spec.execution.kind.clone(),
+            unit_name: String::new(),
+            commands: Vec::new(),
+            resources: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
+
     let runtime_plan = match spec.execution.kind.as_str() {
         "job" => systemd::materialize_job(spec)?,
         "service" => systemd::materialize_service(spec)?,
