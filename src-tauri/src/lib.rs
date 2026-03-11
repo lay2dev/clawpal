@@ -87,11 +87,14 @@ pub mod openclaw_doc_resolver;
 pub mod path_fix;
 pub mod prompt_templates;
 pub mod recipe;
+pub mod recipe_adapter;
 pub mod recipe_bundle;
 pub mod ssh;
 
 #[cfg(test)]
 mod execution_spec_tests;
+#[cfg(test)]
+mod recipe_adapter_tests;
 #[cfg(test)]
 mod recipe_bundle_tests;
 

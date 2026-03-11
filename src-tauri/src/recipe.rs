@@ -218,17 +218,101 @@ pub fn validate(recipe: &Recipe, params: &Map<String, Value>) -> Vec<String> {
     errors
 }
 
-fn render_patch_template(template: &str, params: &Map<String, Value>) -> String {
+fn param_value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        _ => value.to_string(),
+    }
+}
+
+fn extract_placeholders(text: &str) -> Vec<String> {
+    Regex::new(r"\{\{(\w+)\}\}")
+        .ok()
+        .map(|regex| {
+            regex
+                .captures_iter(text)
+                .filter_map(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn render_template_string(template: &str, params: &Map<String, Value>) -> String {
     let mut text = template.to_string();
     for (k, v) in params {
         let placeholder = format!("{{{{{}}}}}", k);
-        let replacement = match v {
-            Value::String(s) => s.clone(),
-            _ => v.to_string(),
-        };
+        let replacement = param_value_to_string(v);
         text = text.replace(&placeholder, &replacement);
     }
     text
+}
+
+pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Value {
+    match value {
+        Value::String(text) => {
+            if let Some(param_id) = text
+                .strip_prefix("{{")
+                .and_then(|rest| rest.strip_suffix("}}"))
+            {
+                if param_id
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                {
+                    return params
+                        .get(param_id)
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()));
+                }
+            }
+            Value::String(render_template_string(text, params))
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| render_template_value(item, params))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), render_template_value(value, params)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+pub fn render_step_args(
+    args: &Map<String, Value>,
+    params: &Map<String, Value>,
+) -> Map<String, Value> {
+    args.iter()
+        .map(|(key, value)| (key.clone(), render_template_value(value, params)))
+        .collect()
+}
+
+pub fn step_references_empty_param(step: &RecipeStep, params: &Map<String, Value>) -> bool {
+    fn value_references_empty_param(value: &Value, params: &Map<String, Value>) -> bool {
+        match value {
+            Value::String(text) => extract_placeholders(text).into_iter().any(|param_id| {
+                params
+                    .get(&param_id)
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(false)
+            }),
+            Value::Array(items) => items
+                .iter()
+                .any(|item| value_references_empty_param(item, params)),
+            Value::Object(map) => map
+                .values()
+                .any(|item| value_references_empty_param(item, params)),
+            _ => false,
+        }
+    }
+
+    step.args
+        .values()
+        .any(|value| value_references_empty_param(value, params))
 }
 
 pub fn build_candidate_config_from_template(
@@ -236,7 +320,7 @@ pub fn build_candidate_config_from_template(
     template: &str,
     params: &Map<String, Value>,
 ) -> Result<(Value, Vec<ChangeItem>), String> {
-    let rendered = render_patch_template(template, params);
+    let rendered = render_template_string(template, params);
     let patch: Value = json5::from_str(&rendered).map_err(|e| e.to_string())?;
     let mut merged = current.clone();
     let mut changes = Vec::new();
