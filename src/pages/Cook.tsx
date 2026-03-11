@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ParamForm } from "../components/ParamForm";
 import { resolveSteps, type ResolvedStep } from "../lib/actions";
@@ -6,7 +6,7 @@ import { useApi } from "@/lib/use-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ExecuteRecipeResult, Recipe, RecipePlan } from "../lib/types";
+import type { ExecuteRecipeResult, PrecheckIssue, Recipe, RecipePlan } from "../lib/types";
 import { useInstance } from "@/lib/instance-context";
 import { RecipePlanPreview } from "@/components/RecipePlanPreview";
 import {
@@ -15,6 +15,11 @@ import {
   markCookStatuses,
   type CookStepStatus,
 } from "./cook-execution";
+import {
+  buildCookContextWarnings,
+  buildCookRouteSummary,
+  hasBlockingAuthIssues,
+} from "./cook-plan-context";
 type Phase = "params" | "confirm" | "execute" | "done";
 
 export function Cook({
@@ -40,6 +45,14 @@ export function Cook({
   const [planning, setPlanning] = useState(false);
   const [resolvedStepList, setResolvedStepList] = useState<ResolvedStep[]>([]);
   const [stepStatuses, setStepStatuses] = useState<CookStepStatus[]>([]);
+  const [authIssues, setAuthIssues] = useState<PrecheckIssue[]>([]);
+  const [contextWarnings, setContextWarnings] = useState<string[]>([]);
+
+  const routeSummary = useMemo(
+    () => buildCookRouteSummary({ instanceId, isRemote, isDocker }),
+    [instanceId, isRemote, isDocker],
+  );
+  const blockingAuthIssues = hasBlockingAuthIssues(authIssues);
 
   useEffect(() => {
     setLoading(true);
@@ -122,15 +135,28 @@ export function Cook({
 
     try {
       const nextPlan = await ua.planRecipe(recipe.id, params, recipeSource);
+      const [authResult, configResult] = await Promise.allSettled([
+        ua.precheckAuth(instanceId),
+        ua.readRawConfig(),
+      ]);
       const steps = resolveSteps(recipe.steps, params);
+      const nextAuthIssues = authResult.status === "fulfilled" ? authResult.value : [];
+      const nextContextWarnings =
+        configResult.status === "fulfilled"
+          ? buildCookContextWarnings(nextPlan, configResult.value)
+          : [];
       setPlan(nextPlan);
       setExecutionError(null);
       setExecutionResult(null);
       setResolvedStepList(steps);
       setStepStatuses(steps.map((s) => (s.skippable ? "skipped" : "pending")));
+      setAuthIssues(nextAuthIssues);
+      setContextWarnings(nextContextWarnings);
       setPhase("confirm");
     } catch (error) {
       setPlan(null);
+      setAuthIssues([]);
+      setContextWarnings([]);
       setPlanError(String(error));
     } finally {
       setPlanning(false);
@@ -140,6 +166,10 @@ export function Cook({
   const handleExecute = async () => {
     if (!plan) {
       setExecutionError(t("cook.missingExecutionSpec"));
+      return;
+    }
+    if (blockingAuthIssues) {
+      setExecutionError("Resolve auth precheck errors before execution.");
       return;
     }
 
@@ -217,7 +247,14 @@ export function Cook({
       {(phase === "confirm" || phase === "execute") && (
         <Card>
           <CardContent>
-            {plan && phase === "confirm" && <RecipePlanPreview plan={plan} />}
+            {plan && phase === "confirm" && (
+              <RecipePlanPreview
+                plan={plan}
+                routeSummary={routeSummary}
+                authIssues={authIssues}
+                contextWarnings={contextWarnings}
+              />
+            )}
             <div className="space-y-3">
               {resolvedStepList.map((step, i) => (
                 <div key={i} className={cn("flex items-start gap-3", stepStatuses[i] === "skipped" && "opacity-50")}>
@@ -238,6 +275,16 @@ export function Cook({
                 </div>
               ))}
             </div>
+            {phase === "confirm" && blockingAuthIssues && (
+              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                Resolve auth precheck errors before execution.
+              </div>
+            )}
+            {phase === "confirm" && executionError && (
+              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {executionError}
+              </div>
+            )}
             {phase === "execute" && executionError && (
               <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 <div className="font-medium">{t("cook.executionFailed")}</div>
@@ -246,7 +293,7 @@ export function Cook({
             )}
             {phase === "confirm" && (
               <div className="flex gap-2 mt-4">
-                <Button onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
+                <Button disabled={blockingAuthIssues} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
                 <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.back')}</Button>
               </div>
             )}

@@ -8,6 +8,16 @@ describe("RecipePlanPreview", () => {
   test("renders capability and resource summaries in the confirm phase", () => {
     const html = renderToStaticMarkup(
       React.createElement(RecipePlanPreview, {
+        routeSummary: "remote_ssh -> ssh:prod-a",
+        authIssues: [
+          {
+            code: "AUTH_CREDENTIAL_UNRESOLVED",
+            severity: "error",
+            message: "missing auth",
+            autoFixable: false,
+          },
+        ],
+        contextWarnings: ["Channel discord/channel-1 will be rebound from main to lobster."],
         plan: {
           summary: {
             recipeId: "discord-channel-persona",
@@ -49,5 +59,8 @@ describe("RecipePlanPreview", () => {
     expect(html).toContain("service.manage");
     expect(html).toContain("path");
     expect(html).toContain("digest-123");
+    expect(html).toContain("remote_ssh -&gt; ssh:prod-a");
+    expect(html).toContain("AUTH_CREDENTIAL_UNRESOLVED");
+    expect(html).toContain("will be rebound");
   });
 });

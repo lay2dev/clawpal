@@ -1,11 +1,28 @@
-import type { RecipePlan } from "@/lib/types";
+import type { PrecheckIssue, RecipePlan } from "@/lib/types";
 
 function formatClaim(claim: RecipePlan["concreteClaims"][number]) {
   const details = [claim.id, claim.target, claim.path].filter(Boolean).join(" · ");
   return details ? `${claim.kind}: ${details}` : claim.kind;
 }
 
-export function RecipePlanPreview({ plan }: { plan: RecipePlan }) {
+function formatIssue(issue: PrecheckIssue) {
+  return `${issue.code}: ${issue.message}`;
+}
+
+export function RecipePlanPreview({
+  plan,
+  routeSummary,
+  authIssues = [],
+  contextWarnings = [],
+}: {
+  plan: RecipePlan;
+  routeSummary?: string;
+  authIssues?: PrecheckIssue[];
+  contextWarnings?: string[];
+}) {
+  const hasBlockingAuthIssue = authIssues.some((issue) => issue.severity === "error");
+  const combinedWarnings = [...plan.warnings, ...contextWarnings];
+
   return (
     <div className="mb-4 rounded-lg border border-border/70 bg-muted/20 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -26,6 +43,15 @@ export function RecipePlanPreview({ plan }: { plan: RecipePlan }) {
           <div className="font-mono text-xs">{plan.executionSpecDigest}</div>
         </div>
       </div>
+
+      {routeSummary && (
+        <div className="mt-4 rounded-md border border-border/70 bg-background/80 px-3 py-2">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+            Route
+          </div>
+          <div className="mt-1 font-mono text-xs">{routeSummary}</div>
+        </div>
+      )}
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div>
@@ -58,9 +84,26 @@ export function RecipePlanPreview({ plan }: { plan: RecipePlan }) {
         </div>
       </div>
 
-      {plan.warnings.length > 0 && (
+      {authIssues.length > 0 && (
+        <div
+          className={
+            hasBlockingAuthIssue
+              ? "mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+              : "mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-950"
+          }
+        >
+          <div className="font-medium">Auth Preconditions</div>
+          {authIssues.map((issue) => (
+            <div key={`${issue.code}:${issue.message}`} className="mt-1">
+              {formatIssue(issue)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {combinedWarnings.length > 0 && (
         <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-950">
-          {plan.warnings.map((warning) => (
+          {combinedWarnings.map((warning) => (
             <div key={warning}>{warning}</div>
           ))}
         </div>

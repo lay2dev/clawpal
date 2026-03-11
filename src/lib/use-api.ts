@@ -781,6 +781,7 @@ export function useApi() {
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),
       fixIssues: withInvalidation(dispatch(api.fixIssues, api.remoteFixIssues)),
+      precheckAuth: localCached("precheckAuth", 5_000, api.precheckAuth),
 
       // History
       listHistory: dispatchCached(
