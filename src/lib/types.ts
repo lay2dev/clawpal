@@ -77,6 +77,76 @@ export interface ApplyResult {
   errors: string[];
 }
 
+export type RecipeExecutionKind = "job" | "service" | "schedule" | "attachment";
+
+export interface RecipeBundle {
+  apiVersion: string;
+  kind: string;
+  metadata: {
+    name?: string;
+    version?: string;
+    description?: string;
+  };
+  compatibility: {
+    minRunnerVersion?: string;
+    targetPlatforms?: string[];
+  };
+  inputs: Record<string, unknown>[];
+  capabilities: {
+    allowed: string[];
+  };
+  resources: {
+    supportedKinds: string[];
+  };
+  execution: {
+    supportedKinds: RecipeExecutionKind[];
+  };
+  runner: {
+    name?: string;
+    version?: string;
+  };
+  outputs: Record<string, unknown>[];
+}
+
+export interface ExecutionResourceClaim {
+  kind: string;
+  id?: string;
+  target?: string;
+  path?: string;
+}
+
+export interface ExecutionSecretBinding {
+  id: string;
+  source: string;
+  mount?: string;
+}
+
+export interface ExecutionSpec {
+  apiVersion: string;
+  kind: string;
+  metadata: {
+    name?: string;
+    digest?: string;
+  };
+  source: Record<string, unknown>;
+  target: Record<string, unknown>;
+  execution: {
+    kind: RecipeExecutionKind;
+  };
+  capabilities: {
+    usedCapabilities: string[];
+  };
+  resources: {
+    claims: ExecutionResourceClaim[];
+  };
+  secrets: {
+    bindings: ExecutionSecretBinding[];
+  };
+  desiredState: Record<string, unknown>;
+  actions: Record<string, unknown>[];
+  outputs: Record<string, unknown>[];
+}
+
 export interface SystemStatus {
   healthy: boolean;
   configPath: string;

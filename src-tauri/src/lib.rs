@@ -76,6 +76,7 @@ pub mod cli_runner;
 pub mod commands;
 pub mod config_io;
 pub mod doctor;
+pub mod execution_spec;
 pub mod history;
 pub mod install;
 pub mod json_util;
@@ -86,7 +87,13 @@ pub mod openclaw_doc_resolver;
 pub mod path_fix;
 pub mod prompt_templates;
 pub mod recipe;
+pub mod recipe_bundle;
 pub mod ssh;
+
+#[cfg(test)]
+mod execution_spec_tests;
+#[cfg(test)]
+mod recipe_bundle_tests;
 
 pub fn run() {
     tauri::Builder::default()
