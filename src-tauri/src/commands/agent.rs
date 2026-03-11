@@ -16,38 +16,14 @@ pub async fn remote_setup_agent_identity(
     if name.is_empty() {
         return Err("Name is required".into());
     }
-
-    // Read remote config to find agent workspace
-    let (_config_path, _raw, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id)
-        .await
-        .map_err(|e| format!("Failed to parse config: {e}"))?;
-
-    let workspace = clawpal_core::doctor::resolve_agent_workspace_from_config(
-        &cfg,
+    crate::agent_identity::write_remote_agent_identity(
+        pool.inner(),
+        &host_id,
         &agent_id,
-        Some("~/.openclaw/agents"),
-    )?;
-
-    // Build IDENTITY.md content
-    let mut content = format!("- Name: {}\n", name);
-    if let Some(ref e) = emoji {
-        let e = e.trim();
-        if !e.is_empty() {
-            content.push_str(&format!("- Emoji: {}\n", e));
-        }
-    }
-
-    // Write via SSH
-    let ws = if workspace.starts_with("~/") {
-        workspace.to_string()
-    } else {
-        format!("~/{workspace}")
-    };
-    pool.exec(&host_id, &format!("mkdir -p {}", shell_escape(&ws)))
-        .await?;
-    let identity_path = format!("{}/IDENTITY.md", ws);
-    pool.sftp_write(&host_id, &identity_path, &content).await?;
-
+        &name,
+        emoji.as_deref(),
+    )
+    .await?;
     Ok(true)
 }
 
@@ -230,27 +206,7 @@ pub fn setup_agent_identity(
     }
 
     let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-
-    let workspace =
-        clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
-            .map(|s| expand_tilde(&s))?;
-
-    // Build IDENTITY.md content
-    let mut content = format!("- Name: {}\n", name);
-    if let Some(ref e) = emoji {
-        let e = e.trim();
-        if !e.is_empty() {
-            content.push_str(&format!("- Emoji: {}\n", e));
-        }
-    }
-
-    let ws_path = std::path::Path::new(&workspace);
-    fs::create_dir_all(ws_path).map_err(|e| format!("Failed to create workspace dir: {}", e))?;
-    let identity_path = ws_path.join("IDENTITY.md");
-    fs::write(&identity_path, &content)
-        .map_err(|e| format!("Failed to write IDENTITY.md: {}", e))?;
-
+    crate::agent_identity::write_local_agent_identity(&paths, &agent_id, &name, emoji.as_deref())?;
     Ok(true)
 }
 

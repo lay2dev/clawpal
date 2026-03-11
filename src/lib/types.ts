@@ -385,6 +385,7 @@ export interface HistoryItem {
   createdAt: string;
   source: string;
   canRollback: boolean;
+  runId?: string;
   rollbackOf?: string;
 }
 

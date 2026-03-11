@@ -25,15 +25,24 @@ import {
 import type { HistoryItem, PreviewResult, RecipeRuntimeRun } from "../lib/types";
 import { formatTime } from "@/lib/utils";
 
+function formatResourceClaimLabel(run: RecipeRuntimeRun, index: number) {
+  const claim = run.resourceClaims[index];
+  return claim.id || claim.path || claim.target || claim.kind;
+}
+
 export function History({
   onOpenRuntimeDashboard,
+  initialHistory = [],
+  initialRuns = [],
 }: {
   onOpenRuntimeDashboard?: () => void;
+  initialHistory?: HistoryItem[];
+  initialRuns?: RecipeRuntimeRun[];
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [runtimeRuns, setRuntimeRuns] = useState<RecipeRuntimeRun[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>(initialHistory);
+  const [runtimeRuns, setRuntimeRuns] = useState<RecipeRuntimeRun[]>(initialRuns);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [message, setMessage] = useState("");
 
@@ -56,6 +65,9 @@ export function History({
   // Build a map from snapshot ID to its display info for rollback references
   const historyMap = new Map(
     history.map((h) => [h.id, h])
+  );
+  const runtimeRunMap = new Map(
+    runtimeRuns.map((run) => [run.id, run])
   );
   const latestRun = runtimeRuns[0];
 
@@ -93,6 +105,7 @@ export function History({
         {history.map((item) => {
           const isRollback = item.source === "rollback";
           const rollbackTarget = item.rollbackOf ? historyMap.get(item.rollbackOf) : undefined;
+          const associatedRun = item.runId ? runtimeRunMap.get(item.runId) : undefined;
           return (
             <Card key={item.id} className={isRollback ? "border-dashed opacity-75" : ""}>
               <CardContent>
@@ -122,6 +135,27 @@ export function History({
                     <Badge variant="outline" className="text-muted-foreground">{t('history.notRollbackable')}</Badge>
                   )}
                 </div>
+                {associatedRun && (
+                  <div className="mt-3 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap text-sm">
+                      <Badge variant="outline">{associatedRun.status}</Badge>
+                      <span>{associatedRun.summary}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {t("history.runId")}: {associatedRun.id} · {associatedRun.runner} · {formatTime(associatedRun.startedAt)}
+                    </p>
+                    {associatedRun.artifacts.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("history.runArtifacts")}: {associatedRun.artifacts.map((artifact) => artifact.label).join(", ")}
+                      </p>
+                    )}
+                    {associatedRun.resourceClaims.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("history.runClaims")}: {associatedRun.resourceClaims.map((_, index) => formatResourceClaimLabel(associatedRun, index)).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {!isRollback && (
                   <div className="flex gap-2 mt-2">
                     <Button

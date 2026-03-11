@@ -1217,10 +1217,78 @@ pub struct ApplyQueueResult {
     pub rolled_back: bool,
 }
 
+fn apply_internal_local_command(
+    paths: &crate::models::OpenClawPaths,
+    command: &[String],
+) -> Result<bool, String> {
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = command
+                .get(1)
+                .ok_or_else(|| "internal config write is missing content".to_string())?;
+            crate::config_io::write_text(&paths.config_path, content)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let agent_id = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            let name = command
+                .get(2)
+                .ok_or_else(|| "setup_identity command missing name".to_string())?;
+            crate::agent_identity::write_local_agent_identity(
+                paths,
+                agent_id,
+                name,
+                command.get(3).map(String::as_str),
+            )?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+async fn apply_internal_remote_command(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    command: &[String],
+) -> Result<bool, String> {
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = command
+                .get(1)
+                .ok_or_else(|| "internal config write is missing content".to_string())?;
+            pool.sftp_write(host_id, "~/.openclaw/openclaw.json", content)
+                .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let agent_id = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            let name = command
+                .get(2)
+                .ok_or_else(|| "setup_identity command missing name".to_string())?;
+            crate::agent_identity::write_remote_agent_identity(
+                pool,
+                host_id,
+                agent_id,
+                name,
+                command.get(3).map(String::as_str),
+            )
+            .await?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 #[tauri::command]
 pub async fn apply_queued_commands(
     queue: tauri::State<'_, CommandQueue>,
     cache: tauri::State<'_, CliCache>,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queue.list();
     if commands.is_empty() {
@@ -1253,44 +1321,47 @@ pub async fn apply_queued_commands(
             .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
         let source = if is_rollback { "rollback" } else { "clawpal" };
         let can_rollback = !is_rollback;
+        let snapshot_recipe_id = snapshot_recipe_id
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(summary);
         let _ = crate::history::add_snapshot(
             &paths.history_dir,
             &paths.metadata_path,
-            Some(summary),
+            Some(snapshot_recipe_id),
             source,
             can_rollback,
             &config_before,
+            run_id.clone(),
             None,
         );
 
         // Execute each command for real
         let mut applied_count = 0;
         for cmd in &commands {
-            if matches!(
-                cmd.command.first().map(|s| s.as_str()),
-                Some("__config_write__") | Some("__rollback__")
-            ) {
-                // Internal command: write config content directly
-                if let Some(content) = cmd.command.get(1) {
-                    if let Err(e) = crate::config_io::write_text(&paths.config_path, content) {
-                        let _ = crate::config_io::write_text(&paths.config_path, &config_before);
-                        queue_handle.clear();
-                        return Ok(ApplyQueueResult {
-                            ok: false,
-                            applied_count,
-                            total_count,
-                            error: Some(format!(
-                                "Step {} failed ({}): {}",
-                                applied_count + 1,
-                                cmd.label,
-                                e
-                            )),
-                            rolled_back: true,
-                        });
-                    }
+            match apply_internal_local_command(&paths, &cmd.command) {
+                Ok(true) => {
+                    applied_count += 1;
+                    continue;
                 }
-                applied_count += 1;
-                continue;
+                Ok(false) => {}
+                Err(e) => {
+                    let _ = crate::config_io::write_text(&paths.config_path, &config_before);
+                    queue_handle.clear();
+                    return Ok(ApplyQueueResult {
+                        ok: false,
+                        applied_count,
+                        total_count,
+                        error: Some(format!(
+                            "Step {} failed ({}): {}",
+                            applied_count + 1,
+                            cmd.label,
+                            e
+                        )),
+                        rolled_back: true,
+                    });
+                }
             }
             let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
             let result = run_openclaw(&args);
@@ -1774,6 +1845,8 @@ pub async fn remote_apply_queued_commands(
     pool: tauri::State<'_, SshConnectionPool>,
     queues: tauri::State<'_, RemoteCommandQueues>,
     host_id: String,
+    _snapshot_recipe_id: Option<String>,
+    _run_id: Option<String>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queues.list(&host_id);
     if commands.is_empty() {
@@ -1817,36 +1890,30 @@ pub async fn remote_apply_queued_commands(
     // Execute each command
     let mut applied_count = 0;
     for cmd in &commands {
-        // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(
-            cmd.command.first().map(|s| s.as_str()),
-            Some("__config_write__") | Some("__rollback__")
-        ) {
-            if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool
-                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", content)
-                    .await
-                {
-                    let _ = pool
-                        .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
-                        .await;
-                    queues.clear(&host_id);
-                    return Ok(ApplyQueueResult {
-                        ok: false,
-                        applied_count,
-                        total_count,
-                        error: Some(format!(
-                            "Step {} failed ({}): {}",
-                            applied_count + 1,
-                            cmd.label,
-                            e
-                        )),
-                        rolled_back: true,
-                    });
-                }
+        match apply_internal_remote_command(&pool, &host_id, &cmd.command).await {
+            Ok(true) => {
+                applied_count += 1;
+                continue;
             }
-            applied_count += 1;
-            continue;
+            Ok(false) => {}
+            Err(e) => {
+                let _ = pool
+                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
+                    .await;
+                queues.clear(&host_id);
+                return Ok(ApplyQueueResult {
+                    ok: false,
+                    applied_count,
+                    total_count,
+                    error: Some(format!(
+                        "Step {} failed ({}): {}",
+                        applied_count + 1,
+                        cmd.label,
+                        e
+                    )),
+                    rolled_back: true,
+                });
+            }
         }
 
         let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();

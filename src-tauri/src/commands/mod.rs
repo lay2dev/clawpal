@@ -489,6 +489,8 @@ pub struct HistoryItem {
     pub source: String,
     pub can_rollback: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rollback_of: Option<String>,
 }
 
@@ -885,15 +887,6 @@ mod parse_agents_cli_output_tests {
         assert!(err.contains("top-level object keys=[payload, status]"));
         assert!(err.contains("\"payload\":{\"entries\":[]}"));
     }
-}
-
-fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Some(home) = std::env::var("HOME").ok() {
-            return format!("{}{}", home, &path[1..]);
-        }
-    }
-    path.to_string()
 }
 
 fn analyze_sessions_sync() -> Result<Vec<AgentSessionAnalysis>, String> {
@@ -1352,6 +1345,8 @@ fn is_legacy_recipe_spec(spec: &crate::execution_spec::ExecutionSpec) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) const INTERNAL_SETUP_IDENTITY_COMMAND: &str = "__setup_identity__";
+
 fn action_string(value: Option<&Value>) -> Option<String> {
     value.and_then(|value| match value {
         Value::String(text) => {
@@ -1372,6 +1367,22 @@ fn action_bool(value: Option<&Value>) -> bool {
         Some(Value::String(value)) => value.trim().eq_ignore_ascii_case("true"),
         _ => false,
     }
+}
+
+fn legacy_setup_identity_command(
+    agent_id: &str,
+    name: &str,
+    emoji: Option<&str>,
+) -> (String, Vec<String>) {
+    let mut command = vec![
+        INTERNAL_SETUP_IDENTITY_COMMAND.to_string(),
+        agent_id.to_string(),
+        name.to_string(),
+    ];
+    if let Some(emoji) = emoji.map(str::trim).filter(|value| !value.is_empty()) {
+        command.push(emoji.to_string());
+    }
+    (format!("Setup identity: {}", agent_id), command)
 }
 
 fn append_config_patch_commands(
@@ -1597,7 +1608,18 @@ async fn legacy_action_commands(
 
             Ok(vec![(format!("Create agent: {}", agent_id), command)])
         }
-        "setup_identity" => Ok(Vec::new()),
+        "setup_identity" => {
+            let agent_id = action_string(args.get("agentId"))
+                .ok_or_else(|| "setup_identity requires agentId".to_string())?;
+            let name = action_string(args.get("name"))
+                .ok_or_else(|| "setup_identity requires name".to_string())?;
+            let emoji = action_string(args.get("emoji"));
+            Ok(vec![legacy_setup_identity_command(
+                &agent_id,
+                &name,
+                emoji.as_deref(),
+            )])
+        }
         "bind_channel" => {
             let channel_type = action_string(args.get("channelType"))
                 .ok_or_else(|| "bind_channel requires channelType".to_string())?;
@@ -1665,6 +1687,27 @@ fn legacy_execution_summary(
     )
 }
 
+#[cfg(test)]
+mod legacy_recipe_bridge_tests {
+    use super::{legacy_setup_identity_command, INTERNAL_SETUP_IDENTITY_COMMAND};
+
+    #[test]
+    fn setup_identity_materializes_to_internal_command() {
+        let (label, command) = legacy_setup_identity_command("lobster", "Lobster", Some("🦞"));
+
+        assert_eq!(label, "Setup identity: lobster");
+        assert_eq!(
+            command,
+            vec![
+                INTERNAL_SETUP_IDENTITY_COMMAND.to_string(),
+                "lobster".into(),
+                "Lobster".into(),
+                "🦞".into(),
+            ]
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn execute_recipe(
     queue: State<'_, crate::cli_runner::CommandQueue>,
@@ -1705,7 +1748,13 @@ pub async fn execute_recipe(
             } else {
                 crate::cli_runner::enqueue_materialized_plan(queue.inner(), &prepared.plan);
             }
-            let result = crate::cli_runner::apply_queued_commands(queue, cache).await?;
+            let result = crate::cli_runner::apply_queued_commands(
+                queue,
+                cache,
+                Some(infer_recipe_id(&spec)),
+                Some(prepared.run_id.clone()),
+            )
+            .await?;
             let finished_at = Utc::now().to_rfc3339();
             if !result.ok {
                 let error = result
@@ -1770,6 +1819,8 @@ pub async fn execute_recipe(
                 pool,
                 remote_queues,
                 host_id.clone(),
+                Some(infer_recipe_id(&spec)),
+                Some(prepared.run_id.clone()),
             )
             .await?;
             let finished_at = Utc::now().to_rfc3339();
@@ -6647,6 +6698,7 @@ fn write_config_with_snapshot(
         true,
         current_text,
         None,
+        None,
     )?;
     write_json(&paths.config_path, next)
 }
@@ -10327,7 +10379,7 @@ async fn remote_resolve_openclaw_config_path(
     Ok(path.to_string())
 }
 
-async fn remote_read_openclaw_config_text_and_json(
+pub(crate) async fn remote_read_openclaw_config_text_and_json(
     pool: &SshConnectionPool,
     host_id: &str,
 ) -> Result<(String, String, Value), String> {

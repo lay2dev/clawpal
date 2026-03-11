@@ -16,6 +16,8 @@ pub struct SnapshotMeta {
     pub source: String,
     pub can_rollback: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub rollback_of: Option<String>,
 }
 
@@ -60,6 +62,7 @@ pub fn add_snapshot(
     source: &str,
     rollbackable: bool,
     current_config: &str,
+    run_id: Option<String>,
     rollback_of: Option<String>,
 ) -> Result<SnapshotMeta, String> {
     fs::create_dir_all(paths).map_err(|e| e.to_string())?;
@@ -87,6 +90,7 @@ pub fn add_snapshot(
         config_path: snapshot_path.to_string_lossy().to_string(),
         source: source.to_string(),
         can_rollback: rollbackable,
+        run_id: run_id.clone(),
         rollback_of: rollback_of.clone(),
     });
     next.items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -104,6 +108,7 @@ pub fn add_snapshot(
         config_path: snapshot_path.to_string_lossy().to_string(),
         source: source.to_string(),
         can_rollback: rollbackable,
+        run_id,
         rollback_of,
     })
 }
@@ -120,7 +125,7 @@ pub fn read_snapshot(path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_snapshot;
+    use super::{add_snapshot, list_snapshots, read_snapshot};
     use crate::cli_runner::set_active_clawpal_data_override;
     use std::fs;
     use uuid::Uuid;
@@ -139,6 +144,34 @@ mod tests {
         set_active_clawpal_data_override(None).expect("clear active clawpal data dir");
 
         assert_eq!(result.expect("read snapshot"), "{\"ok\":true}");
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn add_snapshot_persists_run_id_in_metadata() {
+        let temp_root = std::env::temp_dir().join(format!("clawpal-history-{}", Uuid::new_v4()));
+        let history_dir = temp_root.join("history");
+        let metadata_path = temp_root.join("metadata.json");
+
+        let snapshot = add_snapshot(
+            &history_dir,
+            &metadata_path,
+            Some("discord-channel-persona".into()),
+            "clawpal",
+            true,
+            "{\"ok\":true}",
+            Some("run_01".into()),
+            None,
+        )
+        .expect("write snapshot metadata");
+        let index = list_snapshots(&metadata_path).expect("read snapshot metadata");
+
+        assert_eq!(snapshot.run_id.as_deref(), Some("run_01"));
+        assert_eq!(
+            index.items.first().and_then(|item| item.run_id.as_deref()),
+            Some("run_01")
+        );
+
         let _ = fs::remove_dir_all(temp_root);
     }
 }

@@ -638,6 +638,9 @@
   "history.runtimeTitle": "Recipe runtime",
   "history.runtimeEmpty": "No recipe runs recorded yet.",
   "history.runtimeOpenDashboard": "Open orchestrator",
+  "history.runId": "Run ID",
+  "history.runArtifacts": "Artifacts",
+  "history.runClaims": "Resource claims",
 
   "channels.title": "Channels",
   "channels.noChannels": "No channels configured. Add channel plugins in your OpenClaw config, then refresh to see them here.",

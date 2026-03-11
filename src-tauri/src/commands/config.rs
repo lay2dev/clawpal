@@ -194,6 +194,7 @@ pub fn apply_config_patch(
         true,
         &current_text,
         None,
+        None,
     )?;
     let (candidate, _changes) =
         build_candidate_config_from_template(&current, &patch_template, &params)?;
@@ -227,6 +228,7 @@ pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> 
             created_at: item.created_at,
             source: item.source,
             can_rollback: item.can_rollback,
+            run_id: item.run_id,
             rollback_of: item.rollback_of,
         })
         .collect();
@@ -287,6 +289,7 @@ pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
         "rollback",
         true,
         &backup_text,
+        None,
         Some(target.id.clone()),
     )?;
     write_text(&paths.config_path, &target_text)?;

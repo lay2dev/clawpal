@@ -635,6 +635,9 @@
   "history.runtimeTitle": "菜谱运行时",
   "history.runtimeEmpty": "还没有记录到菜谱运行。",
   "history.runtimeOpenDashboard": "打开编排器",
+  "history.runId": "运行 ID",
+  "history.runArtifacts": "产物",
+  "history.runClaims": "资源声明",
 
   "channels.title": "频道",
   "channels.noChannels": "未配置频道。请在 OpenClaw 配置中添加频道插件，然后刷新查看。",
