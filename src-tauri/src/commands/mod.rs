@@ -7473,6 +7473,7 @@ mod model_profile_upsert_tests {
             base_dir,
             history_dir: clawpal_dir.join("history"),
             metadata_path: clawpal_dir.join("metadata.json"),
+            recipe_runtime_dir: clawpal_dir.join("recipe-runtime"),
             clawpal_dir,
         }
     }

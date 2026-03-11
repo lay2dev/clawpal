@@ -92,6 +92,7 @@ pub mod recipe_bundle;
 pub mod recipe_executor;
 pub mod recipe_planner;
 pub mod recipe_runtime;
+pub mod recipe_store;
 pub mod ssh;
 
 #[cfg(test)]
@@ -104,6 +105,8 @@ mod recipe_bundle_tests;
 mod recipe_executor_tests;
 #[cfg(test)]
 mod recipe_planner_tests;
+#[cfg(test)]
+mod recipe_store_tests;
 
 pub fn run() {
     tauri::Builder::default()

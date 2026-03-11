@@ -1,0 +1,46 @@
+use crate::recipe_store::{Artifact, RecipeStore, ResourceClaim, Run};
+
+fn sample_run() -> Run {
+    Run {
+        id: "run_01".into(),
+        instance_id: "inst_01".into(),
+        recipe_id: "discord-channel-persona".into(),
+        execution_kind: "attachment".into(),
+        runner: "local".into(),
+        status: "succeeded".into(),
+        summary: "Applied persona patch".into(),
+        started_at: "2026-03-11T10:00:00Z".into(),
+        finished_at: Some("2026-03-11T10:00:03Z".into()),
+        artifacts: vec![Artifact {
+            id: "artifact_01".into(),
+            kind: "configDiff".into(),
+            label: "Rendered patch".into(),
+            path: Some("/tmp/rendered-patch.json".into()),
+        }],
+        resource_claims: vec![ResourceClaim {
+            kind: "path".into(),
+            id: Some("openclaw.config".into()),
+            target: None,
+            path: Some("~/.openclaw/openclaw.json".into()),
+        }],
+        warnings: vec![],
+    }
+}
+
+#[test]
+fn record_run_persists_instance_and_artifacts() {
+    let store = RecipeStore::for_test();
+    let run = store.record_run(sample_run()).expect("record run");
+
+    assert_eq!(store.list_runs("inst_01").expect("list runs")[0].id, run.id);
+    assert_eq!(
+        store.list_instances().expect("list instances")[0]
+            .last_run_id
+            .as_deref(),
+        Some(run.id.as_str())
+    );
+    assert_eq!(
+        store.list_runs("inst_01").expect("list runs")[0].artifacts[0].id,
+        "artifact_01"
+    );
+}
