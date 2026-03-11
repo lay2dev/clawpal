@@ -176,7 +176,7 @@ describe("explainAndBuildGuidanceError", () => {
     originalCustomEvent = globalThis.CustomEvent;
     const existingWindow =
       typeof globalThis.window === "object" && globalThis.window !== null
-        ? (globalThis.window as Record<string, unknown>)
+        ? (globalThis.window as unknown as Record<string, unknown>)
         : {};
     (globalThis as any).window = {
       ...existingWindow,
