@@ -104,6 +104,7 @@ use crate::recipe::{
     build_candidate_config_from_template, collect_change_paths, find_recipe_with_source,
     format_diff, load_recipes_with_fallback, ApplyResult, PreviewResult,
 };
+use crate::recipe_adapter::export_recipe_source as export_recipe_source_document;
 use crate::recipe_planner::{build_recipe_plan, RecipePlan};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1235,6 +1236,13 @@ pub fn list_recipes(source: Option<String>) -> Result<Vec<crate::recipe::Recipe>
     let paths = resolve_paths();
     let default_path = paths.clawpal_dir.join("recipes").join("recipes.json");
     Ok(load_recipes_with_fallback(source, &default_path))
+}
+
+#[tauri::command]
+pub fn export_recipe_source(recipe_id: String, source: Option<String>) -> Result<String, String> {
+    let recipe = find_recipe_with_source(&recipe_id, source)
+        .ok_or_else(|| format!("recipe not found: {}", recipe_id))?;
+    export_recipe_source_document(&recipe)
 }
 
 #[tauri::command]

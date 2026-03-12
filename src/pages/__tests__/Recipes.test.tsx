@@ -86,5 +86,6 @@ describe("Recipes runtime summary", () => {
     expect(html).toContain("Recent run");
     expect(html).toContain("Applied persona patch");
     expect(html).toContain("succeeded");
+    expect(html).toContain("View source");
   });
 });

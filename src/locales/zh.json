@@ -669,6 +669,9 @@
   "recipes.runtimeNoRuns": "暂无运行",
   "recipes.runtimeInstancesForRecipe_one": "{{count}} 个实例",
   "recipes.runtimeInstancesForRecipe_other": "{{count}} 个实例",
+  "recipes.sourceDialogTitle": "{{name}} 源文档",
+  "recipes.copySource": "复制源文档",
+  "recipes.sourceCopied": "已复制",
 
   "cook.recipeNotFound": "未找到菜谱",
   "cook.next": "下一步",
@@ -737,6 +740,7 @@
   "recipeCard.normal": "普通",
   "recipeCard.advanced": "高级",
   "recipeCard.cook": "开始烹饪",
+  "recipeCard.viewSource": "查看源文档",
 
   "paramForm.isRequired": "{{label}} 为必填项",
   "paramForm.tooShort": "{{label}} 太短",

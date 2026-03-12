@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 export function RecipeCard({
   recipe,
   onCook,
+  onViewSource,
   compact,
 }: {
   recipe: Recipe;
   onCook: (id: string) => void;
+  onViewSource?: (id: string) => void;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
@@ -63,9 +65,16 @@ export function RecipeCard({
         </p>
       </CardContent>
       <CardFooter>
-        <Button onClick={() => onCook(recipe.id)}>
-          {t('recipeCard.cook')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => onCook(recipe.id)}>
+            {t('recipeCard.cook')}
+          </Button>
+          {onViewSource && (
+            <Button variant="outline" onClick={() => onViewSource(recipe.id)}>
+              {t('recipeCard.viewSource')}
+            </Button>
+          )}
+        </div>
       </CardFooter>
     </Card>
   );

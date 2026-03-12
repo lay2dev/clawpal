@@ -991,6 +991,7 @@ export function useApi() {
       ),
       getSystemStatus: api.getSystemStatus,
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
+      exportRecipeSource: api.exportRecipeSource,
       listRecipeInstances: localCached(
         "listRecipeInstances",
         4_000,

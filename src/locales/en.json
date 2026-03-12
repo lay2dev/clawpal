@@ -672,6 +672,9 @@
   "recipes.runtimeNoRuns": "No runs yet",
   "recipes.runtimeInstancesForRecipe_one": "{{count}} instance",
   "recipes.runtimeInstancesForRecipe_other": "{{count}} instances",
+  "recipes.sourceDialogTitle": "{{name}} source",
+  "recipes.copySource": "Copy source",
+  "recipes.sourceCopied": "Copied",
 
   "cook.recipeNotFound": "Recipe not found",
   "cook.next": "Next",
@@ -740,6 +743,7 @@
   "recipeCard.normal": "Normal",
   "recipeCard.advanced": "Advanced",
   "recipeCard.cook": "Cook",
+  "recipeCard.viewSource": "View source",
 
   "paramForm.isRequired": "{{label}} is required",
   "paramForm.tooShort": "{{label}} is too short",

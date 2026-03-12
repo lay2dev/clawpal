@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
@@ -7,9 +8,27 @@ use crate::execution_spec::{
 };
 use crate::recipe::{
     render_step_args, render_template_value, step_references_empty_param, validate, Recipe,
-    RecipeStep,
+    RecipeParam, RecipeStep,
 };
-use crate::recipe_bundle::validate_execution_spec_against_bundle;
+use crate::recipe_bundle::{
+    validate_execution_spec_against_bundle, BundleCapabilities, BundleCompatibility,
+    BundleExecution, BundleMetadata, BundleResources, BundleRunner, RecipeBundle,
+};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecipeSourceDocument {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub tags: Vec<String>,
+    pub difficulty: String,
+    pub params: Vec<RecipeParam>,
+    pub steps: Vec<RecipeStep>,
+    pub bundle: RecipeBundle,
+    pub execution_spec_template: ExecutionSpec,
+}
 
 pub fn compile_recipe_to_spec(
     recipe: &Recipe,
@@ -25,6 +44,31 @@ pub fn compile_recipe_to_spec(
     }
 
     compile_step_recipe_to_spec(recipe, params)
+}
+
+pub fn export_recipe_source(recipe: &Recipe) -> Result<String, String> {
+    let execution_spec_template = build_recipe_spec_template(recipe)?;
+    let bundle = canonical_recipe_bundle(recipe, &execution_spec_template);
+    let document = RecipeSourceDocument {
+        id: recipe.id.clone(),
+        name: recipe.name.clone(),
+        description: recipe.description.clone(),
+        version: recipe.version.clone(),
+        tags: recipe.tags.clone(),
+        difficulty: recipe.difficulty.clone(),
+        params: recipe.params.clone(),
+        steps: recipe.steps.clone(),
+        bundle,
+        execution_spec_template,
+    };
+    serde_json::to_string_pretty(&document).map_err(|error| error.to_string())
+}
+
+fn build_recipe_spec_template(recipe: &Recipe) -> Result<ExecutionSpec, String> {
+    if let Some(template) = &recipe.execution_spec_template {
+        return Ok(template.clone());
+    }
+    build_step_recipe_template(recipe)
 }
 
 fn compile_structured_recipe_to_spec(
@@ -114,6 +158,56 @@ fn compile_step_recipe_to_spec(
     Ok(spec)
 }
 
+fn build_step_recipe_template(recipe: &Recipe) -> Result<ExecutionSpec, String> {
+    let mut used_capabilities = Vec::new();
+    let mut claims = Vec::new();
+    let mut actions = Vec::new();
+
+    for step in &recipe.steps {
+        collect_action_requirements(
+            step.action.as_str(),
+            &step.args,
+            &mut used_capabilities,
+            &mut claims,
+        );
+        actions.push(build_recipe_action(step, step.args.clone())?);
+    }
+
+    let execution_kind = if actions
+        .iter()
+        .all(|action| action.kind.as_deref() == Some("config_patch"))
+    {
+        "attachment"
+    } else {
+        "job"
+    };
+
+    Ok(ExecutionSpec {
+        api_version: "strategy.platform/v1".into(),
+        kind: "ExecutionSpec".into(),
+        metadata: ExecutionMetadata {
+            name: Some(recipe.id.clone()),
+            digest: None,
+        },
+        source: Value::Object(Map::new()),
+        target: Value::Object(Map::new()),
+        execution: ExecutionTarget {
+            kind: execution_kind.into(),
+        },
+        capabilities: ExecutionCapabilities { used_capabilities },
+        resources: ExecutionResources { claims },
+        secrets: ExecutionSecrets::default(),
+        desired_state: json!({
+            "actionCount": actions.len(),
+        }),
+        actions,
+        outputs: vec![json!({
+            "kind": "recipe-summary",
+            "recipeId": recipe.id,
+        })],
+    })
+}
+
 fn normalize_recipe_spec(recipe: &Recipe, spec: &mut ExecutionSpec, compiler: &str) {
     if spec.metadata.name.is_none() {
         spec.metadata.name = Some(recipe.id.clone());
@@ -149,6 +243,52 @@ fn validate_recipe_spec(recipe: &Recipe, spec: &ExecutionSpec) -> Result<(), Str
         validate_execution_spec_against_bundle(bundle, spec)
     } else {
         validate_execution_spec(spec)
+    }
+}
+
+fn canonical_recipe_bundle(recipe: &Recipe, spec: &ExecutionSpec) -> RecipeBundle {
+    if let Some(bundle) = &recipe.bundle {
+        return bundle.clone();
+    }
+
+    let allowed_capabilities = spec
+        .capabilities
+        .used_capabilities
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let supported_resource_kinds = spec
+        .resources
+        .claims
+        .iter()
+        .map(|claim| claim.kind.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    RecipeBundle {
+        api_version: "strategy.platform/v1".into(),
+        kind: "StrategyBundle".into(),
+        metadata: BundleMetadata {
+            name: Some(recipe.id.clone()),
+            version: Some(recipe.version.clone()),
+            description: Some(recipe.description.clone()),
+        },
+        compatibility: BundleCompatibility::default(),
+        inputs: Vec::new(),
+        capabilities: BundleCapabilities {
+            allowed: allowed_capabilities,
+        },
+        resources: BundleResources {
+            supported_kinds: supported_resource_kinds,
+        },
+        execution: BundleExecution {
+            supported_kinds: vec![spec.execution.kind.clone()],
+        },
+        runner: BundleRunner::default(),
+        outputs: spec.outputs.clone(),
     }
 }
 

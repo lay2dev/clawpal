@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
-use crate::recipe::builtin_recipes;
-use crate::recipe_adapter::compile_recipe_to_spec;
+use crate::recipe::{builtin_recipes, Recipe, RecipeParam, RecipeStep};
+use crate::recipe_adapter::{compile_recipe_to_spec, export_recipe_source};
 
 fn sample_params() -> Map<String, Value> {
     let mut params = Map::new();
@@ -84,4 +84,59 @@ fn structured_recipe_template_skips_optional_actions_with_empty_params() {
     assert_eq!(spec.actions.len(), 2);
     assert_eq!(spec.actions[0].kind.as_deref(), Some("create_agent"));
     assert_eq!(spec.actions[1].kind.as_deref(), Some("bind_channel"));
+}
+
+#[test]
+fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
+    let recipe = Recipe {
+        id: "legacy-channel-persona".into(),
+        name: "Legacy Channel Persona".into(),
+        description: "Set channel persona with steps only".into(),
+        version: "1.0.0".into(),
+        tags: vec!["discord".into(), "persona".into()],
+        difficulty: "easy".into(),
+        params: vec![
+            RecipeParam {
+                id: "guild_id".into(),
+                label: "Guild".into(),
+                kind: "discord_guild".into(),
+                required: true,
+                pattern: None,
+                min_length: None,
+                max_length: None,
+                placeholder: None,
+                depends_on: None,
+                default_value: None,
+            },
+            RecipeParam {
+                id: "channel_id".into(),
+                label: "Channel".into(),
+                kind: "discord_channel".into(),
+                required: true,
+                pattern: None,
+                min_length: None,
+                max_length: None,
+                placeholder: None,
+                depends_on: None,
+                default_value: None,
+            },
+        ],
+        steps: vec![RecipeStep {
+            action: "config_patch".into(),
+            label: "Set channel persona".into(),
+            args: serde_json::from_value(serde_json::json!({
+                "patchTemplate": "{\"channels\":{\"discord\":{\"guilds\":{\"{{guild_id}}\":{\"channels\":{\"{{channel_id}}\":{\"systemPrompt\":\"hello\"}}}}}}}"
+            }))
+            .expect("step args"),
+        }],
+        bundle: None,
+        execution_spec_template: None,
+    };
+
+    let exported = export_recipe_source(&recipe).expect("export source");
+
+    assert!(exported.contains("\"bundle\""));
+    assert!(exported.contains("\"executionSpecTemplate\""));
+    assert!(exported.contains("\"supportedKinds\": [\n        \"attachment\""));
+    assert!(exported.contains("\"{{guild_id}}\""));
 }

@@ -100,6 +100,8 @@ export const api = {
     invoke("refresh_model_catalog", {}),
   listRecipes: (source?: string): Promise<Recipe[]> =>
     invoke("list_recipes", source ? { source } : {}),
+  exportRecipeSource: (recipeId: string, source?: string): Promise<string> =>
+    invoke("export_recipe_source", { recipeId, source: source ?? null }),
   listRecipeInstances: (): Promise<RecipeRuntimeInstance[]> =>
     invoke("list_recipe_instances", {}),
   listRecipeRuns: (instanceId?: string): Promise<RecipeRuntimeRun[]> =>

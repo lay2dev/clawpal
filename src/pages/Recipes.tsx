@@ -8,6 +8,7 @@ import { AsyncActionButton } from "@/components/ui/AsyncActionButton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useApi } from "@/lib/use-api";
 import { formatTime } from "@/lib/utils";
 
@@ -35,6 +36,9 @@ export function Recipes({
   const [runs, setRuns] = useState<RecipeRuntimeRun[]>(() => initialRuns ?? []);
   const [source, setSource] = useState("");
   const [loadedSource, setLoadedSource] = useState<string | undefined>(undefined);
+  const [sourcePreview, setSourcePreview] = useState<string | null>(null);
+  const [sourcePreviewName, setSourcePreviewName] = useState<string>("");
+  const [copiedSource, setCopiedSource] = useState(false);
 
   const load = async (nextSource: string) => {
     const value = nextSource.trim();
@@ -83,6 +87,28 @@ export function Recipes({
     }
     return counts;
   }, [instances]);
+
+  const handleViewSource = async (recipe: Recipe) => {
+    try {
+      const exported = await ua.exportRecipeSource(recipe.id, loadedSource);
+      setSourcePreviewName(recipe.name);
+      setSourcePreview(exported);
+      setCopiedSource(false);
+    } catch (error) {
+      console.error("Failed to export recipe source:", error);
+    }
+  };
+
+  const handleCopySource = async () => {
+    if (!sourcePreview) return;
+    const writer = navigator?.clipboard?.writeText;
+    if (typeof writer !== "function") {
+      return;
+    }
+    await writer.call(navigator.clipboard, sourcePreview);
+    setCopiedSource(true);
+    window.setTimeout(() => setCopiedSource(false), 1500);
+  };
 
   return (
     <section>
@@ -157,6 +183,7 @@ export function Recipes({
             <RecipeCard
               recipe={recipe}
               onCook={() => onCook(recipe.id, loadedSource)}
+              onViewSource={() => void handleViewSource(recipe)}
             />
             {(latestRunByRecipe.has(recipe.id) || instanceCountByRecipe.has(recipe.id)) && (
               <div className="rounded-xl border bg-muted/20 px-3 py-2 text-xs">
@@ -187,6 +214,29 @@ export function Recipes({
           </div>
         ))}
       </div>
+      <Dialog
+        open={!!sourcePreview}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSourcePreview(null);
+            setCopiedSource(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>{t("recipes.sourceDialogTitle", { name: sourcePreviewName })}</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => void handleCopySource()}>
+              {copiedSource ? t("recipes.sourceCopied") : t("recipes.copySource")}
+            </Button>
+          </div>
+          <pre className="mt-2 flex-1 overflow-auto rounded-xl border bg-muted/20 p-4 text-xs leading-5">
+            <code>{sourcePreview}</code>
+          </pre>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
