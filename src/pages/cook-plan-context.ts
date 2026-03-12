@@ -1,0 +1,147 @@
+import type { PrecheckIssue, RecipePlan } from "@/lib/types";
+
+type CookRouteContext = {
+  instanceId: string;
+  isRemote: boolean;
+  isDocker: boolean;
+};
+
+type BindingEntry = {
+  agentId?: string;
+  match?: {
+    channel?: string;
+    peer?: {
+      id?: string;
+      kind?: string;
+    };
+  };
+};
+
+type ActionRecord = {
+  kind?: unknown;
+  args?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readPath(root: unknown, path: string[]): unknown {
+  let current = root;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function collectPatchLeafWarnings(
+  patch: unknown,
+  currentConfig: unknown,
+  path: string[],
+  warnings: string[],
+) {
+  if (!isRecord(patch)) {
+    const currentValue = readPath(currentConfig, path);
+    if (typeof currentValue === "undefined") {
+      return;
+    }
+    if (JSON.stringify(currentValue) === JSON.stringify(patch)) {
+      return;
+    }
+    warnings.push(
+      `Config path ${path.join(".")} will overwrite existing value.`,
+    );
+    return;
+  }
+
+  for (const [key, value] of Object.entries(patch)) {
+    collectPatchLeafWarnings(value, currentConfig, [...path, key], warnings);
+  }
+}
+
+function collectBindingWarnings(actions: ActionRecord[], config: unknown): string[] {
+  const bindings = Array.isArray((config as { bindings?: unknown })?.bindings)
+    ? ((config as { bindings: unknown[] }).bindings as BindingEntry[])
+    : [];
+
+  const warnings: string[] = [];
+  for (const action of actions) {
+    if (action.kind !== "bind_channel" || !isRecord(action.args)) {
+      continue;
+    }
+
+    const channelType = typeof action.args.channelType === "string" ? action.args.channelType : null;
+    const peerId = typeof action.args.peerId === "string" ? action.args.peerId : null;
+    const agentId = typeof action.args.agentId === "string" ? action.args.agentId : null;
+    if (!channelType || !peerId || !agentId) {
+      continue;
+    }
+
+    const existing = bindings.find(
+      (binding) =>
+        binding.match?.channel === channelType &&
+        binding.match?.peer?.kind === "channel" &&
+        binding.match?.peer?.id === peerId,
+    );
+    if (!existing) {
+      continue;
+    }
+    if (existing.agentId === agentId) {
+      continue;
+    }
+
+    warnings.push(
+      `Channel ${channelType}/${peerId} will be rebound from ${existing.agentId ?? "unknown"} to ${agentId}.`,
+    );
+  }
+
+  return warnings;
+}
+
+function collectConfigPatchWarnings(actions: ActionRecord[], config: unknown): string[] {
+  const warnings: string[] = [];
+  for (const action of actions) {
+    if (action.kind !== "config_patch" || !isRecord(action.args)) {
+      continue;
+    }
+
+    collectPatchLeafWarnings(action.args.patch, config, [], warnings);
+  }
+  return warnings;
+}
+
+export function buildCookRouteSummary(context: CookRouteContext): string {
+  const route = context.isRemote
+    ? "remote_ssh"
+    : (context.isDocker ? "docker_local" : "local");
+  return `${route} -> ${context.instanceId}`;
+}
+
+export function buildCookContextWarnings(
+  plan: RecipePlan,
+  rawConfig: string | null | undefined,
+): string[] {
+  if (!rawConfig) {
+    return [];
+  }
+
+  let parsedConfig: unknown;
+  try {
+    parsedConfig = JSON.parse(rawConfig);
+  } catch {
+    return [];
+  }
+
+  const actions = plan.executionSpec.actions.filter(isRecord) as ActionRecord[];
+  return [
+    ...collectBindingWarnings(actions, parsedConfig),
+    ...collectConfigPatchWarnings(actions, parsedConfig),
+  ];
+}
+
+export function hasBlockingAuthIssues(issues: PrecheckIssue[]): boolean {
+  return issues.some((issue) => issue.severity === "error");
+}

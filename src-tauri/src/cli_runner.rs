@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
@@ -8,6 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::models::resolve_paths;
+use crate::recipe_executor::MaterializedExecutionPlan;
 use crate::ssh::SshConnectionPool;
 
 static ACTIVE_OPENCLAW_HOME_OVERRIDE: LazyLock<Mutex<Option<String>>> =
@@ -171,6 +173,131 @@ fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, Str
     cmd_str
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn allowlisted_systemd_host_command_kind(command: &[String]) -> Option<&'static str> {
+    match command {
+        [bin, ..] if bin == "systemd-run" => Some("systemd-run"),
+        [bin, user, action, ..]
+            if bin == "systemctl"
+                && user == "--user"
+                && matches!(action.as_str(), "stop" | "reset-failed" | "daemon-reload") =>
+        {
+            Some("systemctl")
+        }
+        _ => None,
+    }
+}
+
+fn is_allowlisted_systemd_host_command(command: &[String]) -> bool {
+    allowlisted_systemd_host_command_kind(command).is_some()
+}
+
+fn build_remote_shell_command(
+    command: &[String],
+    env: Option<&HashMap<String, String>>,
+) -> Result<String, String> {
+    if command.is_empty() {
+        return Err("host command is empty".to_string());
+    }
+
+    let mut shell = String::new();
+    if let Some(env_vars) = env {
+        for (key, value) in env_vars {
+            shell.push_str(&format!("export {}={}; ", key, shell_quote(value)));
+        }
+    }
+    shell.push_str(
+        &command
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    Ok(shell)
+}
+
+fn run_local_host_command(
+    command: &[String],
+    env: Option<&HashMap<String, String>>,
+) -> Result<CliOutput, String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| "host command is empty".to_string())?;
+    let mut process = std::process::Command::new(program);
+    process.args(args);
+    if let Some(env_vars) = env {
+        process.envs(env_vars);
+    }
+    let output = process.output().map_err(|error| {
+        format!(
+            "failed to start host command '{}': {}",
+            command.join(" "),
+            error
+        )
+    })?;
+    Ok(CliOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(1),
+    })
+}
+
+fn run_allowlisted_systemd_local_command(command: &[String]) -> Result<Option<CliOutput>, String> {
+    if !is_allowlisted_systemd_host_command(command) {
+        return Ok(None);
+    }
+    run_local_host_command(command, None).map(Some)
+}
+
+async fn run_allowlisted_systemd_remote_command(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    command: &[String],
+) -> Result<Option<CliOutput>, String> {
+    if !is_allowlisted_systemd_host_command(command) {
+        return Ok(None);
+    }
+    let shell = build_remote_shell_command(command, None)?;
+    let output = pool.exec_login(host_id, &shell).await?;
+    Ok(Some(CliOutput {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.exit_code as i32,
+    }))
+}
+
+fn systemd_dropin_relative_path(target: &str, name: &str) -> String {
+    format!("~/.config/systemd/user/{}.d/{}", target, name)
+}
+
+fn write_local_systemd_dropin(target: &str, name: &str, content: &str) -> Result<(), String> {
+    let path =
+        PathBuf::from(shellexpand::tilde(&systemd_dropin_relative_path(target, name)).to_string());
+    crate::config_io::write_text(path.as_path(), content)
+}
+
+async fn write_remote_systemd_dropin(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    target: &str,
+    name: &str,
+    content: &str,
+) -> Result<(), String> {
+    let dir = format!("~/.config/systemd/user/{}.d", target);
+    let resolved_dir = pool.resolve_path(host_id, &dir).await?;
+    pool.exec(host_id, &format!("mkdir -p {}", shell_quote(&resolved_dir)))
+        .await?;
+    pool.sftp_write(
+        host_id,
+        &systemd_dropin_relative_path(target, name),
+        content,
+    )
+    .await
+}
+
 pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
     clawpal_core::openclaw::parse_json_output(output).map_err(|e| e.to_string())
 }
@@ -198,6 +325,51 @@ mod tests {
         let cmd = build_remote_openclaw_command(&["config", "get", "a'b"], Some(&env));
         assert!(cmd.contains("export OPENCLAW_HOME='/tmp/a'\\''b';"));
         assert!(cmd.contains(" 'a'\\''b'"));
+    }
+
+    #[test]
+    fn allowlisted_systemd_host_commands_are_restricted_to_expected_shapes() {
+        assert!(is_allowlisted_systemd_host_command(&[
+            "systemd-run".into(),
+            "--unit=clawpal-job-hourly".into(),
+            "--".into(),
+            "openclaw".into(),
+            "doctor".into(),
+            "run".into(),
+        ]));
+        assert!(is_allowlisted_systemd_host_command(&[
+            "systemctl".into(),
+            "--user".into(),
+            "daemon-reload".into(),
+        ]));
+        assert!(!is_allowlisted_systemd_host_command(&[
+            "systemctl".into(),
+            "--system".into(),
+            "daemon-reload".into(),
+        ]));
+        assert!(!is_allowlisted_systemd_host_command(&[
+            "bash".into(),
+            "-lc".into(),
+            "echo nope".into(),
+        ]));
+    }
+
+    #[test]
+    fn rollback_command_supports_snapshot_id_prefix() {
+        let command = vec![
+            "__rollback__".to_string(),
+            "snapshot_01".to_string(),
+            "{\"ok\":true}".to_string(),
+        ];
+
+        assert_eq!(
+            rollback_command_snapshot_id(&command).as_deref(),
+            Some("snapshot_01")
+        );
+        assert_eq!(
+            rollback_command_content(&command).expect("rollback content"),
+            "{\"ok\":true}"
+        );
     }
 
     #[test]
@@ -358,6 +530,54 @@ mod tests {
     }
 
     #[test]
+    fn preview_direct_apply_skips_allowlisted_systemd_commands() {
+        let mut config = json!({"gateway": {"port": 18789}});
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Run hourly job".into(),
+            command: vec![
+                "systemd-run".into(),
+                "--unit=clawpal-job-hourly".into(),
+                "--".into(),
+                "openclaw".into(),
+                "doctor".into(),
+                "run".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let touched = apply_direct_preview_command(&mut config, &host_cmd)
+            .expect("preview should accept allowlisted host command")
+            .expect("host command should be handled directly");
+
+        assert_eq!(config["gateway"]["port"], json!(18789));
+        assert!(!touched.agents && !touched.channels && !touched.bindings && !touched.generic);
+    }
+
+    #[test]
+    fn preview_direct_apply_skips_internal_systemd_dropin_write_command() {
+        let mut config = json!({"gateway": {"port": 18789}});
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Write drop-in".into(),
+            command: vec![
+                crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND.into(),
+                "openclaw-gateway.service".into(),
+                "10-env.conf".into(),
+                "[Service]\nEnvironment=OPENCLAW_CHANNEL=discord".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let touched = apply_direct_preview_command(&mut config, &host_cmd)
+            .expect("preview should accept internal drop-in write")
+            .expect("drop-in write should be handled directly");
+
+        assert_eq!(config["gateway"]["port"], json!(18789));
+        assert!(!touched.agents && !touched.channels && !touched.bindings && !touched.generic);
+    }
+
+    #[test]
     fn preview_side_effect_warning_marks_agent_commands() {
         let add_cmd = PendingCommand {
             id: "1".into(),
@@ -388,6 +608,41 @@ mod tests {
         assert!(preview_side_effect_warning(&delete_cmd)
             .expect("delete warning")
             .contains("filesystem cleanup"));
+    }
+
+    #[test]
+    fn preview_side_effect_warning_marks_systemd_commands() {
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Run hourly job".into(),
+            command: vec![
+                "systemd-run".into(),
+                "--unit=clawpal-job-hourly".into(),
+                "--".into(),
+                "openclaw".into(),
+                "doctor".into(),
+                "run".into(),
+            ],
+            created_at: String::new(),
+        };
+        let drop_in_cmd = PendingCommand {
+            id: "2".into(),
+            label: "Write drop-in".into(),
+            command: vec![
+                crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND.into(),
+                "openclaw-gateway.service".into(),
+                "10-env.conf".into(),
+                "[Service]\nEnvironment=OPENCLAW_CHANNEL=discord".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        assert!(preview_side_effect_warning(&host_cmd)
+            .expect("systemd warning")
+            .contains("host-side systemd changes"));
+        assert!(preview_side_effect_warning(&drop_in_cmd)
+            .expect("drop-in warning")
+            .contains("does not write systemd drop-in"));
     }
 }
 
@@ -455,6 +710,26 @@ impl Default for CommandQueue {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn enqueue_materialized_plan(
+    queue: &CommandQueue,
+    plan: &MaterializedExecutionPlan,
+) -> Vec<PendingCommand> {
+    plan.commands
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let label = format!(
+                "[{}] {} ({}/{})",
+                plan.execution_kind,
+                plan.unit_name,
+                index + 1,
+                plan.commands.len()
+            );
+            queue.enqueue(label, command.clone())
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +1082,9 @@ fn apply_direct_preview_command(
     };
 
     match first {
+        crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND => {
+            return Ok(Some(PreviewTouchedDomains::default()));
+        }
         "__config_write__" | "__rollback__" => {
             let Some(content) = cmd.command.get(1) else {
                 return Err(format!("{}: missing config payload", cmd.label));
@@ -817,6 +1095,9 @@ fn apply_direct_preview_command(
             return Ok(Some(touched));
         }
         "openclaw" => {}
+        _ if is_allowlisted_systemd_host_command(&cmd.command) => {
+            return Ok(Some(PreviewTouchedDomains::default()));
+        }
         _ => return Ok(None),
     }
 
@@ -901,23 +1182,44 @@ fn apply_direct_preview_command(
 }
 
 fn preview_side_effect_warning(cmd: &PendingCommand) -> Option<String> {
+    if cmd.command.first().map(|value| value.as_str())
+        == Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND)
+    {
+        let target = cmd.command.get(1).map(String::as_str).unwrap_or("systemd");
+        let name = cmd.command.get(2).map(String::as_str).unwrap_or("drop-in");
+        return Some(format!(
+            "{}: preview does not write systemd drop-in '{}:{}'; file creation will run during apply.",
+            cmd.label, target, name
+        ));
+    }
+
+    if let Some(kind) = allowlisted_systemd_host_command_kind(&cmd.command) {
+        return Some(format!(
+            "{}: preview does not execute allowlisted {} command '{}'; host-side systemd changes will run during apply.",
+            cmd.label,
+            kind,
+            cmd.command.join(" ")
+        ));
+    }
+
     let [bin, category, action, target, ..] = cmd.command.as_slice() else {
         return None;
     };
-    if bin != "openclaw" || category != "agents" {
-        return None;
+    if bin == "openclaw" && category == "agents" {
+        return match action.as_str() {
+            "add" => Some(format!(
+                "{}: preview only validates config changes; agent workspace/filesystem setup for '{}' will run during apply.",
+                cmd.label, target
+            )),
+            "delete" => Some(format!(
+                "{}: preview only validates config changes; any filesystem cleanup for '{}' is not simulated.",
+                cmd.label, target
+            )),
+            _ => None,
+        };
     }
-    match action.as_str() {
-        "add" => Some(format!(
-            "{}: preview only validates config changes; agent workspace/filesystem setup for '{}' will run during apply.",
-            cmd.label, target
-        )),
-        "delete" => Some(format!(
-            "{}: preview only validates config changes; any filesystem cleanup for '{}' is not simulated.",
-            cmd.label, target
-        )),
-        _ => None,
-    }
+
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1196,10 +1498,147 @@ pub struct ApplyQueueResult {
     pub rolled_back: bool,
 }
 
+fn rollback_command_snapshot_id(command: &[String]) -> Option<String> {
+    if command.first().map(|value| value.as_str()) != Some("__rollback__") {
+        return None;
+    }
+    if command.len() >= 3 {
+        return command
+            .get(1)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+    None
+}
+
+fn rollback_command_content(command: &[String]) -> Result<String, String> {
+    match command.first().map(|value| value.as_str()) {
+        Some("__rollback__") if command.len() >= 3 => command
+            .get(2)
+            .cloned()
+            .ok_or_else(|| "internal rollback is missing content".to_string()),
+        Some("__rollback__") | Some("__config_write__") => command
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "internal config write is missing content".to_string()),
+        _ => command
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "internal config write is missing content".to_string()),
+    }
+}
+
+fn apply_internal_local_command(
+    paths: &crate::models::OpenClawPaths,
+    command: &[String],
+) -> Result<bool, String> {
+    fn content(command: &[String]) -> Result<String, String> {
+        rollback_command_content(command)
+    }
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = content(command)?;
+            crate::config_io::write_text(&paths.config_path, &content)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let agent_id = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            let name = command
+                .get(2)
+                .ok_or_else(|| "setup_identity command missing name".to_string())?;
+            crate::agent_identity::write_local_agent_identity(
+                paths,
+                agent_id,
+                name,
+                command.get(3).map(String::as_str),
+            )?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND) => {
+            let target = command
+                .get(1)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing target unit".to_string())?;
+            let name = command
+                .get(2)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing name".to_string())?;
+            let content = command
+                .get(3)
+                .map(String::as_str)
+                .ok_or_else(|| "systemd drop-in command missing content".to_string())?;
+            write_local_systemd_dropin(target, name, content)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+async fn apply_internal_remote_command(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    command: &[String],
+) -> Result<bool, String> {
+    fn content(command: &[String]) -> Result<String, String> {
+        rollback_command_content(command)
+    }
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = content(command)?;
+            pool.sftp_write(host_id, "~/.openclaw/openclaw.json", &content)
+                .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let agent_id = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            let name = command
+                .get(2)
+                .ok_or_else(|| "setup_identity command missing name".to_string())?;
+            crate::agent_identity::write_remote_agent_identity(
+                pool,
+                host_id,
+                agent_id,
+                name,
+                command.get(3).map(String::as_str),
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND) => {
+            let target = command
+                .get(1)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing target unit".to_string())?;
+            let name = command
+                .get(2)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing name".to_string())?;
+            let content = command
+                .get(3)
+                .map(String::as_str)
+                .ok_or_else(|| "systemd drop-in command missing content".to_string())?;
+            write_remote_systemd_dropin(pool, host_id, target, name, content).await?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 #[tauri::command]
 pub async fn apply_queued_commands(
     queue: tauri::State<'_, CommandQueue>,
     cache: tauri::State<'_, CliCache>,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queue.list();
     if commands.is_empty() {
@@ -1232,47 +1671,57 @@ pub async fn apply_queued_commands(
             .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
         let source = if is_rollback { "rollback" } else { "clawpal" };
         let can_rollback = !is_rollback;
+        let snapshot_recipe_id = snapshot_recipe_id
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(summary);
         let _ = crate::history::add_snapshot(
             &paths.history_dir,
             &paths.metadata_path,
-            Some(summary),
+            Some(snapshot_recipe_id),
             source,
             can_rollback,
             &config_before,
+            run_id.clone(),
             None,
+            snapshot_artifacts.clone().unwrap_or_default(),
         );
 
         // Execute each command for real
         let mut applied_count = 0;
         for cmd in &commands {
-            if matches!(
-                cmd.command.first().map(|s| s.as_str()),
-                Some("__config_write__") | Some("__rollback__")
-            ) {
-                // Internal command: write config content directly
-                if let Some(content) = cmd.command.get(1) {
-                    if let Err(e) = crate::config_io::write_text(&paths.config_path, content) {
-                        let _ = crate::config_io::write_text(&paths.config_path, &config_before);
-                        queue_handle.clear();
-                        return Ok(ApplyQueueResult {
-                            ok: false,
-                            applied_count,
-                            total_count,
-                            error: Some(format!(
-                                "Step {} failed ({}): {}",
-                                applied_count + 1,
-                                cmd.label,
-                                e
-                            )),
-                            rolled_back: true,
-                        });
-                    }
+            match apply_internal_local_command(&paths, &cmd.command) {
+                Ok(true) => {
+                    applied_count += 1;
+                    continue;
                 }
-                applied_count += 1;
-                continue;
+                Ok(false) => {}
+                Err(e) => {
+                    let _ = crate::config_io::write_text(&paths.config_path, &config_before);
+                    queue_handle.clear();
+                    return Ok(ApplyQueueResult {
+                        ok: false,
+                        applied_count,
+                        total_count,
+                        error: Some(format!(
+                            "Step {} failed ({}): {}",
+                            applied_count + 1,
+                            cmd.label,
+                            e
+                        )),
+                        rolled_back: true,
+                    });
+                }
             }
-            let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
-            let result = run_openclaw(&args);
+            let result = match run_allowlisted_systemd_local_command(&cmd.command) {
+                Ok(Some(output)) => Ok(output),
+                Ok(None) => {
+                    let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
+                    run_openclaw(&args)
+                }
+                Err(error) => Err(error),
+            };
             match result {
                 Ok(output) if output.exit_code != 0 => {
                     let detail = if !output.stderr.is_empty() {
@@ -1410,6 +1859,27 @@ impl Default for RemoteCommandQueues {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn enqueue_materialized_plan_remote(
+    queues: &RemoteCommandQueues,
+    host_id: &str,
+    plan: &MaterializedExecutionPlan,
+) -> Vec<PendingCommand> {
+    plan.commands
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let label = format!(
+                "[{}] {} ({}/{})",
+                plan.execution_kind,
+                plan.unit_name,
+                index + 1,
+                plan.commands.len()
+            );
+            queues.enqueue(host_id, label, command.clone())
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1732,6 +2202,9 @@ pub async fn remote_apply_queued_commands(
     pool: tauri::State<'_, SshConnectionPool>,
     queues: tauri::State<'_, RemoteCommandQueues>,
     host_id: String,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queues.list(&host_id);
     if commands.is_empty() {
@@ -1771,44 +2244,70 @@ pub async fn remote_apply_queued_commands(
     let _ = pool
         .sftp_write(&host_id, &snapshot_path, &config_before)
         .await;
+    let snapshot_recipe_id = snapshot_recipe_id
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(summary.clone());
+    let snapshot_created_at = chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_else(|| ts.to_string());
+    let _ = crate::commands::config::record_remote_snapshot_metadata(
+        &pool,
+        &host_id,
+        crate::history::SnapshotMeta {
+            id: snapshot_filename.clone(),
+            recipe_id: Some(snapshot_recipe_id),
+            created_at: snapshot_created_at,
+            config_path: snapshot_path.clone(),
+            source: source.into(),
+            can_rollback: !is_rollback,
+            run_id: run_id.clone(),
+            rollback_of: None,
+            artifacts: snapshot_artifacts.clone().unwrap_or_default(),
+        },
+    )
+    .await;
 
     // Execute each command
     let mut applied_count = 0;
     for cmd in &commands {
-        // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(
-            cmd.command.first().map(|s| s.as_str()),
-            Some("__config_write__") | Some("__rollback__")
-        ) {
-            if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool
-                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", content)
-                    .await
-                {
-                    let _ = pool
-                        .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
-                        .await;
-                    queues.clear(&host_id);
-                    return Ok(ApplyQueueResult {
-                        ok: false,
-                        applied_count,
-                        total_count,
-                        error: Some(format!(
-                            "Step {} failed ({}): {}",
-                            applied_count + 1,
-                            cmd.label,
-                            e
-                        )),
-                        rolled_back: true,
-                    });
-                }
+        match apply_internal_remote_command(&pool, &host_id, &cmd.command).await {
+            Ok(true) => {
+                applied_count += 1;
+                continue;
             }
-            applied_count += 1;
-            continue;
+            Ok(false) => {}
+            Err(e) => {
+                let _ = pool
+                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
+                    .await;
+                queues.clear(&host_id);
+                return Ok(ApplyQueueResult {
+                    ok: false,
+                    applied_count,
+                    total_count,
+                    error: Some(format!(
+                        "Step {} failed ({}): {}",
+                        applied_count + 1,
+                        cmd.label,
+                        e
+                    )),
+                    rolled_back: true,
+                });
+            }
         }
 
-        let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
-        match run_openclaw_remote(&pool, &host_id, &args).await {
+        let result =
+            match run_allowlisted_systemd_remote_command(&pool, &host_id, &cmd.command).await {
+                Ok(Some(output)) => Ok(output),
+                Ok(None) => {
+                    let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
+                    run_openclaw_remote(&pool, &host_id, &args).await
+                }
+                Err(error) => Err(error),
+            };
+        match result {
             Ok(output) if output.exit_code != 0 => {
                 let detail = if !output.stderr.is_empty() {
                     output.stderr.clone()

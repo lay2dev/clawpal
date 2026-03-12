@@ -6,11 +6,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::execution_spec::ExecutionSpec;
+use crate::recipe_bundle::RecipeBundle;
+use crate::{
+    execution_spec::validate_execution_spec,
+    recipe_adapter::{build_recipe_spec_template, canonical_recipe_bundle},
+    recipe_bundle::validate_execution_spec_against_bundle,
+};
+
 const BUILTIN_RECIPES_JSON: &str = include_str!("../recipes.json");
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum RecipeDocument {
+    Single(Recipe),
     List(Vec<Recipe>),
     Wrapped { recipes: Vec<Recipe> },
 }
@@ -56,6 +65,10 @@ pub struct Recipe {
     pub difficulty: String,
     pub params: Vec<RecipeParam>,
     pub steps: Vec<RecipeStep>,
+    #[serde(skip_serializing, default)]
+    pub bundle: Option<RecipeBundle>,
+    #[serde(skip_serializing, default)]
+    pub execution_spec_template: Option<ExecutionSpec>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -91,6 +104,27 @@ pub struct ApplyResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeSourceDiagnostic {
+    pub category: String,
+    pub severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipe_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeSourceDiagnostics {
+    #[serde(default)]
+    pub errors: Vec<RecipeSourceDiagnostic>,
+    #[serde(default)]
+    pub warnings: Vec<RecipeSourceDiagnostic>,
+}
+
 pub fn builtin_recipes() -> Vec<Recipe> {
     parse_recipes_document(BUILTIN_RECIPES_JSON).unwrap_or_else(|_| Vec::new())
 }
@@ -111,9 +145,17 @@ fn expand_user_path(candidate: &str) -> PathBuf {
 fn parse_recipes_document(text: &str) -> Result<Vec<Recipe>, String> {
     let document: RecipeDocument = json5::from_str(text).map_err(|e| e.to_string())?;
     match document {
+        RecipeDocument::Single(recipe) => Ok(vec![recipe]),
         RecipeDocument::List(recipes) => Ok(recipes),
         RecipeDocument::Wrapped { recipes } => Ok(recipes),
     }
+}
+
+pub fn load_recipes_from_source_text(text: &str) -> Result<Vec<Recipe>, String> {
+    if text.trim().is_empty() {
+        return Err("empty recipe source".into());
+    }
+    parse_recipes_document(text)
 }
 
 pub fn load_recipes_from_source(source: &str) -> Result<Vec<Recipe>, String> {
@@ -127,7 +169,7 @@ pub fn load_recipes_from_source(source: &str) -> Result<Vec<Recipe>, String> {
             return Err(format!("request failed: {}", response.status()));
         }
         let text = response.text().map_err(|e| e.to_string())?;
-        parse_recipes_document(&text)
+        load_recipes_from_source_text(&text)
     } else {
         let path = expand_user_path(source);
         let path = Path::new(&path);
@@ -135,7 +177,7 @@ pub fn load_recipes_from_source(source: &str) -> Result<Vec<Recipe>, String> {
             return Err(format!("recipe file not found: {}", path.to_string_lossy()));
         }
         let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        parse_recipes_document(&text)
+        load_recipes_from_source_text(&text)
     }
 }
 
@@ -175,6 +217,84 @@ pub fn find_recipe_with_source(id: &str, source: Option<String>) -> Option<Recip
     load_recipes_with_fallback(source, &default_path)
         .into_iter()
         .find(|r| r.id == id)
+}
+
+pub fn validate_recipe_source(text: &str) -> Result<RecipeSourceDiagnostics, String> {
+    let mut diagnostics = RecipeSourceDiagnostics::default();
+    let recipes = match load_recipes_from_source_text(text) {
+        Ok(recipes) => recipes,
+        Err(error) => {
+            diagnostics.errors.push(RecipeSourceDiagnostic {
+                category: "parse".into(),
+                severity: "error".into(),
+                recipe_id: None,
+                path: None,
+                message: error,
+            });
+            return Ok(diagnostics);
+        }
+    };
+
+    for recipe in &recipes {
+        validate_recipe_definition(recipe, &mut diagnostics);
+    }
+
+    Ok(diagnostics)
+}
+
+fn validate_recipe_definition(recipe: &Recipe, diagnostics: &mut RecipeSourceDiagnostics) {
+    if let Some(template) = &recipe.execution_spec_template {
+        if template.actions.len() != recipe.steps.len() {
+            diagnostics.errors.push(RecipeSourceDiagnostic {
+                category: "alignment".into(),
+                severity: "error".into(),
+                recipe_id: Some(recipe.id.clone()),
+                path: Some("steps".into()),
+                message: format!(
+                    "recipe '{}' declares {} UI step(s) but {} execution action(s)",
+                    recipe.id,
+                    recipe.steps.len(),
+                    template.actions.len()
+                ),
+            });
+        }
+    }
+
+    let spec = match build_recipe_spec_template(recipe) {
+        Ok(spec) => spec,
+        Err(error) => {
+            diagnostics.errors.push(RecipeSourceDiagnostic {
+                category: "schema".into(),
+                severity: "error".into(),
+                recipe_id: Some(recipe.id.clone()),
+                path: Some("executionSpecTemplate".into()),
+                message: error,
+            });
+            return;
+        }
+    };
+
+    if let Err(error) = validate_execution_spec(&spec) {
+        diagnostics.errors.push(RecipeSourceDiagnostic {
+            category: "schema".into(),
+            severity: "error".into(),
+            recipe_id: Some(recipe.id.clone()),
+            path: Some("executionSpecTemplate".into()),
+            message: error,
+        });
+        return;
+    }
+
+    let bundle = canonical_recipe_bundle(recipe, &spec);
+    if let Err(error) = validate_execution_spec_against_bundle(&bundle, &spec) {
+        diagnostics.errors.push(RecipeSourceDiagnostic {
+            category: "bundle".into(),
+            severity: "error".into(),
+            recipe_id: Some(recipe.id.clone()),
+            path: Some("bundle".into()),
+            message: error,
+        });
+    }
 }
 
 pub fn validate(recipe: &Recipe, params: &Map<String, Value>) -> Vec<String> {
@@ -218,17 +338,106 @@ pub fn validate(recipe: &Recipe, params: &Map<String, Value>) -> Vec<String> {
     errors
 }
 
-fn render_patch_template(template: &str, params: &Map<String, Value>) -> String {
+fn param_value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        _ => value.to_string(),
+    }
+}
+
+fn extract_placeholders(text: &str) -> Vec<String> {
+    Regex::new(r"\{\{(\w+)\}\}")
+        .ok()
+        .map(|regex| {
+            regex
+                .captures_iter(text)
+                .filter_map(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn render_template_string(template: &str, params: &Map<String, Value>) -> String {
     let mut text = template.to_string();
     for (k, v) in params {
         let placeholder = format!("{{{{{}}}}}", k);
-        let replacement = match v {
-            Value::String(s) => s.clone(),
-            _ => v.to_string(),
-        };
+        let replacement = param_value_to_string(v);
         text = text.replace(&placeholder, &replacement);
     }
     text
+}
+
+pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Value {
+    match value {
+        Value::String(text) => {
+            if let Some(param_id) = text
+                .strip_prefix("{{")
+                .and_then(|rest| rest.strip_suffix("}}"))
+            {
+                if param_id
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                {
+                    return params
+                        .get(param_id)
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()));
+                }
+            }
+            Value::String(render_template_string(text, params))
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| render_template_value(item, params))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        render_template_string(key, params),
+                        render_template_value(value, params),
+                    )
+                })
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+pub fn render_step_args(
+    args: &Map<String, Value>,
+    params: &Map<String, Value>,
+) -> Map<String, Value> {
+    args.iter()
+        .map(|(key, value)| (key.clone(), render_template_value(value, params)))
+        .collect()
+}
+
+pub fn step_references_empty_param(step: &RecipeStep, params: &Map<String, Value>) -> bool {
+    fn value_references_empty_param(value: &Value, params: &Map<String, Value>) -> bool {
+        match value {
+            Value::String(text) => extract_placeholders(text).into_iter().any(|param_id| {
+                params
+                    .get(&param_id)
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(false)
+            }),
+            Value::Array(items) => items
+                .iter()
+                .any(|item| value_references_empty_param(item, params)),
+            Value::Object(map) => map
+                .values()
+                .any(|item| value_references_empty_param(item, params)),
+            _ => false,
+        }
+    }
+
+    step.args
+        .values()
+        .any(|value| value_references_empty_param(value, params))
 }
 
 pub fn build_candidate_config_from_template(
@@ -236,7 +445,7 @@ pub fn build_candidate_config_from_template(
     template: &str,
     params: &Map<String, Value>,
 ) -> Result<(Value, Vec<ChangeItem>), String> {
-    let rendered = render_patch_template(template, params);
+    let rendered = render_template_string(template, params);
     let patch: Value = json5::from_str(&rendered).map_err(|e| e.to_string())?;
     let mut merged = current.clone();
     let mut changes = Vec::new();

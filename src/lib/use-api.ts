@@ -781,6 +781,7 @@ export function useApi() {
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),
       fixIssues: withInvalidation(dispatch(api.fixIssues, api.remoteFixIssues)),
+      precheckAuth: localCached("precheckAuth", 5_000, api.precheckAuth),
 
       // History
       listHistory: dispatchCached(
@@ -990,6 +991,49 @@ export function useApi() {
       ),
       getSystemStatus: api.getSystemStatus,
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
+      listRecipesFromSourceText: api.listRecipesFromSourceText,
+      listRecipeWorkspaceEntries: localCached(
+        "listRecipeWorkspaceEntries",
+        4_000,
+        api.listRecipeWorkspaceEntries,
+      ),
+      readRecipeWorkspaceSource: localCached(
+        "readRecipeWorkspaceSource",
+        4_000,
+        api.readRecipeWorkspaceSource,
+      ),
+      saveRecipeWorkspaceSource: withInvalidation(
+        api.saveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      deleteRecipeWorkspaceSource: withInvalidation(
+        api.deleteRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      exportRecipeSource: api.exportRecipeSource,
+      validateRecipeSourceText: api.validateRecipeSourceText,
+      listRecipeInstances: localCached(
+        "listRecipeInstances",
+        4_000,
+        api.listRecipeInstances,
+      ),
+      listRecipeRuns: localCached("listRecipeRuns", 4_000, api.listRecipeRuns),
+      planRecipe: localCached("planRecipe", 5_000, api.planRecipe),
+      planRecipeSource: api.planRecipeSource,
+      executeRecipe: withInvalidation(api.executeRecipe, [
+        "listHistory",
+        "listRecipeInstances",
+        "listRecipeRuns",
+        "listBindings",
+        "listAgentsOverview",
+        "getInstanceRuntimeSnapshot",
+        "getChannelsRuntimeSnapshot",
+        "getStatusExtra",
+        "listQueuedCommands",
+        "queuedCommandsCount",
+        "previewQueuedCommands",
+        "getSystemStatus",
+      ]),
       connectDockerInstance: api.connectDockerInstance,
       listInstallMethods: localCached(
         "installListMethods",

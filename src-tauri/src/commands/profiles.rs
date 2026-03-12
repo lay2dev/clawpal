@@ -385,7 +385,7 @@ async fn read_remote_profiles_storage_text(
     }
 }
 
-async fn collect_remote_profiles_from_openclaw(
+pub(super) async fn collect_remote_profiles_from_openclaw(
     pool: &SshConnectionPool,
     host_id: &str,
     persist_storage: bool,
@@ -408,6 +408,43 @@ async fn collect_remote_profiles_from_openclaw(
     }
 
     Ok((next_profiles, result))
+}
+
+pub(super) async fn resolve_remote_api_keys_for_profiles(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    profiles: &[ModelProfile],
+) -> Vec<ResolvedApiKey> {
+    let auth_cache = RemoteAuthCache::build(pool, host_id, profiles).await.ok();
+
+    let mut out = Vec::new();
+    for profile in profiles {
+        let (resolved_key, source) = if let Some(ref cache) = auth_cache {
+            if let Some((key, source)) = cache.resolve_for_profile_with_source(profile) {
+                (key, Some(source))
+            } else {
+                (String::new(), None)
+            }
+        } else {
+            match resolve_remote_profile_api_key(pool, host_id, profile).await {
+                Ok(key) => (key, None),
+                Err(_) => (String::new(), None),
+            }
+        };
+        let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
+            Some(true)
+        } else {
+            None
+        };
+        out.push(build_resolved_api_key(
+            profile,
+            &resolved_key,
+            source,
+            resolved_override,
+        ));
+    }
+
+    out
 }
 
 #[tauri::command]
@@ -466,37 +503,7 @@ pub async fn remote_resolve_api_keys(
     host_id: String,
 ) -> Result<Vec<ResolvedApiKey>, String> {
     let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles)
-        .await
-        .ok();
-
-    let mut out = Vec::new();
-    for profile in &profiles {
-        let (resolved_key, source) = if let Some(ref cache) = auth_cache {
-            if let Some((key, source)) = cache.resolve_for_profile_with_source(profile) {
-                (key, Some(source))
-            } else {
-                (String::new(), None)
-            }
-        } else {
-            match resolve_remote_profile_api_key(&pool, &host_id, profile).await {
-                Ok(key) => (key, None),
-                Err(_) => (String::new(), None),
-            }
-        };
-        let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
-            Some(true)
-        } else {
-            None
-        };
-        out.push(build_resolved_api_key(
-            profile,
-            &resolved_key,
-            source,
-            resolved_override,
-        ));
-    }
-    Ok(out)
+    Ok(resolve_remote_api_keys_for_profiles(&pool, &host_id, &profiles).await)
 }
 
 #[tauri::command]
