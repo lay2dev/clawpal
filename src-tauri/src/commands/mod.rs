@@ -106,6 +106,7 @@ use crate::recipe::{
 };
 use crate::recipe_adapter::export_recipe_source as export_recipe_source_document;
 use crate::recipe_planner::{build_recipe_plan, RecipePlan};
+use crate::recipe_workspace::{RecipeSourceSaveResult, RecipeWorkspace, RecipeWorkspaceEntry};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1236,6 +1237,30 @@ pub fn list_recipes(source: Option<String>) -> Result<Vec<crate::recipe::Recipe>
     let paths = resolve_paths();
     let default_path = paths.clawpal_dir.join("recipes").join("recipes.json");
     Ok(load_recipes_with_fallback(source, &default_path))
+}
+
+#[tauri::command]
+pub fn list_recipe_workspace_entries() -> Result<Vec<RecipeWorkspaceEntry>, String> {
+    RecipeWorkspace::from_resolved_paths().list_entries()
+}
+
+#[tauri::command]
+pub fn read_recipe_workspace_source(slug: String) -> Result<String, String> {
+    RecipeWorkspace::from_resolved_paths().read_recipe_source(&slug)
+}
+
+#[tauri::command]
+pub fn save_recipe_workspace_source(
+    slug: String,
+    source: String,
+) -> Result<RecipeSourceSaveResult, String> {
+    RecipeWorkspace::from_resolved_paths().save_recipe_source(&slug, &source)
+}
+
+#[tauri::command]
+pub fn delete_recipe_workspace_source(slug: String) -> Result<bool, String> {
+    RecipeWorkspace::from_resolved_paths().delete_recipe_source(&slug)?;
+    Ok(true)
 }
 
 #[tauri::command]

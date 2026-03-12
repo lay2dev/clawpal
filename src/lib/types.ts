@@ -49,6 +49,16 @@ export interface Recipe {
   steps: RecipeStep[];
 }
 
+export interface RecipeWorkspaceEntry {
+  slug: string;
+  path: string;
+}
+
+export interface RecipeSourceSaveResult {
+  slug: string;
+  path: string;
+}
+
 export interface ChangeItem {
   path: string;
   op: string;

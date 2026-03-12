@@ -1,0 +1,107 @@
+use std::fs;
+use std::path::PathBuf;
+
+use uuid::Uuid;
+
+use crate::recipe_workspace::RecipeWorkspace;
+
+const SAMPLE_SOURCE: &str = r#"{
+  "id": "channel-persona",
+  "name": "Channel Persona",
+  "description": "Set a custom persona for a channel",
+  "version": "1.0.0",
+  "tags": ["discord", "persona"],
+  "difficulty": "easy",
+  "params": [],
+  "steps": [],
+  "bundle": {
+    "apiVersion": "strategy.platform/v1",
+    "kind": "StrategyBundle",
+    "metadata": {},
+    "compatibility": {},
+    "inputs": [],
+    "capabilities": { "allowed": [] },
+    "resources": { "supportedKinds": [] },
+    "execution": { "supportedKinds": ["attachment"] },
+    "runner": {},
+    "outputs": []
+  },
+  "executionSpecTemplate": {
+    "apiVersion": "strategy.platform/v1",
+    "kind": "ExecutionSpec",
+    "metadata": {},
+    "source": {},
+    "target": {},
+    "execution": { "kind": "attachment" },
+    "capabilities": { "usedCapabilities": [] },
+    "resources": { "claims": [] },
+    "secrets": { "bindings": [] },
+    "desiredState": {},
+    "actions": [],
+    "outputs": []
+  }
+}"#;
+
+fn temp_workspace_root() -> PathBuf {
+    let root = std::env::temp_dir().join(format!("clawpal-recipe-workspace-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create temp workspace root");
+    root
+}
+
+#[test]
+fn workspace_recipe_save_writes_under_clawpal_recipe_workspace() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.clone());
+
+    let result = store
+        .save_recipe_source("channel-persona", SAMPLE_SOURCE)
+        .expect("save recipe source");
+
+    assert_eq!(result.slug, "channel-persona");
+    assert_eq!(
+        result.path,
+        root.join("channel-persona.recipe.json").to_string_lossy()
+    );
+    assert!(root.join("channel-persona.recipe.json").exists());
+}
+
+#[test]
+fn workspace_recipe_save_rejects_parent_traversal() {
+    let store = RecipeWorkspace::new(temp_workspace_root());
+
+    assert!(store
+        .save_recipe_source("../escape", SAMPLE_SOURCE)
+        .is_err());
+}
+
+#[test]
+fn delete_workspace_recipe_removes_saved_file() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.clone());
+    let saved = store
+        .save_recipe_source("persona", SAMPLE_SOURCE)
+        .expect("save recipe source");
+
+    store
+        .delete_recipe_source(saved.slug.as_str())
+        .expect("delete recipe source");
+
+    assert!(!root.join("persona.recipe.json").exists());
+}
+
+#[test]
+fn list_workspace_entries_returns_saved_recipes() {
+    let store = RecipeWorkspace::new(temp_workspace_root());
+    store
+        .save_recipe_source("zeta", SAMPLE_SOURCE)
+        .expect("save zeta");
+    store
+        .save_recipe_source("alpha", SAMPLE_SOURCE)
+        .expect("save alpha");
+
+    let entries = store.list_entries().expect("list entries");
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].slug, "alpha");
+    assert_eq!(entries[1].slug, "zeta");
+}

@@ -991,6 +991,24 @@ export function useApi() {
       ),
       getSystemStatus: api.getSystemStatus,
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
+      listRecipeWorkspaceEntries: localCached(
+        "listRecipeWorkspaceEntries",
+        4_000,
+        api.listRecipeWorkspaceEntries,
+      ),
+      readRecipeWorkspaceSource: localCached(
+        "readRecipeWorkspaceSource",
+        4_000,
+        api.readRecipeWorkspaceSource,
+      ),
+      saveRecipeWorkspaceSource: withInvalidation(
+        api.saveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      deleteRecipeWorkspaceSource: withInvalidation(
+        api.deleteRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
       exportRecipeSource: api.exportRecipeSource,
       listRecipeInstances: localCached(
         "listRecipeInstances",
