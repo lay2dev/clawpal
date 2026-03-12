@@ -42,16 +42,30 @@ const SAMPLE_SOURCE: &str = r#"{
   }
 }"#;
 
-fn temp_workspace_root() -> PathBuf {
+struct TempWorkspaceRoot(PathBuf);
+
+impl TempWorkspaceRoot {
+    fn path(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for TempWorkspaceRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_workspace_root() -> TempWorkspaceRoot {
     let root = std::env::temp_dir().join(format!("clawpal-recipe-workspace-{}", Uuid::new_v4()));
     fs::create_dir_all(&root).expect("create temp workspace root");
-    root
+    TempWorkspaceRoot(root)
 }
 
 #[test]
 fn workspace_recipe_save_writes_under_clawpal_recipe_workspace() {
     let root = temp_workspace_root();
-    let store = RecipeWorkspace::new(root.clone());
+    let store = RecipeWorkspace::new(root.path().clone());
 
     let result = store
         .save_recipe_source("channel-persona", SAMPLE_SOURCE)
@@ -60,14 +74,17 @@ fn workspace_recipe_save_writes_under_clawpal_recipe_workspace() {
     assert_eq!(result.slug, "channel-persona");
     assert_eq!(
         result.path,
-        root.join("channel-persona.recipe.json").to_string_lossy()
+        root.path()
+            .join("channel-persona.recipe.json")
+            .to_string_lossy()
     );
-    assert!(root.join("channel-persona.recipe.json").exists());
+    assert!(root.path().join("channel-persona.recipe.json").exists());
 }
 
 #[test]
 fn workspace_recipe_save_rejects_parent_traversal() {
-    let store = RecipeWorkspace::new(temp_workspace_root());
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
 
     assert!(store
         .save_recipe_source("../escape", SAMPLE_SOURCE)
@@ -77,7 +94,7 @@ fn workspace_recipe_save_rejects_parent_traversal() {
 #[test]
 fn delete_workspace_recipe_removes_saved_file() {
     let root = temp_workspace_root();
-    let store = RecipeWorkspace::new(root.clone());
+    let store = RecipeWorkspace::new(root.path().clone());
     let saved = store
         .save_recipe_source("persona", SAMPLE_SOURCE)
         .expect("save recipe source");
@@ -86,12 +103,13 @@ fn delete_workspace_recipe_removes_saved_file() {
         .delete_recipe_source(saved.slug.as_str())
         .expect("delete recipe source");
 
-    assert!(!root.join("persona.recipe.json").exists());
+    assert!(!root.path().join("persona.recipe.json").exists());
 }
 
 #[test]
 fn list_workspace_entries_returns_saved_recipes() {
-    let store = RecipeWorkspace::new(temp_workspace_root());
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
     store
         .save_recipe_source("zeta", SAMPLE_SOURCE)
         .expect("save zeta");
