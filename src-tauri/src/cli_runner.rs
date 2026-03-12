@@ -1649,10 +1649,9 @@ async fn apply_internal_remote_command(
     }
 }
 
-#[tauri::command]
-pub async fn apply_queued_commands(
-    queue: tauri::State<'_, CommandQueue>,
-    cache: tauri::State<'_, CliCache>,
+pub async fn apply_queued_commands_with_services(
+    queue: &CommandQueue,
+    cache: &CliCache,
     snapshot_recipe_id: Option<String>,
     run_id: Option<String>,
     snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
@@ -1662,8 +1661,8 @@ pub async fn apply_queued_commands(
         return Err("No pending commands to apply".into());
     }
 
-    let queue_handle = queue.inner().clone();
-    let cache_handle = cache.inner().clone();
+    let queue_handle = queue.clone();
+    let cache_handle = cache.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let paths = resolve_paths();
@@ -1806,6 +1805,24 @@ pub async fn apply_queued_commands(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn apply_queued_commands(
+    queue: tauri::State<'_, CommandQueue>,
+    cache: tauri::State<'_, CliCache>,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+) -> Result<ApplyQueueResult, String> {
+    apply_queued_commands_with_services(
+        queue.inner(),
+        cache.inner(),
+        snapshot_recipe_id,
+        run_id,
+        snapshot_artifacts,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -2214,10 +2231,9 @@ pub async fn remote_preview_queued_commands(
 // Remote apply — execute queue for real via SSH, rollback on failure
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub async fn remote_apply_queued_commands(
-    pool: tauri::State<'_, SshConnectionPool>,
-    queues: tauri::State<'_, RemoteCommandQueues>,
+pub async fn remote_apply_queued_commands_with_services(
+    pool: &SshConnectionPool,
+    queues: &RemoteCommandQueues,
     host_id: String,
     snapshot_recipe_id: Option<String>,
     run_id: Option<String>,
@@ -2383,6 +2399,26 @@ pub async fn remote_apply_queued_commands(
         error: None,
         rolled_back: false,
     })
+}
+
+#[tauri::command]
+pub async fn remote_apply_queued_commands(
+    pool: tauri::State<'_, SshConnectionPool>,
+    queues: tauri::State<'_, RemoteCommandQueues>,
+    host_id: String,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+) -> Result<ApplyQueueResult, String> {
+    remote_apply_queued_commands_with_services(
+        pool.inner(),
+        queues.inner(),
+        host_id,
+        snapshot_recipe_id,
+        run_id,
+        snapshot_artifacts,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

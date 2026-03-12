@@ -283,13 +283,12 @@ pub async fn remote_list_discord_guild_channels(
     Ok(entries)
 }
 
-#[tauri::command]
-pub async fn remote_list_bindings(
-    pool: State<'_, SshConnectionPool>,
+pub async fn remote_list_bindings_with_pool(
+    pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<Value>, String> {
     let output = crate::cli_runner::run_openclaw_remote(
-        &pool,
+        pool,
         &host_id,
         &["config", "get", "bindings", "--json"],
     )
@@ -303,6 +302,14 @@ pub async fn remote_list_bindings(
     }
     let json = crate::cli_runner::parse_json_output(&output)?;
     clawpal_core::discovery::parse_bindings(&json.to_string())
+}
+
+#[tauri::command]
+pub async fn remote_list_bindings(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<Value>, String> {
+    remote_list_bindings_with_pool(pool.inner(), host_id).await
 }
 
 #[tauri::command]
@@ -333,13 +340,12 @@ pub async fn remote_list_channels_minimal(
     Ok(collect_channel_nodes(&cfg))
 }
 
-#[tauri::command]
-pub async fn remote_list_agents_overview(
-    pool: State<'_, SshConnectionPool>,
+pub async fn remote_list_agents_overview_with_pool(
+    pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
     let output =
-        run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
+        run_openclaw_remote_with_autofix(pool, &host_id, &["agents", "list", "--json"]).await?;
     if output.exit_code != 0 {
         let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
         return Err(format!(
@@ -364,6 +370,14 @@ pub async fn remote_list_agents_overview(
         Err(_) => std::collections::HashSet::new(), // fallback: all offline
     };
     parse_agents_cli_output(&json, Some(&online_set))
+}
+
+#[tauri::command]
+pub async fn remote_list_agents_overview(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<AgentOverview>, String> {
+    remote_list_agents_overview_with_pool(pool.inner(), host_id).await
 }
 
 #[tauri::command]
@@ -801,15 +815,14 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn list_bindings(
-    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+pub async fn list_bindings_with_cache(
+    cache: &crate::cli_runner::CliCache,
 ) -> Result<Vec<Value>, String> {
     let cache_key = local_cli_cache_key("bindings");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let cache = cache.inner().clone();
+    let cache = cache.clone();
     let cache_key_cloned = cache_key.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
@@ -832,14 +845,20 @@ pub async fn list_bindings(
 }
 
 #[tauri::command]
-pub async fn list_agents_overview(
+pub async fn list_bindings(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<Value>, String> {
+    list_bindings_with_cache(cache.inner()).await
+}
+
+pub async fn list_agents_overview_with_cache(
+    cache: &crate::cli_runner::CliCache,
 ) -> Result<Vec<AgentOverview>, String> {
     let cache_key = local_cli_cache_key("agents-list");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let cache = cache.inner().clone();
+    let cache = cache.clone();
     let cache_key_cloned = cache_key.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
@@ -852,4 +871,11 @@ pub async fn list_agents_overview(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_agents_overview(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<AgentOverview>, String> {
+    list_agents_overview_with_cache(cache.inner()).await
 }

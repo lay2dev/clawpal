@@ -1757,7 +1757,7 @@ fn rewrite_binding_entries(
 }
 
 async fn resolve_model_value_for_route(
-    pool: &State<'_, SshConnectionPool>,
+    pool: &SshConnectionPool,
     route: &crate::recipe_executor::ExecutionRoute,
     profile_id: Option<&str>,
 ) -> Result<Option<String>, String> {
@@ -1774,7 +1774,7 @@ async fn resolve_model_value_for_route(
                 .host_id
                 .clone()
                 .ok_or_else(|| "remote execution target missing hostId".to_string())?;
-            remote_list_model_profiles(pool.clone(), host_id).await?
+            remote_list_model_profiles_with_pool(pool, host_id).await?
         }
         _ => list_model_profiles()?,
     };
@@ -1787,8 +1787,8 @@ async fn resolve_model_value_for_route(
 }
 
 async fn resolve_workspace_for_route(
-    cache: &State<'_, crate::cli_runner::CliCache>,
-    pool: &State<'_, SshConnectionPool>,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
     route: &crate::recipe_executor::ExecutionRoute,
     independent: bool,
     agent_id: &str,
@@ -1814,7 +1814,7 @@ async fn resolve_workspace_for_route(
                 return Ok(Some(workspace.to_string()));
             }
 
-            Ok(remote_list_agents_overview(pool.clone(), host_id)
+            Ok(remote_list_agents_overview_with_pool(pool, host_id)
                 .await?
                 .into_iter()
                 .find_map(|agent| agent.workspace.filter(|value| !value.trim().is_empty())))
@@ -1832,7 +1832,7 @@ async fn resolve_workspace_for_route(
                 return Ok(Some(workspace.to_string()));
             }
 
-            Ok(list_agents_overview(cache.clone())
+            Ok(list_agents_overview_with_cache(cache)
                 .await?
                 .into_iter()
                 .find_map(|agent| agent.workspace.filter(|value| !value.trim().is_empty())))
@@ -1841,8 +1841,8 @@ async fn resolve_workspace_for_route(
 }
 
 async fn list_bindings_for_route(
-    cache: &State<'_, crate::cli_runner::CliCache>,
-    pool: &State<'_, SshConnectionPool>,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
     route: &crate::recipe_executor::ExecutionRoute,
 ) -> Result<Vec<Value>, String> {
     match route.runner.as_str() {
@@ -1851,16 +1851,16 @@ async fn list_bindings_for_route(
                 .host_id
                 .clone()
                 .ok_or_else(|| "remote execution target missing hostId".to_string())?;
-            remote_list_bindings(pool.clone(), host_id).await
+            remote_list_bindings_with_pool(pool, host_id).await
         }
-        _ => list_bindings(cache.clone()).await,
+        _ => list_bindings_with_cache(cache).await,
     }
 }
 
 async fn materialize_recipe_action_commands(
     action: &crate::execution_spec::ExecutionAction,
-    cache: &State<'_, crate::cli_runner::CliCache>,
-    pool: &State<'_, SshConnectionPool>,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
     route: &crate::recipe_executor::ExecutionRoute,
 ) -> Result<Vec<(String, Vec<String>)>, String> {
     let kind = action
@@ -1962,8 +1962,8 @@ async fn materialize_recipe_action_commands(
 
 async fn materialize_recipe_commands(
     spec: &crate::execution_spec::ExecutionSpec,
-    cache: &State<'_, crate::cli_runner::CliCache>,
-    pool: &State<'_, SshConnectionPool>,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
     route: &crate::recipe_executor::ExecutionRoute,
 ) -> Result<Vec<(String, Vec<String>)>, String> {
     let mut commands = Vec::new();
@@ -2091,12 +2091,11 @@ mod runtime_artifact_tests {
     }
 }
 
-#[tauri::command]
-pub async fn execute_recipe(
-    queue: State<'_, crate::cli_runner::CommandQueue>,
-    cache: State<'_, crate::cli_runner::CliCache>,
-    pool: State<'_, SshConnectionPool>,
-    remote_queues: State<'_, crate::cli_runner::RemoteCommandQueues>,
+pub async fn execute_recipe_with_services(
+    queue: &crate::cli_runner::CommandQueue,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
+    remote_queues: &crate::cli_runner::RemoteCommandQueues,
     mut request: ExecuteRecipeRequest,
 ) -> Result<ExecuteRecipeResult, String> {
     let mut source = request.spec.source.as_object().cloned().unwrap_or_default();
@@ -2152,18 +2151,17 @@ pub async fn execute_recipe(
     match prepared.route.runner.as_str() {
         "local" => {
             if !prepared.plan.commands.is_empty() {
-                crate::cli_runner::enqueue_materialized_plan(queue.inner(), &prepared.plan);
+                crate::cli_runner::enqueue_materialized_plan(queue, &prepared.plan);
             } else {
-                let commands =
-                    materialize_recipe_commands(&spec, &cache, &pool, &prepared.route).await?;
+                let commands = materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
                 if commands.is_empty() {
                     return Err("recipe did not materialize executable commands".into());
                 }
                 for (label, command) in commands {
-                    queue.inner().enqueue(label, command);
+                    queue.enqueue(label, command);
                 }
             }
-            let result = crate::cli_runner::apply_queued_commands(
+            let result = crate::cli_runner::apply_queued_commands_with_services(
                 queue,
                 cache,
                 Some(infer_recipe_id(&spec)),
@@ -2218,22 +2216,21 @@ pub async fn execute_recipe(
                 .ok_or_else(|| "remote execution target missing hostId".to_string())?;
             if !prepared.plan.commands.is_empty() {
                 crate::cli_runner::enqueue_materialized_plan_remote(
-                    remote_queues.inner(),
+                    remote_queues,
                     &host_id,
                     &prepared.plan,
                 );
             } else {
-                let commands =
-                    materialize_recipe_commands(&spec, &cache, &pool, &prepared.route).await?;
+                let commands = materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
                 if commands.is_empty() {
                     return Err("recipe did not materialize executable commands".into());
                 }
                 for (label, command) in commands {
-                    remote_queues.inner().enqueue(&host_id, label, command);
+                    remote_queues.enqueue(&host_id, label, command);
                 }
             }
-            let result = crate::cli_runner::remote_apply_queued_commands(
-                pool.clone(),
+            let result = crate::cli_runner::remote_apply_queued_commands_with_services(
+                pool,
                 remote_queues,
                 host_id.clone(),
                 Some(infer_recipe_id(&spec)),
@@ -2287,6 +2284,24 @@ pub async fn execute_recipe(
             Err(format!("unsupported execution runner: {}", other))
         }
     }
+}
+
+#[tauri::command]
+pub async fn execute_recipe(
+    queue: State<'_, crate::cli_runner::CommandQueue>,
+    cache: State<'_, crate::cli_runner::CliCache>,
+    pool: State<'_, SshConnectionPool>,
+    remote_queues: State<'_, crate::cli_runner::RemoteCommandQueues>,
+    request: ExecuteRecipeRequest,
+) -> Result<ExecuteRecipeResult, String> {
+    execute_recipe_with_services(
+        queue.inner(),
+        cache.inner(),
+        pool.inner(),
+        remote_queues.inner(),
+        request,
+    )
+    .await
 }
 
 #[tauri::command]

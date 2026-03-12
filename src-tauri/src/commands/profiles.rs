@@ -447,13 +447,20 @@ pub(super) async fn resolve_remote_api_keys_for_profiles(
     out
 }
 
+pub async fn remote_list_model_profiles_with_pool(
+    pool: &SshConnectionPool,
+    host_id: String,
+) -> Result<Vec<ModelProfile>, String> {
+    let (profiles, _) = collect_remote_profiles_from_openclaw(pool, &host_id, true).await?;
+    Ok(profiles)
+}
+
 #[tauri::command]
 pub async fn remote_list_model_profiles(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ModelProfile>, String> {
-    let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    Ok(profiles)
+    remote_list_model_profiles_with_pool(pool.inner(), host_id).await
 }
 
 #[tauri::command]
