@@ -149,6 +149,16 @@ fn summary_subject(spec: &ExecutionSpec, plan: &MaterializedExecutionPlan) -> St
         .unwrap_or_else(|| "recipe".into())
 }
 
+fn presented_summary(spec: &ExecutionSpec) -> Option<String> {
+    spec.source
+        .get("recipePresentation")
+        .and_then(|value| value.get("resultSummary"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
 pub fn materialize_execution_plan(
     spec: &ExecutionSpec,
 ) -> Result<MaterializedExecutionPlan, String> {
@@ -400,14 +410,16 @@ pub fn execute_recipe(request: ExecuteRecipeRequest) -> Result<ExecuteRecipePrep
     } else {
         "action"
     };
-    let summary = format!(
-        "{} via {} ({} {}{})",
-        summary_subject(&request.spec, &plan),
-        route.runner,
-        operation_count,
-        operation_label,
-        if operation_count == 1 { "" } else { "s" }
-    );
+    let summary = presented_summary(&request.spec).unwrap_or_else(|| {
+        format!(
+            "{} via {} ({} {}{})",
+            summary_subject(&request.spec, &plan),
+            route.runner,
+            operation_count,
+            operation_label,
+            if operation_count == 1 { "" } else { "s" }
+        )
+    });
 
     let warnings = plan.warnings.clone();
 

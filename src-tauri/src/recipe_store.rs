@@ -105,40 +105,10 @@ impl RecipeStore {
         fs::create_dir_all(&self.runtime_dir).map_err(|error| error.to_string())?;
 
         let mut index = self.read_index()?;
-        let updated_at = run
-            .finished_at
-            .clone()
-            .unwrap_or_else(|| run.started_at.clone());
-
         index.runs.retain(|existing| existing.id != run.id);
         index.runs.push(run.clone());
-        index.runs.sort_by(|left, right| {
-            right
-                .started_at
-                .cmp(&left.started_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
-
-        let next_instance = RecipeInstance {
-            id: run.instance_id.clone(),
-            recipe_id: run.recipe_id.clone(),
-            execution_kind: run.execution_kind.clone(),
-            runner: run.runner.clone(),
-            status: run.status.clone(),
-            last_run_id: Some(run.id.clone()),
-            updated_at,
-        };
-
-        index
-            .instances
-            .retain(|instance| instance.id != next_instance.id);
-        index.instances.push(next_instance);
-        index.instances.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        sort_runs(&mut index.runs);
+        index.instances = build_instances(&index.runs);
 
         self.write_index(&index)?;
         Ok(run)
@@ -159,6 +129,23 @@ impl RecipeStore {
 
     pub fn list_instances(&self) -> Result<Vec<RecipeInstance>, String> {
         Ok(self.read_index()?.instances)
+    }
+
+    pub fn delete_runs(&self, instance_id: Option<&str>) -> Result<usize, String> {
+        let mut index = self.read_index()?;
+        let before = index.runs.len();
+        index.runs.retain(|run| match instance_id {
+            Some(instance_id) => run.instance_id != instance_id,
+            None => false,
+        });
+        let deleted = before.saturating_sub(index.runs.len());
+        if deleted == 0 {
+            return Ok(0);
+        }
+        sort_runs(&mut index.runs);
+        index.instances = build_instances(&index.runs);
+        self.write_index(&index)?;
+        Ok(deleted)
     }
 
     fn read_index(&self) -> Result<RecipeRuntimeIndex, String> {
@@ -183,6 +170,47 @@ impl RecipeStore {
         let text = serde_json::to_string_pretty(index).map_err(|error| error.to_string())?;
         atomic_write(&self.index_path, &text)
     }
+}
+
+fn sort_runs(runs: &mut Vec<Run>) {
+    runs.sort_by(|left, right| {
+        right
+            .started_at
+            .cmp(&left.started_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+}
+
+fn build_instances(runs: &[Run]) -> Vec<RecipeInstance> {
+    let mut instances = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for run in runs {
+        if !seen.insert(run.instance_id.clone()) {
+            continue;
+        }
+        let updated_at = run
+            .finished_at
+            .clone()
+            .unwrap_or_else(|| run.started_at.clone());
+        instances.push(RecipeInstance {
+            id: run.instance_id.clone(),
+            recipe_id: run.recipe_id.clone(),
+            execution_kind: run.execution_kind.clone(),
+            runner: run.runner.clone(),
+            status: run.status.clone(),
+            last_run_id: Some(run.id.clone()),
+            updated_at,
+        });
+    }
+
+    instances.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    instances
 }
 
 fn atomic_write(path: &Path, text: &str) -> Result<(), String> {

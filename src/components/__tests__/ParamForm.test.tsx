@@ -8,6 +8,60 @@ import { InstanceContext } from "@/lib/instance-context";
 import { ParamForm } from "../ParamForm";
 
 describe("ParamForm", () => {
+  test("keeps submit enabled before invalid fields are touched", async () => {
+    await i18n.changeLanguage("en");
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(InstanceContext.Provider, {
+          value: {
+            instanceId: "local",
+            instanceViewToken: "local",
+            instanceToken: 0,
+            persistenceScope: "local",
+            persistenceResolved: true,
+            isRemote: false,
+            isDocker: false,
+            isConnected: true,
+            channelNodes: null,
+            discordGuildChannels: [],
+            channelsLoading: false,
+            discordChannelsLoading: false,
+            refreshChannelNodesCache: async () => [],
+            refreshDiscordChannelsCache: async () => [],
+          },
+          children: React.createElement(ParamForm, {
+            recipe: {
+              id: "dedicated-agent",
+              name: "Dedicated Agent",
+              description: "Create an independent agent",
+              version: "1.0.0",
+              tags: ["agent"],
+              difficulty: "easy",
+              params: [
+                {
+                  id: "agent_id",
+                  label: "Agent ID",
+                  type: "string",
+                  required: true,
+                },
+              ],
+              steps: [],
+            },
+            values: { agent_id: "" },
+            onChange: () => {},
+            onSubmit: () => {},
+            submitLabel: "Next",
+          }),
+        }),
+      }),
+    );
+
+    expect(html).toContain(">Next</button>");
+    expect(html).not.toMatch(/<button[^>]*\sdisabled(?:=""|>|\s)/);
+  });
+
   test("renders preset options as a select list", async () => {
     await i18n.changeLanguage("en");
 

@@ -5,6 +5,9 @@
   "version": "1.0.0",
   "tags": ["agent", "identity", "persona"],
   "difficulty": "easy",
+  "presentation": {
+    "resultSummary": "Created dedicated agent {{name}} ({{agent_id}})"
+  },
   "params": [
     { "id": "agent_id", "label": "Agent ID", "type": "string", "required": true, "placeholder": "e.g. ops-bot" },
     { "id": "model", "label": "Model", "type": "model_profile", "required": true, "defaultValue": "__default__" },

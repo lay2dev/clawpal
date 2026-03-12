@@ -5,6 +5,9 @@
   "version": "1.0.0",
   "tags": ["agent", "persona", "preset"],
   "difficulty": "easy",
+  "presentation": {
+    "resultSummary": "Updated persona for agent {{agent_id}}"
+  },
   "params": [
     { "id": "agent_id", "label": "Agent", "type": "agent", "required": true },
     { "id": "persona_preset", "label": "Persona Preset", "type": "string", "required": true, "placeholder": "Select a preset" }

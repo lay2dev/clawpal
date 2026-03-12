@@ -714,6 +714,12 @@ export function useApi() {
         10_000,
         api.listModelProfiles,
       ),
+      listRecipeModelProfiles: dispatchCached(
+        "listRecipeModelProfiles",
+        isRemote ? 10_000 : 10_000,
+        api.listModelProfiles,
+        api.remoteListModelProfiles,
+      ),
       upsertModelProfile: withGlobalInvalidation(
         api.upsertModelProfile,
       ),
@@ -990,6 +996,11 @@ export function useApi() {
         api.getCachedModelCatalog,
       ),
       getSystemStatus: api.getSystemStatus,
+      listRegisteredInstances: localCached(
+        "listRegisteredInstances",
+        10_000,
+        api.listRegisteredInstances,
+      ),
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
       listRecipesFromSourceText: api.listRecipesFromSourceText,
       listRecipeWorkspaceEntries: localCached(
@@ -1022,6 +1033,10 @@ export function useApi() {
         api.listRecipeInstances,
       ),
       listRecipeRuns: localCached("listRecipeRuns", 4_000, api.listRecipeRuns),
+      deleteRecipeRuns: withInvalidation(api.deleteRecipeRuns, [
+        "listRecipeInstances",
+        "listRecipeRuns",
+      ]),
       planRecipe: localCached("planRecipe", 5_000, api.planRecipe),
       planRecipeSource: api.planRecipeSource,
       executeRecipe: withInvalidation(api.executeRecipe, [

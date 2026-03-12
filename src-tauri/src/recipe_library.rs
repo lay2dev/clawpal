@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tauri::Manager;
 
 use crate::recipe::validate_recipe_source;
 use crate::recipe_workspace::RecipeWorkspace;
@@ -38,29 +39,7 @@ pub fn import_recipe_library(
     root: &Path,
     workspace: &RecipeWorkspace,
 ) -> Result<RecipeLibraryImportResult, String> {
-    if !root.exists() {
-        return Err(format!(
-            "recipe library root does not exist: {}",
-            root.to_string_lossy()
-        ));
-    }
-    if !root.is_dir() {
-        return Err(format!(
-            "recipe library root is not a directory: {}",
-            root.to_string_lossy()
-        ));
-    }
-
-    let mut recipe_dirs = Vec::new();
-    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            recipe_dirs.push(path);
-        }
-    }
-    recipe_dirs.sort();
-
+    let recipe_dirs = collect_recipe_dirs(root)?;
     let mut result = RecipeLibraryImportResult::default();
     let mut seen_recipe_ids = std::collections::BTreeSet::new();
     let mut seen_slugs = workspace
@@ -84,6 +63,162 @@ pub fn import_recipe_library(
     }
 
     Ok(result)
+}
+
+pub fn seed_recipe_library(
+    root: &Path,
+    workspace: &RecipeWorkspace,
+) -> Result<RecipeLibraryImportResult, String> {
+    let recipe_dirs = collect_recipe_dirs(root)?;
+    let mut seen_slugs = workspace
+        .list_entries()?
+        .into_iter()
+        .map(|entry| entry.slug)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut seen_recipe_ids = std::collections::BTreeSet::new();
+    let mut result = RecipeLibraryImportResult::default();
+
+    for recipe_dir in recipe_dirs {
+        let recipe_path = recipe_dir.join("recipe.json");
+        if !recipe_path.exists() {
+            result.skipped.push(SkippedRecipeImport {
+                recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                reason: "recipe.json not found".into(),
+            });
+            continue;
+        }
+
+        let source = match fs::read_to_string(&recipe_path) {
+            Ok(source) => source,
+            Err(error) => {
+                result.skipped.push(SkippedRecipeImport {
+                    recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                    reason: format!(
+                        "failed to read recipe source '{}': {}",
+                        recipe_path.to_string_lossy(),
+                        error
+                    ),
+                });
+                continue;
+            }
+        };
+        let (recipe_id, compiled_source) = match compile_recipe_source(&recipe_dir, &source) {
+            Ok(compiled) => compiled,
+            Err(error) => {
+                result.skipped.push(SkippedRecipeImport {
+                    recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                    reason: error,
+                });
+                continue;
+            }
+        };
+        let slug = match crate::recipe_workspace::normalize_recipe_slug(&recipe_id) {
+            Ok(slug) => slug,
+            Err(error) => {
+                result.skipped.push(SkippedRecipeImport {
+                    recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                    reason: error,
+                });
+                continue;
+            }
+        };
+
+        if !seen_recipe_ids.insert(recipe_id.clone()) {
+            result.skipped.push(SkippedRecipeImport {
+                recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                reason: format!("duplicate recipe id '{}'", recipe_id),
+            });
+            continue;
+        }
+
+        if !seen_slugs.insert(slug.clone()) {
+            result.warnings.push(format!(
+                "Skipped bundled recipe '{}' because workspace recipe '{}' already exists.",
+                recipe_id, slug
+            ));
+            continue;
+        }
+
+        let diagnostics = validate_recipe_source(&compiled_source)?;
+        if !diagnostics.errors.is_empty() {
+            result.skipped.push(SkippedRecipeImport {
+                recipe_dir: recipe_dir.to_string_lossy().to_string(),
+                reason: diagnostics
+                    .errors
+                    .iter()
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            });
+            continue;
+        }
+
+        let saved = workspace.save_recipe_source(&slug, &compiled_source)?;
+        result.imported.push(ImportedRecipe {
+            slug: saved.slug,
+            recipe_id,
+            path: saved.path,
+        });
+    }
+
+    Ok(result)
+}
+
+pub fn seed_bundled_recipe_library(
+    app_handle: &tauri::AppHandle,
+) -> Result<RecipeLibraryImportResult, String> {
+    let root = resolve_bundled_recipe_library_root(app_handle)?;
+    let workspace = RecipeWorkspace::from_resolved_paths();
+    seed_recipe_library(&root, &workspace)
+}
+
+fn resolve_bundled_recipe_library_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_root) = app_handle
+        .path()
+        .resolve("recipe-library", tauri::path::BaseDirectory::Resource)
+    {
+        candidates.push(resource_root);
+    }
+
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("examples")
+            .join("recipe-library"),
+    );
+
+    candidates
+        .into_iter()
+        .find(|path| path.is_dir())
+        .ok_or_else(|| "bundled recipe library resource not found".to_string())
+}
+
+fn collect_recipe_dirs(root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    if !root.exists() {
+        return Err(format!(
+            "recipe library root does not exist: {}",
+            root.to_string_lossy()
+        ));
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "recipe library root is not a directory: {}",
+            root.to_string_lossy()
+        ));
+    }
+
+    let mut recipe_dirs = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            recipe_dirs.push(path);
+        }
+    }
+    recipe_dirs.sort();
+    Ok(recipe_dirs)
 }
 
 fn import_recipe_dir(

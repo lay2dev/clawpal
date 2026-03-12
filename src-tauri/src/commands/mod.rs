@@ -1324,6 +1324,11 @@ pub fn list_recipe_runs(instance_id: Option<String>) -> Result<Vec<RecipeRuntime
     }
 }
 
+#[tauri::command]
+pub fn delete_recipe_runs(instance_id: Option<String>) -> Result<usize, String> {
+    RecipeStore::from_resolved_paths().delete_runs(instance_id.as_deref())
+}
+
 fn build_runtime_claims(
     spec: &crate::execution_spec::ExecutionSpec,
 ) -> Vec<RecipeRuntimeResourceClaim> {
@@ -1779,11 +1784,33 @@ async fn resolve_model_value_for_route(
         _ => list_model_profiles()?,
     };
 
-    Ok(profiles
+    resolve_model_value_from_profiles(&profiles, profile_id)
+}
+
+fn resolve_model_value_from_profiles(
+    profiles: &[ModelProfile],
+    profile_id: &str,
+) -> Result<Option<String>, String> {
+    let trimmed = profile_id.trim();
+    if trimmed.is_empty() || trimmed == "__default__" {
+        return Ok(None);
+    }
+
+    if let Some(profile) = profiles.iter().find(|profile| profile.id == trimmed) {
+        return Ok(Some(profile_to_model_value(profile)));
+    }
+
+    if profiles
         .iter()
-        .find(|profile| profile.id == profile_id)
         .map(profile_to_model_value)
-        .or_else(|| Some(profile_id.to_string())))
+        .any(|model_value| model_value == trimmed)
+    {
+        return Ok(Some(trimmed.to_string()));
+    }
+
+    Err(format!(
+        "Model profile is not available on this instance: {trimmed}"
+    ))
 }
 
 async fn resolve_workspace_for_route(
@@ -2014,6 +2041,46 @@ mod recipe_action_materializer_tests {
 }
 
 #[cfg(test)]
+mod model_value_resolution_tests {
+    use super::{profile_to_model_value, resolve_model_value_from_profiles, ModelProfile};
+
+    fn profile(id: &str, provider: &str, model: &str) -> ModelProfile {
+        ModelProfile {
+            id: id.to_string(),
+            name: format!("{provider}/{model}"),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            auth_ref: format!("{provider}:default"),
+            api_key: None,
+            base_url: None,
+            description: None,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn resolve_model_value_maps_profile_id_to_model_value() {
+        let profiles = vec![profile("remote-openai", "openai", "gpt-4o")];
+
+        let resolved = resolve_model_value_from_profiles(&profiles, "remote-openai")
+            .expect("profile should resolve");
+
+        assert_eq!(resolved, Some(profile_to_model_value(&profiles[0])));
+    }
+
+    #[test]
+    fn resolve_model_value_rejects_unknown_profile_ids() {
+        let profiles = vec![profile("remote-openai", "openai", "gpt-4o")];
+
+        let error =
+            resolve_model_value_from_profiles(&profiles, "b176e1fe-71b7-42ca-b9ad-96d8e15edf77")
+                .expect_err("unknown profile ids should be rejected");
+
+        assert!(error.contains("Model profile is not available on this instance"));
+    }
+}
+
+#[cfg(test)]
 mod runtime_artifact_tests {
     use crate::execution_spec::{
         ExecutionAction, ExecutionCapabilities, ExecutionMetadata, ExecutionResourceClaim,
@@ -2153,7 +2220,8 @@ pub async fn execute_recipe_with_services(
             if !prepared.plan.commands.is_empty() {
                 crate::cli_runner::enqueue_materialized_plan(queue, &prepared.plan);
             } else {
-                let commands = materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
+                let commands =
+                    materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
                 if commands.is_empty() {
                     return Err("recipe did not materialize executable commands".into());
                 }
@@ -2221,7 +2289,8 @@ pub async fn execute_recipe_with_services(
                     &prepared.plan,
                 );
             } else {
-                let commands = materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
+                let commands =
+                    materialize_recipe_commands(&spec, cache, pool, &prepared.route).await?;
                 if commands.is_empty() {
                     return Err("recipe did not materialize executable commands".into());
                 }

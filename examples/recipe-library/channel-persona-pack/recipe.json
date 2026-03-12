@@ -5,6 +5,9 @@
   "version": "1.0.0",
   "tags": ["discord", "persona", "preset"],
   "difficulty": "easy",
+  "presentation": {
+    "resultSummary": "Updated persona for channel {{channel_id}}"
+  },
   "params": [
     { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
     { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },

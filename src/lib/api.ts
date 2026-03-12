@@ -120,6 +120,8 @@ export const api = {
     invoke("list_recipe_instances", {}),
   listRecipeRuns: (instanceId?: string): Promise<RecipeRuntimeRun[]> =>
     invoke("list_recipe_runs", instanceId ? { instanceId } : {}),
+  deleteRecipeRuns: (instanceId?: string): Promise<number> =>
+    invoke("delete_recipe_runs", instanceId ? { instanceId } : {}),
   planRecipe: (
     recipeId: string,
     params: Record<string, string>,

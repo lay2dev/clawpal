@@ -63,6 +63,13 @@ pub struct RecipeStep {
     pub args: Map<String, Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RecipePresentation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_summary: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Recipe {
@@ -72,6 +79,8 @@ pub struct Recipe {
     pub version: String,
     pub tags: Vec<String>,
     pub difficulty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<RecipePresentation>,
     pub params: Vec<RecipeParam>,
     pub steps: Vec<RecipeStep>,
     #[serde(

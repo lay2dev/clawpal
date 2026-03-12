@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::recipe::load_recipes_from_source_text;
 use crate::recipe_adapter::compile_recipe_to_spec;
-use crate::recipe_library::import_recipe_library;
+use crate::recipe_library::{import_recipe_library, seed_recipe_library};
 use crate::recipe_workspace::RecipeWorkspace;
 
 struct TempDir(PathBuf);
@@ -114,6 +114,9 @@ fn import_recipe_library_compiles_preset_assets_into_workspace_recipe() {
           "version": "1.0.0",
           "tags": ["agent", "persona"],
           "difficulty": "easy",
+          "presentation": {
+            "resultSummary": "Updated persona for agent {{agent_id}}"
+          },
           "params": [
             { "id": "agent_id", "label": "Agent", "type": "agent", "required": true },
             { "id": "persona_preset", "label": "Persona preset", "type": "string", "required": true }
@@ -215,6 +218,12 @@ fn import_recipe_library_compiles_preset_assets_into_workspace_recipe() {
         Some("You are warm, concise, and practical.\n")
     );
     assert!(imported_json.get("clawpalImport").is_none());
+    assert_eq!(
+        imported_json
+            .pointer("/presentation/resultSummary")
+            .and_then(Value::as_str),
+        Some("Updated persona for agent {{agent_id}}")
+    );
 
     let imported_recipe = load_recipes_from_source_text(&imported)
         .expect("load imported recipe")
@@ -496,4 +505,65 @@ fn import_recipe_library_skips_duplicate_slug_against_existing_workspace_recipe(
     assert!(result.skipped[0]
         .reason
         .contains("duplicate recipe slug 'agent-persona-pack'"));
+}
+
+#[test]
+fn seed_recipe_library_imports_repo_example_library_into_empty_workspace() {
+    let workspace_root = temp_dir("recipe-workspace-seed-examples");
+    let workspace = RecipeWorkspace::new(workspace_root.path().to_path_buf());
+    let example_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("examples")
+        .join("recipe-library");
+
+    let result = seed_recipe_library(&example_root, &workspace).expect("seed recipe library");
+
+    assert_eq!(result.imported.len(), 3);
+    assert!(result.skipped.is_empty());
+    assert!(result.warnings.is_empty());
+    assert_eq!(
+        workspace.list_entries().expect("workspace entries").len(),
+        3
+    );
+}
+
+#[test]
+fn seed_recipe_library_preserves_existing_workspace_recipe() {
+    let workspace_root = temp_dir("recipe-workspace-seed-existing");
+    let workspace = RecipeWorkspace::new(workspace_root.path().to_path_buf());
+    let example_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("examples")
+        .join("recipe-library");
+
+    let original_source = r#"{
+      "id": "agent-persona-pack",
+      "name": "Custom Agent Persona Pack",
+      "description": "User-edited recipe",
+      "version": "1.0.0",
+      "tags": ["custom"],
+      "difficulty": "easy",
+      "params": [],
+      "steps": []
+    }"#;
+
+    workspace
+        .save_recipe_source("agent-persona-pack", original_source)
+        .expect("seed custom workspace recipe");
+
+    let result = seed_recipe_library(&example_root, &workspace).expect("seed recipe library");
+
+    assert_eq!(result.imported.len(), 2);
+    assert!(result.skipped.is_empty());
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("agent-persona-pack"));
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &workspace
+                .read_recipe_source("agent-persona-pack")
+                .expect("read preserved recipe")
+        )
+        .expect("parse preserved recipe"),
+        serde_json::from_str::<Value>(original_source).expect("parse original recipe")
+    );
 }

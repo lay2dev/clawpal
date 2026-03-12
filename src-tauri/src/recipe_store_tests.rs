@@ -90,3 +90,45 @@ fn recorded_run_persists_source_digest_and_origin() {
         .as_deref()
         .is_some_and(|path| path.ends_with("channel-persona.recipe.json")));
 }
+
+#[test]
+fn delete_runs_for_instance_removes_runs_and_rebuilds_instances() {
+    let store = RecipeStore::for_test();
+    store.record_run(sample_run()).expect("record first run");
+
+    let mut second_run = sample_run();
+    second_run.id = "run_02".into();
+    second_run.instance_id = "ssh:prod-a".into();
+    second_run.started_at = "2026-03-11T11:00:00Z".into();
+    second_run.finished_at = Some("2026-03-11T11:00:05Z".into());
+    store.record_run(second_run).expect("record second run");
+
+    let deleted = store
+        .delete_runs(Some("inst_01"))
+        .expect("delete instance runs");
+
+    assert_eq!(deleted, 1);
+    assert!(store
+        .list_runs("inst_01")
+        .expect("list removed runs")
+        .is_empty());
+    let remaining_runs = store.list_all_runs().expect("list all runs");
+    assert_eq!(remaining_runs.len(), 1);
+    assert_eq!(remaining_runs[0].instance_id, "ssh:prod-a");
+    let instances = store.list_instances().expect("list instances");
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].id, "ssh:prod-a");
+    assert_eq!(instances[0].last_run_id.as_deref(), Some("run_02"));
+}
+
+#[test]
+fn delete_runs_without_scope_clears_all_runs_and_instances() {
+    let store = RecipeStore::for_test();
+    store.record_run(sample_run()).expect("record first run");
+
+    let deleted = store.delete_runs(None).expect("delete all runs");
+
+    assert_eq!(deleted, 1);
+    assert!(store.list_all_runs().expect("list all runs").is_empty());
+    assert!(store.list_instances().expect("list instances").is_empty());
+}

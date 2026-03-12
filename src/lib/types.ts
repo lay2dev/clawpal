@@ -39,6 +39,10 @@ export interface RecipeStep {
   args: Record<string, unknown>;
 }
 
+export interface RecipePresentation {
+  resultSummary?: string;
+}
+
 export interface Recipe {
   id: string;
   name: string;
@@ -46,6 +50,7 @@ export interface Recipe {
   version: string;
   tags: string[];
   difficulty: "easy" | "normal" | "advanced";
+  presentation?: RecipePresentation;
   params: RecipeParam[];
   steps: RecipeStep[];
 }

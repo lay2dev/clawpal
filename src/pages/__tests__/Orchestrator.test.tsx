@@ -17,6 +17,7 @@ describe("Orchestrator runtime timeline", () => {
         children: React.createElement(InstanceContext.Provider, {
           value: {
             instanceId: "local",
+            instanceLabel: "Recipe Docker",
             instanceViewToken: "local",
             instanceToken: 0,
             persistenceScope: "local",
@@ -70,9 +71,14 @@ describe("Orchestrator runtime timeline", () => {
       }),
     );
 
-    expect(html).toContain("Resource claims");
-    expect(html).toContain("Rendered patch");
-    expect(html).toContain("openclaw.config");
-    expect(html).toContain("digest-123");
+    expect(html).toContain("Recent results");
+    expect(html).toContain("Completed");
+    expect(html).toContain("Environment: Recipe Docker");
+    expect(html).toContain("What changed");
+    expect(html).toContain("Config or file: openclaw.config");
+    expect(html).toContain("Clear Event Log");
+    expect(html).toContain("Clear Recipe Runs");
+    expect(html).not.toContain("attachment");
+    expect(html).not.toContain("digest-123");
   });
 });

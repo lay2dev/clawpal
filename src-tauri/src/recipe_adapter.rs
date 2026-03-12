@@ -8,7 +8,7 @@ use crate::execution_spec::{
 };
 use crate::recipe::{
     render_step_args, render_template_value, step_references_empty_param, validate, Recipe,
-    RecipeParam, RecipeStep,
+    RecipeParam, RecipePresentation, RecipeStep,
 };
 use crate::recipe_bundle::{
     validate_execution_spec_against_bundle, BundleCapabilities, BundleCompatibility,
@@ -24,6 +24,8 @@ struct RecipeSourceDocument {
     pub version: String,
     pub tags: Vec<String>,
     pub difficulty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<RecipePresentation>,
     pub params: Vec<RecipeParam>,
     pub steps: Vec<RecipeStep>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "clawpalPresetMaps")]
@@ -58,6 +60,7 @@ pub fn export_recipe_source(recipe: &Recipe) -> Result<String, String> {
         version: recipe.version.clone(),
         tags: recipe.tags.clone(),
         difficulty: recipe.difficulty.clone(),
+        presentation: recipe.presentation.clone(),
         params: recipe.params.clone(),
         steps: recipe.steps.clone(),
         clawpal_preset_maps: recipe.clawpal_preset_maps.clone(),
@@ -89,7 +92,7 @@ fn compile_structured_recipe_to_spec(
         serde_json::from_value(rendered_template).map_err(|error| error.to_string())?;
 
     filter_optional_structured_actions(recipe, params, &mut spec)?;
-    normalize_recipe_spec(recipe, &mut spec, "structuredTemplate");
+    normalize_recipe_spec(recipe, Some(params), &mut spec, "structuredTemplate");
 
     if let Some((used_capabilities, claims)) = infer_recipe_action_requirements(&spec.actions) {
         spec.capabilities.used_capabilities = used_capabilities;
@@ -158,7 +161,7 @@ fn compile_step_recipe_to_spec(
         })],
     };
 
-    normalize_recipe_spec(recipe, &mut spec, "stepAdapter");
+    normalize_recipe_spec(recipe, Some(params), &mut spec, "stepAdapter");
     validate_recipe_spec(recipe, &spec)?;
     Ok(spec)
 }
@@ -187,7 +190,7 @@ fn build_step_recipe_template(recipe: &Recipe) -> Result<ExecutionSpec, String> 
         "job"
     };
 
-    Ok(ExecutionSpec {
+    let mut spec = ExecutionSpec {
         api_version: "strategy.platform/v1".into(),
         kind: "ExecutionSpec".into(),
         metadata: ExecutionMetadata {
@@ -210,10 +213,32 @@ fn build_step_recipe_template(recipe: &Recipe) -> Result<ExecutionSpec, String> 
             "kind": "recipe-summary",
             "recipeId": recipe.id,
         })],
+    };
+
+    normalize_recipe_spec(recipe, None, &mut spec, "stepTemplate");
+    Ok(spec)
+}
+
+fn build_recipe_presentation_source(
+    recipe: &Recipe,
+    params: Option<&Map<String, Value>>,
+) -> Option<Value> {
+    let presentation = recipe.presentation.as_ref()?;
+    let raw_value = serde_json::to_value(presentation).ok()?;
+    Some(match params {
+        Some(params) => {
+            render_template_value(&raw_value, params, recipe.clawpal_preset_maps.as_ref())
+        }
+        None => raw_value,
     })
 }
 
-fn normalize_recipe_spec(recipe: &Recipe, spec: &mut ExecutionSpec, compiler: &str) {
+fn normalize_recipe_spec(
+    recipe: &Recipe,
+    params: Option<&Map<String, Value>>,
+    spec: &mut ExecutionSpec,
+    compiler: &str,
+) {
     if spec.metadata.name.is_none() {
         spec.metadata.name = Some(recipe.id.clone());
     }
@@ -225,6 +250,9 @@ fn normalize_recipe_spec(recipe: &Recipe, spec: &mut ExecutionSpec, compiler: &s
         Value::String(recipe.version.clone()),
     );
     source.insert("recipeCompiler".into(), Value::String(compiler.into()));
+    if let Some(presentation) = build_recipe_presentation_source(recipe, params) {
+        source.insert("recipePresentation".into(), presentation);
+    }
     spec.source = Value::Object(source);
 
     if let Some(desired_state) = spec.desired_state.as_object_mut() {

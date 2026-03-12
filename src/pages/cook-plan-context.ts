@@ -2,8 +2,14 @@ import type { PrecheckIssue, RecipePlan } from "@/lib/types";
 
 type CookRouteContext = {
   instanceId: string;
+  instanceLabel?: string | null;
   isRemote: boolean;
   isDocker: boolean;
+};
+
+export type CookRouteSummary = {
+  kind: "local" | "docker" | "ssh";
+  targetLabel: string;
 };
 
 type BindingEntry = {
@@ -113,11 +119,24 @@ function collectConfigPatchWarnings(actions: ActionRecord[], config: unknown): s
   return warnings;
 }
 
-export function buildCookRouteSummary(context: CookRouteContext): string {
-  const route = context.isRemote
-    ? "remote_ssh"
-    : (context.isDocker ? "docker_local" : "local");
-  return `${route} -> ${context.instanceId}`;
+function normalizeRouteTarget(context: CookRouteContext): string {
+  if (typeof context.instanceLabel === "string" && context.instanceLabel.trim().length > 0) {
+    return context.instanceLabel.trim();
+  }
+  if (context.isRemote && context.instanceId.startsWith("ssh:")) {
+    return context.instanceId.slice(4);
+  }
+  if (context.isDocker && context.instanceId.startsWith("docker:")) {
+    return context.instanceId.slice(7);
+  }
+  return context.instanceId;
+}
+
+export function buildCookRouteSummary(context: CookRouteContext): CookRouteSummary {
+  return {
+    kind: context.isRemote ? "ssh" : context.isDocker ? "docker" : "local",
+    targetLabel: normalizeRouteTarget(context),
+  };
 }
 
 export function buildCookContextWarnings(

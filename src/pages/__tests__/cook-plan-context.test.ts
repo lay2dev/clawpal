@@ -69,10 +69,14 @@ describe("cook plan context helpers", () => {
     expect(
       buildCookRouteSummary({
         instanceId: "ssh:prod-a",
+        instanceLabel: "Prod A",
         isRemote: true,
         isDocker: false,
       }),
-    ).toBe("remote_ssh -> ssh:prod-a");
+    ).toEqual({
+      kind: "ssh",
+      targetLabel: "Prod A",
+    });
   });
 
   test("warns when a channel binding will be reassigned", () => {

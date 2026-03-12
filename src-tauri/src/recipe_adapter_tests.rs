@@ -1,10 +1,230 @@
 use serde_json::{Map, Value};
 
 use crate::recipe::{
-    builtin_recipes, load_recipes_from_source_text, validate_recipe_source, Recipe, RecipeParam,
+    load_recipes_from_source_text, validate_recipe_source, Recipe, RecipeParam, RecipePresentation,
     RecipeStep,
 };
 use crate::recipe_adapter::{compile_recipe_to_spec, export_recipe_source};
+
+const TEST_RECIPES_SOURCE: &str = r#"{
+  "recipes": [
+    {
+      "id": "dedicated-channel-agent",
+      "name": "Create dedicated Agent for Channel",
+      "description": "Create an agent and bind it to a Discord channel",
+      "version": "1.0.0",
+      "tags": ["discord", "agent", "persona"],
+      "difficulty": "easy",
+      "params": [
+        { "id": "agent_id", "label": "Agent ID", "type": "string", "required": true, "placeholder": "e.g. my-bot" },
+        { "id": "model", "label": "Model", "type": "model_profile", "required": true, "defaultValue": "__default__" },
+        { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
+        { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },
+        { "id": "independent", "label": "Create independent agent", "type": "boolean", "required": false },
+        { "id": "name", "label": "Display Name", "type": "string", "required": false, "dependsOn": "independent" },
+        { "id": "emoji", "label": "Emoji", "type": "string", "required": false, "dependsOn": "independent" },
+        { "id": "persona", "label": "Persona", "type": "textarea", "required": false, "dependsOn": "independent" }
+      ],
+      "bundle": {
+        "apiVersion": "strategy.platform/v1",
+        "kind": "StrategyBundle",
+        "metadata": {
+          "name": "dedicated-channel-agent",
+          "version": "1.0.0",
+          "description": "Create an agent and bind it to a Discord channel"
+        },
+        "compatibility": {},
+        "inputs": [],
+        "capabilities": {
+          "allowed": ["agent.manage", "agent.identity.write", "binding.manage", "config.write"]
+        },
+        "resources": {
+          "supportedKinds": ["agent", "channel", "file"]
+        },
+        "execution": {
+          "supportedKinds": ["job"]
+        },
+        "runner": {},
+        "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-channel-agent" }]
+      },
+      "executionSpecTemplate": {
+        "apiVersion": "strategy.platform/v1",
+        "kind": "ExecutionSpec",
+        "metadata": {
+          "name": "dedicated-channel-agent"
+        },
+        "source": {},
+        "target": {},
+        "execution": {
+          "kind": "job"
+        },
+        "capabilities": {
+          "usedCapabilities": []
+        },
+        "resources": {
+          "claims": []
+        },
+        "secrets": {
+          "bindings": []
+        },
+        "desiredState": {
+          "actionCount": 4
+        },
+        "actions": [
+          {
+            "kind": "create_agent",
+            "name": "Create agent",
+            "args": {
+              "agentId": "{{agent_id}}",
+              "modelProfileId": "{{model}}",
+              "independent": "{{independent}}"
+            }
+          },
+          {
+            "kind": "setup_identity",
+            "name": "Set agent identity",
+            "args": {
+              "agentId": "{{agent_id}}",
+              "name": "{{name}}",
+              "emoji": "{{emoji}}"
+            }
+          },
+          {
+            "kind": "bind_channel",
+            "name": "Bind channel to agent",
+            "args": {
+              "channelType": "discord",
+              "peerId": "{{channel_id}}",
+              "agentId": "{{agent_id}}"
+            }
+          },
+          {
+            "kind": "config_patch",
+            "name": "Set channel persona",
+            "args": {
+              "patch": {
+                "channels": {
+                  "discord": {
+                    "guilds": {
+                      "{{guild_id}}": {
+                        "channels": {
+                          "{{channel_id}}": {
+                            "systemPrompt": "{{persona}}"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-channel-agent" }]
+      },
+      "steps": [
+        { "action": "create_agent", "label": "Create agent", "args": { "agentId": "{{agent_id}}", "modelProfileId": "{{model}}", "independent": "{{independent}}" } },
+        { "action": "setup_identity", "label": "Set agent identity", "args": { "agentId": "{{agent_id}}", "name": "{{name}}", "emoji": "{{emoji}}" } },
+        { "action": "bind_channel", "label": "Bind channel to agent", "args": { "channelType": "discord", "peerId": "{{channel_id}}", "agentId": "{{agent_id}}" } },
+        { "action": "config_patch", "label": "Set channel persona", "args": { "patchTemplate": "{\"channels\":{\"discord\":{\"guilds\":{\"{{guild_id}}\":{\"channels\":{\"{{channel_id}}\":{\"systemPrompt\":\"{{persona}}\"}}}}}}}" } }
+      ]
+    },
+    {
+      "id": "discord-channel-persona",
+      "name": "Channel Persona",
+      "description": "Set a custom persona for a Discord channel",
+      "version": "1.0.0",
+      "tags": ["discord", "persona", "beginner"],
+      "difficulty": "easy",
+      "params": [
+        { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
+        { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },
+        { "id": "persona", "label": "Persona", "type": "textarea", "required": true, "placeholder": "You are..." }
+      ],
+      "bundle": {
+        "apiVersion": "strategy.platform/v1",
+        "kind": "StrategyBundle",
+        "metadata": {
+          "name": "discord-channel-persona",
+          "version": "1.0.0",
+          "description": "Set a custom persona for a Discord channel"
+        },
+        "compatibility": {},
+        "inputs": [],
+        "capabilities": {
+          "allowed": ["config.write"]
+        },
+        "resources": {
+          "supportedKinds": ["file"]
+        },
+        "execution": {
+          "supportedKinds": ["attachment"]
+        },
+        "runner": {},
+        "outputs": [{ "kind": "recipe-summary", "recipeId": "discord-channel-persona" }]
+      },
+      "executionSpecTemplate": {
+        "apiVersion": "strategy.platform/v1",
+        "kind": "ExecutionSpec",
+        "metadata": {
+          "name": "discord-channel-persona"
+        },
+        "source": {},
+        "target": {},
+        "execution": {
+          "kind": "attachment"
+        },
+        "capabilities": {
+          "usedCapabilities": []
+        },
+        "resources": {
+          "claims": []
+        },
+        "secrets": {
+          "bindings": []
+        },
+        "desiredState": {
+          "actionCount": 1
+        },
+        "actions": [
+          {
+            "kind": "config_patch",
+            "name": "Set channel persona",
+            "args": {
+              "patch": {
+                "channels": {
+                  "discord": {
+                    "guilds": {
+                      "{{guild_id}}": {
+                        "channels": {
+                          "{{channel_id}}": {
+                            "systemPrompt": "{{persona}}"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "outputs": [{ "kind": "recipe-summary", "recipeId": "discord-channel-persona" }]
+      },
+      "steps": [
+        { "action": "config_patch", "label": "Set channel persona", "args": { "patchTemplate": "{\"channels\":{\"discord\":{\"guilds\":{\"{{guild_id}}\":{\"channels\":{\"{{channel_id}}\":{\"systemPrompt\":\"{{persona}}\"}}}}}}}" } }
+      ]
+    }
+  ]
+}"#;
+
+fn test_recipe(id: &str) -> Recipe {
+    load_recipes_from_source_text(TEST_RECIPES_SOURCE)
+        .expect("parse test recipe source")
+        .into_iter()
+        .find(|recipe| recipe.id == id)
+        .expect("test recipe")
+}
 
 fn sample_params() -> Map<String, Value> {
     let mut params = Map::new();
@@ -24,10 +244,7 @@ fn sample_params() -> Map<String, Value> {
 
 #[test]
 fn recipe_compiles_to_attachment_or_job_spec() {
-    let recipe = builtin_recipes()
-        .into_iter()
-        .find(|recipe| recipe.id == "dedicated-channel-agent")
-        .expect("builtin recipe");
+    let recipe = test_recipe("dedicated-channel-agent");
 
     let spec = compile_recipe_to_spec(&recipe, &sample_params()).expect("compile spec");
 
@@ -46,10 +263,7 @@ fn recipe_compiles_to_attachment_or_job_spec() {
 
 #[test]
 fn config_patch_only_recipe_compiles_to_attachment_spec() {
-    let recipe = builtin_recipes()
-        .into_iter()
-        .find(|recipe| recipe.id == "discord-channel-persona")
-        .expect("builtin recipe");
+    let recipe = test_recipe("discord-channel-persona");
 
     let spec = compile_recipe_to_spec(&recipe, &sample_params()).expect("compile spec");
 
@@ -73,10 +287,7 @@ fn config_patch_only_recipe_compiles_to_attachment_spec() {
 
 #[test]
 fn structured_recipe_template_skips_optional_actions_with_empty_params() {
-    let recipe = builtin_recipes()
-        .into_iter()
-        .find(|recipe| recipe.id == "dedicated-channel-agent")
-        .expect("builtin recipe");
+    let recipe = test_recipe("dedicated-channel-agent");
     let mut params = sample_params();
     params.insert("name".into(), Value::String(String::new()));
     params.insert("emoji".into(), Value::String(String::new()));
@@ -98,6 +309,9 @@ fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
         version: "1.0.0".into(),
         tags: vec!["discord".into(), "persona".into()],
         difficulty: "easy".into(),
+        presentation: Some(RecipePresentation {
+            result_summary: Some("Updated persona for {{channel_id}}".into()),
+        }),
         params: vec![
             RecipeParam {
                 id: "guild_id".into(),
@@ -143,16 +357,92 @@ fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
 
     assert!(exported.contains("\"bundle\""));
     assert!(exported.contains("\"executionSpecTemplate\""));
+    assert!(exported.contains("\"presentation\""));
+    assert!(exported.contains("Updated persona for {{channel_id}}"));
     assert!(exported.contains("\"supportedKinds\": [\n        \"attachment\""));
     assert!(exported.contains("\"{{guild_id}}\""));
 }
 
 #[test]
+fn structured_recipe_compilation_renders_result_summary_into_spec_source() {
+    let recipe = Recipe {
+        id: "persona-pack".into(),
+        name: "Persona Pack".into(),
+        description: "Apply a persona pack".into(),
+        version: "1.0.0".into(),
+        tags: vec!["agent".into(), "persona".into()],
+        difficulty: "easy".into(),
+        presentation: Some(RecipePresentation {
+            result_summary: Some("Updated persona for {{agent_id}}".into()),
+        }),
+        params: vec![RecipeParam {
+            id: "agent_id".into(),
+            label: "Agent".into(),
+            kind: "agent".into(),
+            required: true,
+            pattern: None,
+            min_length: None,
+            max_length: None,
+            placeholder: None,
+            depends_on: None,
+            default_value: None,
+            options: None,
+        }],
+        steps: vec![RecipeStep {
+            action: "setup_identity".into(),
+            label: "Apply persona".into(),
+            args: serde_json::from_value(serde_json::json!({
+                "agentId": "{{agent_id}}",
+                "persona": "You are calm and direct."
+            }))
+            .expect("step args"),
+        }],
+        clawpal_preset_maps: None,
+        bundle: None,
+        execution_spec_template: Some(
+            serde_json::from_value(serde_json::json!({
+                "apiVersion": "strategy.platform/v1",
+                "kind": "ExecutionSpec",
+                "metadata": { "name": "persona-pack" },
+                "source": {},
+                "target": {},
+                "execution": { "kind": "job" },
+                "capabilities": { "usedCapabilities": ["agent.identity.write"] },
+                "resources": { "claims": [{ "kind": "agent", "id": "{{agent_id}}" }] },
+                "secrets": { "bindings": [] },
+                "desiredState": { "actionCount": 1 },
+                "actions": [
+                  {
+                    "kind": "setup_identity",
+                    "name": "Apply persona",
+                    "args": {
+                      "agentId": "{{agent_id}}",
+                      "persona": "You are calm and direct."
+                    }
+                  }
+                ],
+                "outputs": []
+            }))
+            .expect("template"),
+        ),
+    };
+    let mut params = Map::new();
+    params.insert("agent_id".into(), Value::String("main".into()));
+
+    let spec = compile_recipe_to_spec(&recipe, &params).expect("compile spec");
+
+    assert_eq!(
+        spec.source
+            .get("recipePresentation")
+            .and_then(|value| value.get("resultSummary"))
+            .and_then(Value::as_str),
+        Some("Updated persona for main")
+    );
+}
+
+#[test]
 fn exported_recipe_source_validates_as_structured_document() {
-    let recipe = builtin_recipes()
-        .into_iter()
-        .find(|recipe| recipe.id == "discord-channel-persona")
-        .expect("builtin recipe");
+    let recipe = test_recipe("discord-channel-persona");
     let source = export_recipe_source(&recipe).expect("export source");
 
     let diagnostics = validate_recipe_source(&source).expect("validate source");

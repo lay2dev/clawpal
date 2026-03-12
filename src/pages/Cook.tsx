@@ -1,18 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ParamForm } from "../components/ParamForm";
 import { resolveSteps, type ResolvedStep } from "../lib/actions";
 import { useApi } from "@/lib/use-api";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { InlineProgressBar } from "@/components/InlineProgressBar";
 import { cn } from "@/lib/utils";
 import type { ExecuteRecipeResult, PrecheckIssue, Recipe, RecipePlan } from "../lib/types";
 import { useInstance } from "@/lib/instance-context";
 import { RecipePlanPreview } from "@/components/RecipePlanPreview";
+import { formatRecipeClaimForPeople } from "@/lib/recipe-run-copy";
 import {
+  buildCookPhaseItems,
   buildCookExecuteRequest,
+  getCookExecutionProgress,
+  getCookPlanningProgress,
   markCookFailure,
   markCookStatuses,
+  type CookPhase,
+  type CookPlanningStage,
   type CookStepStatus,
 } from "./cook-execution";
 import {
@@ -22,9 +31,24 @@ import {
 } from "./cook-plan-context";
 type Phase = "params" | "confirm" | "execute" | "done";
 
+async function waitForNextPaint(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function"
+    ) {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 export function Cook({
   recipeId,
   onDone,
+  onOpenHistory,
+  onOpenRuntimeDashboard,
   recipeSource,
   recipeSourceText,
   recipeSourceOrigin = "saved",
@@ -32,6 +56,8 @@ export function Cook({
 }: {
   recipeId: string;
   onDone?: () => void;
+  onOpenHistory?: () => void;
+  onOpenRuntimeDashboard?: () => void;
   recipeSource?: string;
   recipeSourceText?: string;
   recipeSourceOrigin?: "saved" | "draft";
@@ -39,7 +65,7 @@ export function Cook({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { instanceId, isRemote, isDocker } = useInstance();
+  const { instanceId, instanceLabel, isRemote, isDocker } = useInstance();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [params, setParams] = useState<Record<string, string>>({});
@@ -49,16 +75,35 @@ export function Cook({
   const [executionError, setExecutionError] = useState<string | null>(null);
   const [executionResult, setExecutionResult] = useState<ExecuteRecipeResult | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [planningStage, setPlanningStage] = useState<CookPlanningStage | null>(null);
   const [resolvedStepList, setResolvedStepList] = useState<ResolvedStep[]>([]);
   const [stepStatuses, setStepStatuses] = useState<CookStepStatus[]>([]);
   const [authIssues, setAuthIssues] = useState<PrecheckIssue[]>([]);
   const [contextWarnings, setContextWarnings] = useState<string[]>([]);
+  const [doneSupportDetailsOpen, setDoneSupportDetailsOpen] = useState(false);
 
   const routeSummary = useMemo(
-    () => buildCookRouteSummary({ instanceId, isRemote, isDocker }),
-    [instanceId, isRemote, isDocker],
+    () => buildCookRouteSummary({ instanceId, instanceLabel, isRemote, isDocker }),
+    [instanceId, instanceLabel, isRemote, isDocker],
   );
   const blockingAuthIssues = hasBlockingAuthIssues(authIssues);
+  const planningProgress = planningStage ? getCookPlanningProgress(planningStage) : null;
+  const phaseItems = useMemo(
+    () => buildCookPhaseItems(phase as CookPhase),
+    [phase],
+  );
+  const executionProgress =
+    phase === "execute"
+      ? getCookExecutionProgress(executionError ? "failed" : "running", stepStatuses)
+      : phase === "done"
+        ? getCookExecutionProgress("done", stepStatuses)
+        : null;
+  const routeKindLabel =
+    routeSummary.kind === "ssh"
+      ? t("cook.routeKindSsh")
+      : routeSummary.kind === "docker"
+        ? t("cook.routeKindDocker")
+        : t("cook.routeKindLocal");
 
   useEffect(() => {
     setLoading(true);
@@ -140,12 +185,17 @@ export function Cook({
 
   const handleNext = async () => {
     setPlanning(true);
+    setPlanningStage("validate");
     setPlanError(null);
+    await waitForNextPaint();
 
     try {
+      setPlanningStage("build");
       const nextPlan = recipeSourceText
         ? await ua.planRecipeSource(recipe.id, params, recipeSourceText)
         : await ua.planRecipe(recipe.id, params, recipeSource);
+      setPlanningStage("checks");
+      await waitForNextPaint();
       const [authResult, configResult] = await Promise.allSettled([
         ua.precheckAuth(instanceId),
         ua.readRawConfig(),
@@ -171,6 +221,7 @@ export function Cook({
       setPlanError(String(error));
     } finally {
       setPlanning(false);
+      setPlanningStage(null);
     }
   };
 
@@ -187,7 +238,6 @@ export function Cook({
     setPhase("execute");
     setExecutionError(null);
     setExecutionResult(null);
-    setStepStatuses((current) => markCookStatuses(current, "running"));
 
     try {
       const result = await ua.executeRecipe({
@@ -199,6 +249,7 @@ export function Cook({
       });
       setExecutionResult(result);
       setStepStatuses((current) => markCookStatuses(current, "done"));
+      setDoneSupportDetailsOpen(false);
       setPhase("done");
     } catch (error) {
       setExecutionError(String(error));
@@ -230,12 +281,48 @@ export function Cook({
   const skippedCount = stepStatuses.filter((s) => s === "skipped").length;
 
   return (
-    <section>
+    <section className="space-y-5">
       <div className="flex items-center gap-2 mb-4">
         <Button variant="ghost" size="sm" className="px-2" onClick={onDone}>
           &larr;
         </Button>
-        <h2 className="text-2xl font-bold">{recipe.name}</h2>
+        <div className="min-w-0">
+          <h2 className="truncate text-2xl font-bold">{recipe.name}</h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <Badge variant="outline">{routeKindLabel}</Badge>
+            <span>{routeSummary.targetLabel}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-4">
+        {phaseItems.map((item, index) => (
+          <div
+            key={item.key}
+            className={cn(
+              "rounded-xl border px-3 py-3 transition-colors",
+              item.state === "current" && "border-primary/40 bg-primary/5",
+              item.state === "complete" && "border-border/70 bg-muted/20",
+              item.state === "upcoming" && "border-border/60 bg-background",
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold",
+                  item.state === "current" && "bg-primary text-primary-foreground",
+                  item.state === "complete" && "bg-foreground text-background",
+                  item.state === "upcoming" && "bg-muted text-muted-foreground",
+                )}
+              >
+                {index + 1}
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{t(item.labelKey)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
       {phase === "params" && (
@@ -243,6 +330,16 @@ export function Cook({
           {planError && (
             <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               {planError}
+            </div>
+          )}
+          {planningProgress && (
+            <div className="mb-3">
+              <InlineProgressBar
+                title={t("cook.planningProgressTitle")}
+                detail={t(planningProgress.labelKey)}
+                value={planningProgress.value}
+                animated={planningProgress.value < 100}
+              />
             </div>
           )}
           <ParamForm
@@ -255,10 +352,14 @@ export function Cook({
         </>
       )}
 
-      {(phase === "confirm" || phase === "execute") && (
+      {phase === "confirm" && (
         <Card>
-          <CardContent>
-            {plan && phase === "confirm" && (
+          <CardHeader className="space-y-1">
+            <CardTitle>{t("cook.reviewTitle")}</CardTitle>
+            <CardDescription>{t("cook.reviewDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {plan && (
               <RecipePlanPreview
                 plan={plan}
                 routeSummary={routeSummary}
@@ -266,7 +367,88 @@ export function Cook({
                 contextWarnings={contextWarnings}
               />
             )}
-            <div className="space-y-3">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                {t("cook.plannedChangesTitle")}
+              </div>
+              <div className="mt-3 space-y-3">
+                {resolvedStepList.map((step, i) => (
+                  <div key={i} className={cn("flex items-start gap-3", stepStatuses[i] === "skipped" && "opacity-50")}>
+                    <span className={cn("text-lg font-mono w-5 text-center", statusColor(stepStatuses[i]))}>
+                      {statusIcon(stepStatuses[i])}
+                    </span>
+                    <div className="flex-1">
+                      <div className="text-sm font-medium">
+                        {step.label}
+                        {stepStatuses[i] === "skipped" && (
+                          <span className="ml-2 text-xs text-muted-foreground">{t('cook.skippedEmpty')}</span>
+                        )}
+                      </div>
+                      {step.description !== step.label && stepStatuses[i] !== "skipped" && (
+                        <div className="text-xs text-muted-foreground">{step.description}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {blockingAuthIssues && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {t("cook.authBlocker")}
+              </div>
+            )}
+            {executionError && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {executionError}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={blockingAuthIssues} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
+              <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.backToConfiguration')}</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {phase === "execute" && executionProgress && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle>{t("cook.executionActiveTitle")}</CardTitle>
+              <CardDescription>{t("cook.executionActiveDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <InlineProgressBar
+                title={t("cook.executionProgressTitle")}
+                detail={t(executionProgress.detailKey, executionProgress.detailArgs)}
+                value={executionProgress.value}
+                tone={executionProgress.failed ? "destructive" : "primary"}
+                animated={executionProgress.animated}
+              />
+              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                {t("cook.executionApplyNote")}
+              </div>
+              {executionError && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  <div className="font-medium">{t("cook.executionFailed")}</div>
+                  <div className="mt-1">{executionError}</div>
+                </div>
+              )}
+              {executionError && (
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setPhase("confirm")}>{t("cook.backToReview")}</Button>
+                  <Button variant="outline" onClick={() => setPhase("params")}>{t("cook.backToConfiguration")}</Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle>{t("cook.plannedChangesTitle")}</CardTitle>
+              <CardDescription>{t("cook.plannedChangesDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
               {resolvedStepList.map((step, i) => (
                 <div key={i} className={cn("flex items-start gap-3", stepStatuses[i] === "skipped" && "opacity-50")}>
                   <span className={cn("text-lg font-mono w-5 text-center", statusColor(stepStatuses[i]))}>
@@ -275,8 +457,8 @@ export function Cook({
                   <div className="flex-1">
                     <div className="text-sm font-medium">
                       {step.label}
-                      {stepStatuses[i] === "skipped" && phase === "confirm" && (
-                        <span className="text-xs text-muted-foreground ml-2">{t('cook.skippedEmpty')}</span>
+                      {stepStatuses[i] === "skipped" && (
+                        <span className="ml-2 text-xs text-muted-foreground">{t('cook.skippedEmpty')}</span>
                       )}
                     </div>
                     {step.description !== step.label && stepStatuses[i] !== "skipped" && (
@@ -285,60 +467,53 @@ export function Cook({
                   </div>
                 </div>
               ))}
-            </div>
-            {phase === "confirm" && blockingAuthIssues && (
-              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                Resolve auth precheck errors before execution.
-              </div>
-            )}
-            {phase === "confirm" && executionError && (
-              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {executionError}
-              </div>
-            )}
-            {phase === "execute" && executionError && (
-              <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                <div className="font-medium">{t("cook.executionFailed")}</div>
-                <div className="mt-1">{executionError}</div>
-              </div>
-            )}
-            {phase === "confirm" && (
-              <div className="flex gap-2 mt-4">
-                <Button disabled={blockingAuthIssues} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
-                <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.back')}</Button>
-              </div>
-            )}
-            {phase === "execute" && executionError && (
-              <div className="flex gap-2 mt-4">
-                <Button onClick={() => void handleExecute()}>{t('cook.retry')}</Button>
-                <Button variant="outline" onClick={() => setPhase("confirm")}>{t('cook.back')}</Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {phase === "done" && (
         <Card>
-          <CardContent className="py-8 text-center">
-            <div className="text-2xl mb-2">&#10003;</div>
-            <p className="text-lg font-medium">
-              {t('cook.stepsCompleted', { done: doneCount })}
-              {skippedCount > 0 && t('cook.stepsSkipped', { skipped: skippedCount })}
-            </p>
+          <CardHeader className="space-y-1">
+            <CardTitle>{t("cook.doneTitle")}</CardTitle>
+            <CardDescription>{t("cook.doneDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="rounded-xl border border-green-500/20 bg-green-500/5 px-4 py-4">
+              <div className="text-sm font-medium text-green-700">
+                {t("cook.doneResultTitle")}
+              </div>
+              {executionResult && (
+                <>
+                  <p className="mt-2 text-sm text-foreground">
+                    {executionResult.summary}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {t("cook.doneEnvironment", { name: routeSummary.targetLabel })}
+                    {" · "}
+                    {t("cook.stepsCompleted", { done: doneCount })}
+                    {skippedCount > 0 ? t("cook.stepsSkipped", { skipped: skippedCount }) : ""}
+                  </p>
+                </>
+              )}
+            </div>
             {executionResult && (
-              <>
-                <p className="text-sm text-muted-foreground mt-2">
-                  {executionResult.summary}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {t("cook.runId")}: {executionResult.runId}
-                </p>
-              </>
+              <div>
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  {t("cook.doneWhatChangedTitle")}
+                </div>
+                <ul className="mt-3 space-y-2 text-sm text-foreground">
+                  {plan?.concreteClaims.map((claim, index) => (
+                    <li key={`${claim.kind}-${claim.id ?? claim.path ?? index}`}>
+                      {formatRecipeClaimForPeople(t, claim)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {(executionResult?.warnings.length ?? 0) > 0 && (
-              <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-left text-sm text-amber-950">
-                <div className="font-medium">{t("cook.executionWarnings")}</div>
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-left text-sm text-amber-950">
+                <div className="font-medium">{t("cook.doneNeedsAttentionTitle")}</div>
                 {executionResult?.warnings.map((warning) => (
                   <div key={warning} className="mt-1">
                     {warning}
@@ -346,9 +521,41 @@ export function Cook({
                 ))}
               </div>
             )}
-            <Button className="mt-4" onClick={onDone}>
-              {t('cook.done')}
-            </Button>
+            {executionResult && (
+              <div className="rounded-md border border-border/70 bg-background/80 px-3 py-2">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 text-left text-sm font-medium text-foreground"
+                  onClick={() => setDoneSupportDetailsOpen((open) => !open)}
+                >
+                  <span>{t("cook.doneSupportDetailsTitle")}</span>
+                  <ChevronDownIcon
+                    className={cn(
+                      "size-4 text-muted-foreground transition-transform",
+                      doneSupportDetailsOpen && "rotate-180",
+                    )}
+                    aria-hidden="true"
+                  />
+                </button>
+                {doneSupportDetailsOpen && (
+                  <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                    <div>
+                      <span className="font-medium text-foreground">{t("cook.runId")}:</span>{" "}
+                      {executionResult.runId}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={onDone}>{t("cook.return")}</Button>
+              {onOpenHistory && (
+                <Button variant="outline" onClick={onOpenHistory}>{t("cook.viewHistory")}</Button>
+              )}
+              {onOpenRuntimeDashboard && (
+                <Button variant="outline" onClick={onOpenRuntimeDashboard}>{t("cook.viewRuntime")}</Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}

@@ -61,6 +61,7 @@ import {
   buildSshPassphraseConnectErrorMessage,
 } from "@/lib/sshConnectErrors";
 import { buildFriendlySshError, extractErrorText } from "@/lib/sshDiagnostic";
+import { shouldShowPendingChangesBar } from "@/lib/route-ui";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -1498,6 +1499,7 @@ export function App() {
       />
       <InstanceContext.Provider value={{
         instanceId: activeInstance,
+        instanceLabel: openTabs.find((t) => t.id === activeInstance)?.label || activeInstance,
         instanceViewToken: activeInstance,
         instanceToken,
         persistenceScope,
@@ -1590,7 +1592,7 @@ export function App() {
           )}
         </div>
 
-        {!inStart && (
+        {shouldShowPendingChangesBar({ inStart, route }) && (
           <Suspense fallback={null}>
             <PendingChangesBar
               showToast={showToast}
@@ -1747,6 +1749,8 @@ export function App() {
               recipeSourceText={recipeSourceText}
               recipeSourceOrigin={recipeSourceOrigin}
               recipeWorkspaceSlug={recipeSourceWorkspaceSlug}
+              onOpenHistory={() => navigateRoute("history")}
+              onOpenRuntimeDashboard={() => navigateRoute("orchestrator")}
               onDone={() => {
                 navigateRoute(cookReturnRoute);
               }}

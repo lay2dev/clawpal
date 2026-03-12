@@ -115,6 +115,22 @@ fn sample_execution_request() -> ExecuteRecipeRequest {
     }
 }
 
+fn sample_presented_execution_request() -> ExecuteRecipeRequest {
+    let mut spec = sample_job_spec();
+    spec.source = json!({
+        "recipeId": "agent-persona-pack",
+        "recipePresentation": {
+            "resultSummary": "Updated persona for main"
+        }
+    });
+    ExecuteRecipeRequest {
+        spec,
+        source_origin: None,
+        source_text: None,
+        workspace_slug: None,
+    }
+}
+
 fn sample_attachment_spec() -> ExecutionSpec {
     ExecutionSpec {
         api_version: "strategy.platform/v1".into(),
@@ -251,6 +267,14 @@ fn execute_recipe_returns_run_id_and_summary() {
 
     assert!(!result.run_id.is_empty());
     assert!(!result.summary.is_empty());
+}
+
+#[test]
+fn execute_recipe_prefers_recipe_presentation_summary() {
+    let result =
+        execute_recipe(sample_presented_execution_request()).expect("execute recipe with summary");
+
+    assert_eq!(result.summary, "Updated persona for main");
 }
 
 #[test]
