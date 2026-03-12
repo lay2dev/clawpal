@@ -3,12 +3,14 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { RecipeSaveDialog } from "@/components/RecipeSaveDialog";
+import { RecipeSampleParamsForm } from "@/components/RecipeSampleParamsForm";
 import { RecipeSourceEditor } from "@/components/RecipeSourceEditor";
 import { RecipeValidationPanel } from "@/components/RecipeValidationPanel";
+import { RecipePlanPreview } from "@/components/RecipePlanPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { RecipeEditorOrigin, RecipeSourceDiagnostics } from "@/lib/types";
+import type { Recipe, RecipeEditorOrigin, RecipePlan, RecipeSourceDiagnostics } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 
 const EMPTY_DIAGNOSTICS: RecipeSourceDiagnostics = {
@@ -59,6 +61,17 @@ const NEW_RECIPE_SOURCE = JSON.stringify(
 
 type SaveDialogMode = "save-as" | "fork" | null;
 
+function isRecipeShape(value: unknown): value is Recipe {
+  return !!(
+    value &&
+    typeof value === "object" &&
+    typeof (value as Recipe).id === "string" &&
+    typeof (value as Recipe).name === "string" &&
+    Array.isArray((value as Recipe).params) &&
+    Array.isArray((value as Recipe).steps)
+  );
+}
+
 function originLabelKey(origin: RecipeEditorOrigin): string {
   switch (origin) {
     case "workspace":
@@ -100,6 +113,31 @@ function tryParseRecipeIdentity(
   }
 }
 
+function tryParseRecipeFromSource(
+  source: string,
+  preferredRecipeId: string,
+): Recipe | null {
+  try {
+    const parsed: unknown = JSON.parse(source);
+    let candidates: unknown[] = [];
+    if (Array.isArray(parsed)) {
+      candidates = parsed;
+    } else if (
+      parsed &&
+      typeof parsed === "object" &&
+      Array.isArray((parsed as { recipes?: unknown[] }).recipes)
+    ) {
+      candidates = (parsed as { recipes: unknown[] }).recipes;
+    } else {
+      candidates = [parsed];
+    }
+    const validRecipes = candidates.filter(isRecipeShape);
+    return validRecipes.find((item) => item.id === preferredRecipeId) ?? validRecipes[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function suggestSlug(source: string, fallback: string): string {
   const { recipeId } = tryParseRecipeIdentity(source, fallback, fallback);
   const normalized = recipeId
@@ -134,6 +172,10 @@ export function RecipeStudio({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const initialDraftRecipe = useMemo(
+    () => tryParseRecipeFromSource(initialSource, recipeId),
+    [initialSource, recipeId],
+  );
   const [source, setSource] = useState(initialSource);
   const [baselineSource, setBaselineSource] = useState(initialSource);
   const [currentRecipeId, setCurrentRecipeId] = useState(recipeId);
@@ -148,6 +190,20 @@ export function RecipeStudio({
   const [saveDialogMode, setSaveDialogMode] = useState<SaveDialogMode>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [draftRecipe, setDraftRecipe] = useState<Recipe | null>(initialDraftRecipe);
+  const [sampleParams, setSampleParams] = useState<Record<string, string>>(() => {
+    if (!initialDraftRecipe) {
+      return {};
+    }
+    const nextValues: Record<string, string> = {};
+    for (const param of initialDraftRecipe.params) {
+      nextValues[param.id] = param.defaultValue ?? (param.type === "boolean" ? "false" : "");
+    }
+    return nextValues;
+  });
+  const [planPreview, setPlanPreview] = useState<RecipePlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planning, setPlanning] = useState(false);
 
   useEffect(() => {
     setSource(initialSource);
@@ -156,6 +212,20 @@ export function RecipeStudio({
     setCurrentRecipeName(recipeName);
     setCurrentOrigin(origin);
     setCurrentWorkspaceSlug(workspaceSlug ?? null);
+    setDraftRecipe(tryParseRecipeFromSource(initialSource, recipeId));
+    setSampleParams(() => {
+      const parsedRecipe = tryParseRecipeFromSource(initialSource, recipeId);
+      if (!parsedRecipe) {
+        return {};
+      }
+      const nextValues: Record<string, string> = {};
+      for (const param of parsedRecipe.params) {
+        nextValues[param.id] = param.defaultValue ?? (param.type === "boolean" ? "false" : "");
+      }
+      return nextValues;
+    });
+    setPlanPreview(null);
+    setPlanError(null);
   }, [initialSource, origin, recipeId, recipeName, workspaceSlug]);
 
   useEffect(() => {
@@ -191,6 +261,40 @@ export function RecipeStudio({
       cancelled = true;
     };
   }, [source, ua]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ua.listRecipesFromSourceText(source)
+      .then((recipes) => {
+        if (cancelled) return;
+        const preferred = recipes.find((item) => item.id === currentRecipeId) ?? recipes[0] ?? null;
+        setDraftRecipe(preferred);
+        setPlanPreview(null);
+        setPlanError(null);
+        if (!preferred) {
+          setSampleParams({});
+          return;
+        }
+        setSampleParams((current) => {
+          const nextValues: Record<string, string> = {};
+          for (const param of preferred.params) {
+            nextValues[param.id] = current[param.id] ?? param.defaultValue ?? (param.type === "boolean" ? "false" : "");
+          }
+          return nextValues;
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDraftRecipe(null);
+        setSampleParams({});
+        setPlanPreview(null);
+        setPlanError(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRecipeId, source, ua]);
 
   const readOnly = currentOrigin === "builtin";
   const dirty = source !== baselineSource;
@@ -278,6 +382,23 @@ export function RecipeStudio({
     }
   };
 
+  const handlePreviewPlan = async () => {
+    if (!draftRecipe) {
+      return;
+    }
+    setPlanning(true);
+    setPlanError(null);
+    try {
+      const nextPlan = await ua.planRecipeSource(draftRecipe.id, sampleParams, source);
+      setPlanPreview(nextPlan);
+    } catch (error) {
+      setPlanPreview(null);
+      setPlanError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPlanning(false);
+    }
+  };
+
   return (
     <section className="space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -355,11 +476,36 @@ export function RecipeStudio({
           origin={currentOrigin}
           onChange={setSource}
         />
-        <RecipeValidationPanel
-          diagnostics={diagnostics}
-          validating={validating}
-          errorMessage={validationError}
-        />
+        <div className="space-y-4">
+          <RecipeValidationPanel
+            diagnostics={diagnostics}
+            validating={validating}
+            errorMessage={validationError}
+          />
+          {draftRecipe && (
+            <RecipeSampleParamsForm
+              recipe={draftRecipe}
+              values={sampleParams}
+              onChange={(id, value) => {
+                setSampleParams((current) => ({ ...current, [id]: value }));
+              }}
+              onPreviewPlan={() => void handlePreviewPlan()}
+              planning={planning}
+            />
+          )}
+          {planError && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive">
+              <div className="font-medium">{t("recipeStudio.planErrorTitle")}</div>
+              <div className="mt-1">{planError}</div>
+            </div>
+          )}
+          {planPreview && (
+            <div>
+              <div className="mb-2 text-sm font-medium">{t("recipeStudio.planPreviewTitle")}</div>
+              <RecipePlanPreview plan={planPreview} />
+            </div>
+          )}
+        </div>
       </div>
 
       <RecipeSaveDialog

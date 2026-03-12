@@ -16,7 +16,42 @@ describe("RecipeStudio", () => {
         children: React.createElement(RecipeStudio, {
           recipeId: "channel-persona",
           recipeName: "Channel Persona",
-          initialSource: '{\n  "kind": "ExecutionSpec"\n}',
+          initialSource: JSON.stringify({
+            id: "channel-persona",
+            name: "Channel Persona",
+            description: "Apply a persona to one channel",
+            version: "1.0.0",
+            tags: ["discord"],
+            difficulty: "easy",
+            params: [],
+            steps: [],
+            bundle: {
+              apiVersion: "strategy.platform/v1",
+              kind: "StrategyBundle",
+              metadata: {},
+              compatibility: {},
+              inputs: [],
+              capabilities: { allowed: [] },
+              resources: { supportedKinds: [] },
+              execution: { supportedKinds: ["attachment"] },
+              runner: {},
+              outputs: [],
+            },
+            executionSpecTemplate: {
+              apiVersion: "strategy.platform/v1",
+              kind: "ExecutionSpec",
+              metadata: {},
+              source: {},
+              target: {},
+              execution: { kind: "attachment" },
+              capabilities: { usedCapabilities: [] },
+              resources: { claims: [] },
+              secrets: { bindings: [] },
+              desiredState: {},
+              actions: [],
+              outputs: [],
+            },
+          }, null, 2),
           origin: "workspace",
           onBack: () => {},
         }),
@@ -29,6 +64,7 @@ describe("RecipeStudio", () => {
     expect(html).toContain("New");
     expect(html).toContain("Save");
     expect(html).toContain("Save as");
+    expect(html).toContain("Preview plan");
     expect(html).toContain("textarea");
     expect(html).toContain("ExecutionSpec");
   });
