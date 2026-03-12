@@ -62,4 +62,36 @@ describe("History runtime association", () => {
     expect(html).toContain("Rendered patch");
     expect(html).toContain("openclaw.config");
   });
+
+  test("falls back to history item artifacts when runtime run is unavailable", async () => {
+    await i18n.changeLanguage("en");
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(History, {
+          initialHistory: [
+            {
+              id: "snapshot_remote_01",
+              recipeId: "discord-channel-persona",
+              createdAt: "2026-03-11T10:00:03Z",
+              source: "clawpal",
+              canRollback: true,
+              runId: "run_remote_01",
+              artifacts: [
+                {
+                  id: "artifact_remote_01",
+                  kind: "systemdUnit",
+                  label: "clawpal-job-hourly.service",
+                },
+              ],
+            },
+          ],
+          initialRuns: [],
+        }),
+      }),
+    );
+
+    expect(html).toContain("clawpal-job-hourly.service");
+  });
 });

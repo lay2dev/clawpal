@@ -231,8 +231,8 @@ pub async fn remote_rollback(
     let (config_path, current_text, _current) =
         remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
     let mut warnings = Vec::new();
-    if let Some(run_id) = snapshot_meta.as_ref().and_then(|snapshot| snapshot.run_id.as_deref()) {
-        warnings.extend(super::cleanup_remote_recipe_run(&pool, &host_id, run_id).await);
+    if let Some(snapshot) = snapshot_meta.as_ref() {
+        warnings.extend(super::cleanup_remote_recipe_snapshot(&pool, &host_id, snapshot).await);
     }
     remote_write_config_with_snapshot(
         &pool,
@@ -358,10 +358,7 @@ pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
     let target_text = read_snapshot(&target.config_path)?;
     let backup = read_openclaw_config(&paths)?;
     let backup_text = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
-    let mut warnings = Vec::new();
-    if let Some(run_id) = target.run_id.as_deref() {
-        warnings.extend(super::cleanup_local_recipe_run(run_id));
-    }
+    let warnings = super::cleanup_local_recipe_snapshot(&target);
     let _ = add_snapshot(
         &paths.history_dir,
         &paths.metadata_path,

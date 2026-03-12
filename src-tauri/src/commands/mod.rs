@@ -1483,30 +1483,54 @@ async fn cleanup_remote_recipe_artifacts(
     warnings
 }
 
-fn cleanup_local_recipe_run(run_id: &str) -> Vec<String> {
-    match find_recipe_run(run_id) {
-        Ok(Some(run)) => cleanup_local_recipe_artifacts(&run.artifacts),
-        Ok(None) => vec![format!("No recipe runtime run found for rollback runId {}", run_id)],
-        Err(error) => vec![format!(
-            "Failed to load recipe runtime run {} for rollback: {}",
-            run_id, error
-        )],
+fn cleanup_local_recipe_snapshot(snapshot: &crate::history::SnapshotMeta) -> Vec<String> {
+    if let Some(run_id) = snapshot.run_id.as_deref() {
+        match find_recipe_run(run_id) {
+            Ok(Some(run)) => return cleanup_local_recipe_artifacts(&run.artifacts),
+            Ok(None) if !snapshot.artifacts.is_empty() => {}
+            Ok(None) => {
+                return vec![format!(
+                    "No recipe runtime run found for rollback runId {}",
+                    run_id
+                )];
+            }
+            Err(error) if !snapshot.artifacts.is_empty() => {}
+            Err(error) => {
+                return vec![format!(
+                    "Failed to load recipe runtime run {} for rollback: {}",
+                    run_id, error
+                )];
+            }
+        }
     }
+    cleanup_local_recipe_artifacts(&snapshot.artifacts)
 }
 
-async fn cleanup_remote_recipe_run(
+async fn cleanup_remote_recipe_snapshot(
     pool: &SshConnectionPool,
     host_id: &str,
-    run_id: &str,
+    snapshot: &crate::history::SnapshotMeta,
 ) -> Vec<String> {
-    match find_recipe_run(run_id) {
-        Ok(Some(run)) => cleanup_remote_recipe_artifacts(pool, host_id, &run.artifacts).await,
-        Ok(None) => vec![format!("No recipe runtime run found for rollback runId {}", run_id)],
-        Err(error) => vec![format!(
-            "Failed to load recipe runtime run {} for rollback: {}",
-            run_id, error
-        )],
+    if let Some(run_id) = snapshot.run_id.as_deref() {
+        match find_recipe_run(run_id) {
+            Ok(Some(run)) => return cleanup_remote_recipe_artifacts(pool, host_id, &run.artifacts).await,
+            Ok(None) if !snapshot.artifacts.is_empty() => {}
+            Ok(None) => {
+                return vec![format!(
+                    "No recipe runtime run found for rollback runId {}",
+                    run_id
+                )];
+            }
+            Err(error) if !snapshot.artifacts.is_empty() => {}
+            Err(error) => {
+                return vec![format!(
+                    "Failed to load recipe runtime run {} for rollback: {}",
+                    run_id, error
+                )];
+            }
+        }
     }
+    cleanup_remote_recipe_artifacts(pool, host_id, &snapshot.artifacts).await
 }
 
 fn is_legacy_recipe_spec(spec: &crate::execution_spec::ExecutionSpec) -> bool {

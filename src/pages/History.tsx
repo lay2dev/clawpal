@@ -106,6 +106,7 @@ export function History({
           const isRollback = item.source === "rollback";
           const rollbackTarget = item.rollbackOf ? historyMap.get(item.rollbackOf) : undefined;
           const associatedRun = item.runId ? runtimeRunMap.get(item.runId) : undefined;
+          const associatedArtifacts = associatedRun?.artifacts ?? item.artifacts ?? [];
           return (
             <Card key={item.id} className={isRollback ? "border-dashed opacity-75" : ""}>
               <CardContent>
@@ -144,17 +145,17 @@ export function History({
                     <p className="text-xs text-muted-foreground">
                       {t("history.runId")}: {associatedRun.id} · {associatedRun.runner} · {formatTime(associatedRun.startedAt)}
                     </p>
-                    {associatedRun.artifacts.length > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        {t("history.runArtifacts")}: {associatedRun.artifacts.map((artifact) => artifact.label).join(", ")}
-                      </p>
-                    )}
                     {associatedRun.resourceClaims.length > 0 && (
                       <p className="text-xs text-muted-foreground">
                         {t("history.runClaims")}: {associatedRun.resourceClaims.map((_, index) => formatResourceClaimLabel(associatedRun, index)).join(", ")}
                       </p>
                     )}
                   </div>
+                )}
+                {associatedArtifacts.length > 0 && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {t("history.runArtifacts")}: {associatedArtifacts.map((artifact) => artifact.label).join(", ")}
+                  </p>
                 )}
                 {!isRollback && (
                   <div className="flex gap-2 mt-2">
