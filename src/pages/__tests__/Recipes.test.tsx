@@ -33,6 +33,7 @@ describe("Recipes runtime summary", () => {
           },
           children: React.createElement(Recipes, {
             onCook: () => {},
+            onOpenStudio: () => {},
             initialRecipes: [
               {
                 id: "discord-channel-persona",
@@ -87,5 +88,6 @@ describe("Recipes runtime summary", () => {
     expect(html).toContain("Applied persona patch");
     expect(html).toContain("succeeded");
     expect(html).toContain("View source");
+    expect(html).toContain("Fork to workspace");
   });
 });

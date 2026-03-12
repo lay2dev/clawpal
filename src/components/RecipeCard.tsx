@@ -8,11 +8,15 @@ export function RecipeCard({
   recipe,
   onCook,
   onViewSource,
+  onEditSource,
+  onForkToWorkspace,
   compact,
 }: {
   recipe: Recipe;
   onCook: (id: string) => void;
   onViewSource?: (id: string) => void;
+  onEditSource?: (id: string) => void;
+  onForkToWorkspace?: (id: string) => void;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
@@ -72,6 +76,16 @@ export function RecipeCard({
           {onViewSource && (
             <Button variant="outline" onClick={() => onViewSource(recipe.id)}>
               {t('recipeCard.viewSource')}
+            </Button>
+          )}
+          {onEditSource && (
+            <Button variant="outline" onClick={() => onEditSource(recipe.id)}>
+              {t('recipeCard.editSource')}
+            </Button>
+          )}
+          {onForkToWorkspace && (
+            <Button variant="outline" onClick={() => onForkToWorkspace(recipe.id)}>
+              {t('recipeCard.forkToWorkspace')}
             </Button>
           )}
         </div>

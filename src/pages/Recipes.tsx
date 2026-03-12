@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RecipeCard } from "../components/RecipeCard";
-import type { Recipe, RecipeRuntimeInstance, RecipeRuntimeRun } from "../lib/types";
+import type {
+  Recipe,
+  RecipeEditorOrigin,
+  RecipeRuntimeInstance,
+  RecipeRuntimeRun,
+  RecipeStudioDraft,
+} from "../lib/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AsyncActionButton } from "@/components/ui/AsyncActionButton";
@@ -18,12 +24,14 @@ function displayRunStatus(status: string): string {
 
 export function Recipes({
   onCook,
+  onOpenStudio,
   onOpenRuntimeDashboard,
   initialRecipes,
   initialInstances,
   initialRuns,
 }: {
   onCook: (id: string, source?: string) => void;
+  onOpenStudio?: (draft: RecipeStudioDraft) => void;
   onOpenRuntimeDashboard?: () => void;
   initialRecipes?: Recipe[];
   initialInstances?: RecipeRuntimeInstance[];
@@ -96,6 +104,23 @@ export function Recipes({
       setCopiedSource(false);
     } catch (error) {
       console.error("Failed to export recipe source:", error);
+    }
+  };
+
+  const handleOpenStudio = async (recipe: Recipe, origin: RecipeEditorOrigin) => {
+    if (!onOpenStudio) {
+      return;
+    }
+    try {
+      const exported = await ua.exportRecipeSource(recipe.id, loadedSource);
+      onOpenStudio({
+        recipeId: recipe.id,
+        recipeName: recipe.name,
+        source: exported,
+        origin,
+      });
+    } catch (error) {
+      console.error("Failed to open recipe studio:", error);
     }
   };
 
@@ -184,6 +209,16 @@ export function Recipes({
               recipe={recipe}
               onCook={() => onCook(recipe.id, loadedSource)}
               onViewSource={() => void handleViewSource(recipe)}
+              onEditSource={
+                loadedSource
+                  ? () => void handleOpenStudio(recipe, "external")
+                  : undefined
+              }
+              onForkToWorkspace={
+                !loadedSource
+                  ? () => void handleOpenStudio(recipe, "workspace")
+                  : undefined
+              }
             />
             {(latestRunByRecipe.has(recipe.id) || instanceCountByRecipe.has(recipe.id)) && (
               <div className="rounded-xl border bg-muted/20 px-3 py-2 text-xs">

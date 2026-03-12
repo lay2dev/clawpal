@@ -72,6 +72,15 @@ export interface RecipeSourceDiagnostics {
   warnings: RecipeSourceDiagnostic[];
 }
 
+export type RecipeEditorOrigin = "builtin" | "workspace" | "external";
+
+export interface RecipeStudioDraft {
+  recipeId: string;
+  recipeName: string;
+  source: string;
+  origin: RecipeEditorOrigin;
+}
+
 export interface ChangeItem {
   path: string;
   op: string;
