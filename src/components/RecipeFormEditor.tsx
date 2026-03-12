@@ -237,18 +237,36 @@ export function RecipeFormEditor({
                     }),
                   })}
                 />
-                <Input
-                  aria-label={`${t("recipeStudio.form.dependsOn")} ${index + 1}`}
-                  placeholder={t("recipeStudio.form.dependsOn")}
-                  value={param.dependsOn ?? ""}
-                  onChange={(event) => onChange({
+                <Select
+                  value={param.dependsOn ?? "__none__"}
+                  onValueChange={(value) => onChange({
                     ...model,
                     params: updateArrayItem(model.params, index, {
                       ...param,
-                      dependsOn: event.target.value || undefined,
+                      dependsOn: value === "__none__" ? undefined : value,
                     }),
                   })}
-                />
+                  disabled={readOnly}
+                >
+                  <SelectTrigger
+                    aria-label={`${t("recipeStudio.form.dependsOn")} ${index + 1}`}
+                    className="w-full"
+                  >
+                    <SelectValue placeholder={t("recipeStudio.form.dependsOn")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      {t("recipeStudio.form.noDependency")}
+                    </SelectItem>
+                    {model.params
+                      .filter((candidate) => candidate.id !== param.id)
+                      .map((candidate) => (
+                        <SelectItem key={candidate.id} value={candidate.id}>
+                          {candidate.id}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
                 <div className="grid grid-cols-2 gap-2">
                   <Input
                     aria-label={`${t("recipeStudio.form.minLength")} ${index + 1}`}

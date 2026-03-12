@@ -737,6 +737,7 @@
   "recipeStudio.form.placeholder": "Placeholder",
   "recipeStudio.form.pattern": "Pattern",
   "recipeStudio.form.dependsOn": "Depends on",
+  "recipeStudio.form.noDependency": "No dependency",
   "recipeStudio.form.minLength": "Min length",
   "recipeStudio.form.maxLength": "Max length",
   "recipeStudio.form.required": "Required",

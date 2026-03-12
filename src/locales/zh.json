@@ -734,6 +734,7 @@
   "recipeStudio.form.placeholder": "占位符",
   "recipeStudio.form.pattern": "校验模式",
   "recipeStudio.form.dependsOn": "依赖参数",
+  "recipeStudio.form.noDependency": "无依赖",
   "recipeStudio.form.minLength": "最小长度",
   "recipeStudio.form.maxLength": "最大长度",
   "recipeStudio.form.required": "必填",
