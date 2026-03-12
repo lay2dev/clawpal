@@ -1,30 +1,33 @@
 # 如何编写一个 ClawPal Recipe
 
-这份文档描述的是当前仓库里真实可用的 Recipe 写法，不是早期的设计草案。
+这份文档描述的是当前仓库里真实可执行的 Recipe DSL，而不是早期草案。
 
 目标读者：
-- 需要新增一个内置 Recipe 的开发者
+- 需要新增预置 Recipe 的开发者
 - 需要维护 `examples/recipe-library/` 外部 Recipe 库的人
-- 需要理解 `bundle + executionSpecTemplate + steps` 三层结构的人
+- 需要理解 `Recipe Source -> ExecutionSpec -> runner` 这条链路的人
 
-## 1. 先理解 Recipe 在当前产品里的位置
+## 1. 先理解运行时模型
 
-当前 ClawPal 的 Recipe 有两种进入方式：
+当前 ClawPal 的 Recipe 有两种入口：
 
-1. 作为预置 Recipe 随 App 打包
+1. 作为预置 Recipe 随 App 打包，并在启动时 seed 到 workspace
 2. 作为外部 Recipe library 在运行时导入
 
-无论入口是哪一种，最终都会落到 workspace recipe：
+无论入口是什么，最终运行时载体都是 workspace 里的单文件 JSON：
 
 `~/.clawpal/recipes/workspace/<slug>.recipe.json`
 
-也就是说，Recipe 的运行时载体始终是一个自包含的单文件 JSON。
+也就是说：
+- source authoring 可以是目录结构
+- import/seed 之后会变成自包含单文件
+- runner 永远不直接依赖外部 `assets/` 目录
 
 ## 2. 推荐的作者目录结构
 
-如果你要新增一个可维护的 Recipe，推荐放在独立目录里，而不是直接手写到 `src-tauri/recipes.json`。
+新增一个可维护的 Recipe，推荐放在独立目录里，而不是直接写进 `src-tauri/recipes.json`。
 
-当前仓库采用的目录结构是：
+当前仓库采用的结构是：
 
 ```text
 examples/recipe-library/
@@ -47,11 +50,12 @@ examples/recipe-library/
 规则：
 - 每个 Recipe 一个目录
 - 目录里必须有 `recipe.json`
-- 如果要引用预设文案或 markdown 资源，用 `assets/` 子目录
+- 如需预设 markdown 文本，放到 `assets/`
+- import 时只扫描 library 根目录下的一级子目录
 
 ## 3. 顶层文档形状
 
-对于 library 目录里的 `recipe.json`，推荐写成单个对象。
+对于 library 里的 `recipe.json`，推荐写成单个 recipe 对象。
 
 当前加载器支持三种形状：
 
@@ -76,14 +80,14 @@ examples/recipe-library/
 ```
 
 但有一个关键区别：
-- `load recipes from file / URL` 可以接受数组和 `{ recipes: [] }`
-- `import recipe library` 的 `recipe.json` 必须是单个 recipe 对象
+- `Load` 文件或 URL 时，可以接受三种形状
+- `Import` 外部 recipe library 时，`recipe.json` 必须是单个对象
 
-所以新写一个 library recipe 时，直接用单对象。
+因此，写新的 library recipe 时，直接使用单对象。
 
 ## 4. 一个完整 Recipe 的推荐结构
 
-当前推荐写法是：
+当前推荐写法：
 
 ```json
 {
@@ -99,12 +103,12 @@ examples/recipe-library/
   "params": [],
   "steps": [],
   "bundle": {},
-  "executionSpecTemplate": {}
+  "executionSpecTemplate": {},
+  "clawpalImport": {}
 }
 ```
 
-这几个字段的职责要分清：
-
+字段职责：
 - `id / name / description / version / tags / difficulty`
   Recipe 元信息
 - `presentation`
@@ -112,15 +116,17 @@ examples/recipe-library/
 - `params`
   Configure 阶段的参数表单
 - `steps`
-  面向用户的步骤文案和顺序
+  面向用户的步骤文案
 - `bundle`
-  允许做什么，允许碰哪些资源
+  声明 capability、resource claim、execution kind 的白名单
 - `executionSpecTemplate`
-  真正执行时会被编译成什么
+  真正要编译成什么 `ExecutionSpec`
+- `clawpalImport`
+  仅用于 library import 阶段的扩展元数据，不会保留在最终 workspace recipe 里
 
 ## 5. 参数字段怎么写
 
-`params` 是一个数组，每项形状如下：
+`params` 是数组，每项形状如下：
 
 ```json
 {
@@ -140,8 +146,7 @@ examples/recipe-library/
 }
 ```
 
-当前前端实际支持的 `type`：
-
+当前前端支持的 `type`：
 - `string`
 - `number`
 - `boolean`
@@ -151,106 +156,202 @@ examples/recipe-library/
 - `model_profile`
 - `agent`
 
-UI 特殊行为：
-- `options` 非空时，优先渲染成下拉选择
-- `discord_guild` 会从当前实例里加载 guild 列表
-- `discord_channel` 会从当前实例里加载 channel 列表
-- `agent` 会从当前实例里加载 agent 列表
-- `model_profile` 会从当前实例里加载可用 model profiles
-- `dependsOn` 当前只支持布尔门控：只有依赖参数值等于 `"true"` 时才显示
+UI 规则：
+- `options` 非空时，优先渲染为下拉
+- `discord_guild` 从当前环境加载 guild 列表
+- `discord_channel` 从当前环境加载 channel 列表
+- `agent` 从当前环境加载 agent 列表
+- `model_profile` 从当前环境加载可用 model profiles
+- `dependsOn` 当前仍是简单门控，不要依赖复杂表达式
 
 实用建议：
-- `model_profile` 参数的默认值通常写 `__default__`
-- 需要用户自由填写长文本时用 `textarea`
-- 需要作者控制选项集合时优先用 `options`
+- 长文本输入用 `textarea`
+- 固定预设优先用 `options`
+- `model_profile` 如果希望默认跟随环境，可用 `__default__`
 
-## 6. `steps` 和 `executionSpecTemplate.actions` 必须对齐
+## 6. `steps` 和 `executionSpecTemplate.actions` 必须一一对应
 
-`steps` 是给用户看的，`executionSpecTemplate.actions` 是给执行器看的。
+`steps` 是给用户看的，`executionSpecTemplate.actions` 是给编译器和 runner 看的。
 
 当前校验要求：
 - `steps.len()` 必须等于 `executionSpecTemplate.actions.len()`
+- 每一步的 `action` 应与对应 action 的 `kind` 保持一致
 
-也就是说，`steps` 不是可有可无的装饰层，它必须和执行动作一一对应。
+也就是说，`steps` 不是装饰层，它是用户理解“这次会做什么”的主入口。
 
-例如：
+## 7. 当前支持的 action surface
+
+当前 Recipe DSL 的 action 分三组。
+
+### 7.1 业务动作
+
+- `create_agent`
+- `delete_agent`
+- `setup_identity`
+- `bind_channel`
+- `unbind_channel`
+- `set_agent_model`
+- `set_agent_persona`
+- `clear_agent_persona`
+- `set_channel_persona`
+- `clear_channel_persona`
+
+推荐：
+- 新的业务 recipe 优先使用业务动作
+- `setup_identity` 作为兼容动作保留，新的 recipe 一般不再优先依赖它
+
+### 7.2 文档动作
+
+- `upsert_markdown_document`
+- `delete_markdown_document`
+
+这是高级/底座动作，适合：
+- 写 agent 默认 markdown 文档
+- 直接控制 section upsert 或 whole-file replace
+
+### 7.3 环境动作
+
+- `ensure_model_profile`
+- `delete_model_profile`
+- `ensure_provider_auth`
+- `delete_provider_auth`
+
+这组动作负责：
+- 确保目标环境存在可用 profile
+- 必要时同步 profile 依赖的 auth/secret
+- 清理不再需要的 auth/profile
+
+### 7.4 Escape hatch
+
+- `config_patch`
+
+保留用于低层配置改写，但不建议作为 bundled recipe 的主路径。
+
+## 8. 各类 action 的常见输入
+
+### `create_agent`
 
 ```json
-"steps": [
-  {
-    "action": "create_agent",
-    "label": "Create dedicated agent",
-    "args": {
-      "agentId": "{{agent_id}}",
-      "modelProfileId": "{{model}}",
-      "independent": true
-    }
-  },
-  {
-    "action": "setup_identity",
-    "label": "Set agent identity",
-    "args": {
-      "agentId": "{{agent_id}}",
-      "name": "{{name}}",
-      "emoji": "{{emoji}}",
-      "persona": "{{persona}}"
-    }
+{
+  "kind": "create_agent",
+  "args": {
+    "agentId": "{{agent_id}}",
+    "modelProfileId": "{{model}}",
+    "independent": true
   }
-]
+}
 ```
 
-## 7. 当前真正支持的 action
+### `set_agent_persona`
 
-当前 action materializer 明确支持这四种：
+```json
+{
+  "kind": "set_agent_persona",
+  "args": {
+    "agentId": "{{agent_id}}",
+    "persona": "{{presetMap:persona_preset}}"
+  }
+}
+```
 
-- `create_agent`
-- `setup_identity`
-- `bind_channel`
-- `config_patch`
+### `set_channel_persona`
 
-它们的实际语义是：
+```json
+{
+  "kind": "set_channel_persona",
+  "args": {
+    "channelType": "discord",
+    "guildId": "{{guild_id}}",
+    "peerId": "{{channel_id}}",
+    "persona": "{{presetMap:persona_preset}}"
+  }
+}
+```
 
-- `create_agent`
-  通过 OpenClaw CLI 创建 agent
-- `setup_identity`
-  写 agent 的 `IDENTITY.md`
-- `bind_channel`
-  通过 OpenClaw CLI 改写 `bindings`
-- `config_patch`
-  通过 OpenClaw CLI 改写配置树
+### `upsert_markdown_document`
 
-写 Recipe 时不要假设别的 action 已经可用。要先看执行器和 materializer 有没有实现。
+```json
+"args": {
+  "target": {
+    "scope": "agent",
+    "agentId": "{{agent_id}}",
+    "path": "IDENTITY.md"
+  },
+  "mode": "replace",
+  "content": "- Name: {{name}}\n\n## Persona\n{{persona}}\n"
+}
+```
 
-## 8. 当前支持的 execution kind
+支持的 `target.scope`：
+- `agent`
+- `home`
+- `absolute`
 
-当前 `execution.kind` 支持：
+支持的 `mode`：
+- `replace`
+- `upsertSection`
 
-- `job`
-- `service`
-- `schedule`
-- `attachment`
+`upsertSection` 需要额外提供：
+- `heading`
+- 可选 `createIfMissing`
 
-但对 Recipe 作者来说，可以先按下面理解：
+### `delete_markdown_document`
 
-- `job`
-  一次性动作，最常见
-- `attachment`
-  更适合配置改写或附加状态
-- `service` / `schedule`
-  主要给结构化 systemd 计划使用
+```json
+"args": {
+  "target": {
+    "scope": "agent",
+    "agentId": "{{agent_id}}",
+    "path": "PLAYBOOK.md"
+  },
+  "missingOk": true
+}
+```
 
-当前三条业务 recipe 主要用的是：
-- `job`
-- `attachment`
+### `ensure_model_profile`
+
+```json
+{
+  "kind": "ensure_model_profile",
+  "args": {
+    "profileId": "{{model}}"
+  }
+}
+```
+
+### `ensure_provider_auth`
+
+```json
+{
+  "kind": "ensure_provider_auth",
+  "args": {
+    "provider": "openrouter",
+    "authRef": "openrouter:default"
+  }
+}
+```
+
+### destructive 动作
+
+以下动作默认会做引用检查，仍被引用时会失败：
+- `delete_agent`
+- `delete_model_profile`
+- `delete_provider_auth`
+
+显式 override：
+- `delete_agent.force`
+- `delete_agent.rebindChannelsTo`
+- `delete_provider_auth.force`
+- `delete_model_profile.deleteAuthRef`
 
 ## 9. `bundle` 写什么
 
 `bundle` 的作用是声明：
 - 允许使用哪些 capability
-- 允许声明哪些 resource claim
+- 允许触碰哪些 resource kind
 - 支持哪些 execution kind
 
-最常见的写法是：
+例如：
 
 ```json
 "bundle": {
@@ -258,6 +359,199 @@ UI 特殊行为：
   "kind": "StrategyBundle",
   "metadata": {
     "name": "dedicated-agent",
+    "version": "1.0.0",
+    "description": "Create a dedicated agent"
+  },
+  "compatibility": {},
+  "inputs": [],
+  "capabilities": {
+    "allowed": ["agent.manage", "document.write", "model.manage", "secret.sync"]
+  },
+  "resources": {
+    "supportedKinds": ["agent", "document", "modelProfile"]
+  },
+  "execution": {
+    "supportedKinds": ["job"]
+  },
+  "runner": {},
+  "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-agent" }]
+}
+```
+
+当前常见 capability：
+- `agent.manage`
+- `agent.identity.write`
+- `binding.manage`
+- `config.write`
+- `document.write`
+- `document.delete`
+- `model.manage`
+- `auth.manage`
+- `secret.sync`
+
+当前常见 resource claim kind：
+- `agent`
+- `channel`
+- `file`
+- `document`
+- `modelProfile`
+- `authProfile`
+
+## 10. `executionSpecTemplate` 写什么
+
+它定义编译后真正的 `ExecutionSpec`，通常至少要包含：
+
+```json
+"executionSpecTemplate": {
+  "apiVersion": "strategy.platform/v1",
+  "kind": "ExecutionSpec",
+  "metadata": {
+    "name": "dedicated-agent"
+  },
+  "source": {},
+  "target": {},
+  "execution": {
+    "kind": "job"
+  },
+  "capabilities": {
+    "usedCapabilities": ["model.manage", "secret.sync", "agent.manage", "document.write"]
+  },
+  "resources": {
+    "claims": [
+      { "kind": "modelProfile", "id": "{{model}}" },
+      { "kind": "agent", "id": "{{agent_id}}" },
+      { "kind": "document", "path": "agent:{{agent_id}}/IDENTITY.md" }
+    ]
+  },
+  "secrets": {
+    "bindings": []
+  },
+  "desiredState": {
+    "actionCount": 3
+  },
+  "actions": [],
+  "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-agent" }]
+}
+```
+
+当前 `execution.kind` 支持：
+- `job`
+- `service`
+- `schedule`
+- `attachment`
+
+对大多数业务 recipe：
+- 一次性业务动作优先用 `job`
+- 配置附着类动作可用 `attachment`
+
+## 11. 模板变量
+
+当前支持两类最常用模板。
+
+### 11.1 参数替换
+
+```json
+"agentId": "{{agent_id}}"
+```
+
+### 11.2 preset map 替换
+
+```json
+"persona": "{{presetMap:persona_preset}}"
+```
+
+这类变量只在 import 后的 workspace recipe 里使用编译好的 map，不会在运行时继续去读外部 `assets/`。
+
+## 12. `clawpalImport` 和 `assets/`
+
+如果 recipe 需要把外部 markdown 资产编译进最终 recipe，可以使用：
+
+```json
+"clawpalImport": {
+  "presetParams": {
+    "persona_preset": [
+      { "value": "coach", "label": "Coach", "asset": "assets/personas/coach.md" },
+      { "value": "researcher", "label": "Researcher", "asset": "assets/personas/researcher.md" }
+    ]
+  }
+}
+```
+
+import 阶段会做三件事：
+- 校验 `asset` 是否存在
+- 为目标 param 注入 `options`
+- 把 `{{presetMap:param_id}}` 编译成内嵌文本映射
+
+最终写入 workspace 的 recipe：
+- 不再保留 `clawpalImport`
+- 不再依赖原始 `assets/` 目录
+- 会带 `clawpalPresetMaps`
+
+## 13. `presentation` 怎么用
+
+如果希望 `Done`、`Recent Recipe Runs`、`Orchestrator` 显示更业务化的结果，给 recipe 增加：
+
+```json
+"presentation": {
+  "resultSummary": "Updated persona for agent {{agent_id}}"
+}
+```
+
+原则：
+- 写给非技术用户看
+- 描述“得到什么结果”，不要描述执行细节
+- 没写时会退回到通用 summary
+
+## 14. OpenClaw-first 原则
+
+作者在写 Recipe 时要默认遵循：
+
+- 能用业务动作表达的，不要退回 `config_patch`
+- 能用 OpenClaw 原语表达的，让 runner 优先走 OpenClaw
+- 文档动作只在 OpenClaw 还没有对应原语时作为底座
+
+例如：
+- `set_channel_persona` 优于手写 `config_patch`
+- `ensure_model_profile` 优于假定目标环境已经有 profile
+- `upsert_markdown_document` 适合写 agent 默认 markdown 文档
+
+更详细的边界见：[recipe-runner-boundaries.md](./recipe-runner-boundaries.md)
+
+## 15. 最小验证流程
+
+新增或修改 recipe 后，至少做这几步：
+
+1. 校验 Rust 侧 recipe 测试
+
+```bash
+cargo test recipe_ --lib --manifest-path src-tauri/Cargo.toml
+```
+
+2. 校验前端类型和关键 UI
+
+```bash
+bun run typecheck
+```
+
+3. 如改了导入规则或预置 recipe，验证 import/seed 结果
+
+```bash
+cargo test import_recipe_library_accepts_repo_example_library --manifest-path src-tauri/Cargo.toml
+```
+
+4. 如改了业务闭环，优先补 Docker OpenClaw e2e
+
+## 16. 常见坑
+
+- `steps` 和 `actions` 数量不一致会直接校验失败
+- `Import` library 时，`recipe.json` 不能是数组
+- `upsert_markdown_document` 的 `upsertSection` 模式必须带 `heading`
+- `target.scope=agent` 时必须带 `agentId`
+- 相对路径里不允许 `..`
+- destructive action 默认会被引用检查挡住
+- recipe 不能内嵌明文 secret；环境动作只能引用 ClawPal 已能解析到的 secret/auth
+
+如果你需要理解 runner 负责什么、不负责什么，再看：[recipe-runner-boundaries.md](./recipe-runner-boundaries.md)
     "version": "1.0.0",
     "description": "Create a dedicated agent"
   },

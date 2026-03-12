@@ -89,6 +89,11 @@ src-tauri/     Rust + Tauri backend
 docs/plans/    Design and implementation plans
 ```
 
+## Recipe docs
+
+- [`docs/recipe-authoring.md`](docs/recipe-authoring.md) — how to write and package a ClawPal recipe
+- [`docs/recipe-runner-boundaries.md`](docs/recipe-runner-boundaries.md) — runner/backend boundaries and OpenClaw-first design rules
+
 ## License
 
 Proprietary. All rights reserved.
