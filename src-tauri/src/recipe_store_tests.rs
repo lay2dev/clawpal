@@ -34,9 +34,8 @@ fn sample_run_with_source() -> Run {
     let mut run = sample_run();
     run.source_origin = Some("draft".into());
     run.source_digest = Some("digest-123".into());
-    run.workspace_path = Some(
-        "/Users/chen/.clawpal/recipes/workspace/channel-persona.recipe.json".into(),
-    );
+    run.workspace_path =
+        Some("/Users/chen/.clawpal/recipes/workspace/channel-persona.recipe.json".into());
     run
 }
 
@@ -79,7 +78,8 @@ fn list_all_runs_returns_latest_runs() {
 #[test]
 fn recorded_run_persists_source_digest_and_origin() {
     let store = RecipeStore::for_test();
-    store.record_run(sample_run_with_source())
+    store
+        .record_run(sample_run_with_source())
         .expect("record run with source");
 
     let stored = store.list_runs("inst_01").expect("list runs");

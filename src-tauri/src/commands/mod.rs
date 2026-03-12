@@ -2080,8 +2080,7 @@ pub async fn execute_recipe(
         source.insert(
             "recipeSourceDigest".into(),
             Value::String(
-                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, source_text.as_bytes())
-                    .to_string(),
+                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, source_text.as_bytes()).to_string(),
             ),
         );
     }
@@ -2092,7 +2091,9 @@ pub async fn execute_recipe(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if let Ok(path) = RecipeWorkspace::from_resolved_paths().resolve_recipe_source_path(workspace_slug) {
+        if let Ok(path) =
+            RecipeWorkspace::from_resolved_paths().resolve_recipe_source_path(workspace_slug)
+        {
             source.insert("recipeWorkspacePath".into(), Value::String(path));
         }
     }
