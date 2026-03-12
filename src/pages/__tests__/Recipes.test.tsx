@@ -82,6 +82,12 @@ describe("Recipes runtime summary", () => {
               workspacePath: "/tmp/channel-persona.recipe.json",
             },
           ],
+            initialWorkspaceEntries: [
+              {
+                slug: "agent-persona-pack",
+                path: "/tmp/agent-persona-pack.recipe.json",
+              },
+            ],
         }),
         }),
       }),
@@ -93,5 +99,8 @@ describe("Recipes runtime summary", () => {
     expect(html).toContain("View source");
     expect(html).toContain("Fork to workspace");
     expect(html).toContain("digest-123");
+    expect(html).toContain("Import");
+    expect(html).toContain("Cook");
+    expect(html).toContain("agent-persona-pack");
   });
 });

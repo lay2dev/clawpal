@@ -26,6 +26,8 @@ struct RecipeSourceDocument {
     pub difficulty: String,
     pub params: Vec<RecipeParam>,
     pub steps: Vec<RecipeStep>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "clawpalPresetMaps")]
+    pub clawpal_preset_maps: Option<Map<String, Value>>,
     pub bundle: RecipeBundle,
     pub execution_spec_template: ExecutionSpec,
 }
@@ -58,6 +60,7 @@ pub fn export_recipe_source(recipe: &Recipe) -> Result<String, String> {
         difficulty: recipe.difficulty.clone(),
         params: recipe.params.clone(),
         steps: recipe.steps.clone(),
+        clawpal_preset_maps: recipe.clawpal_preset_maps.clone(),
         bundle,
         execution_spec_template,
     };
@@ -80,7 +83,8 @@ fn compile_structured_recipe_to_spec(
         .as_ref()
         .ok_or_else(|| format!("recipe '{}' is missing executionSpecTemplate", recipe.id))?;
     let template_value = serde_json::to_value(template).map_err(|error| error.to_string())?;
-    let rendered_template = render_template_value(&template_value, params);
+    let rendered_template =
+        render_template_value(&template_value, params, recipe.clawpal_preset_maps.as_ref());
     let mut spec: ExecutionSpec =
         serde_json::from_value(rendered_template).map_err(|error| error.to_string())?;
 
@@ -109,7 +113,8 @@ fn compile_step_recipe_to_spec(
             continue;
         }
 
-        let rendered_args = render_step_args(&step.args, params);
+        let rendered_args =
+            render_step_args(&step.args, params, recipe.clawpal_preset_maps.as_ref());
         collect_action_requirements(
             step.action.as_str(),
             &rendered_args,

@@ -133,8 +133,19 @@ const registry: Record<string, ActionDef> = {
       return [];
     },
     describe: (args) => {
-      const emoji = args.emoji ? ` ${args.emoji}` : "";
-      return `Set identity: ${args.name}${emoji}`;
+      const name = typeof args.name === "string" && args.name.trim().length > 0
+        ? args.name
+        : undefined;
+      const emoji = typeof args.emoji === "string" && args.emoji.trim().length > 0
+        ? ` ${args.emoji}`
+        : "";
+      if (name) {
+        return `Set identity: ${name}${emoji}`;
+      }
+      if (args.agentId) {
+        return `Update persona: ${args.agentId}`;
+      }
+      return "Update agent identity";
     },
   },
   bind_channel: {

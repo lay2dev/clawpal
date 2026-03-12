@@ -20,10 +20,10 @@ use crate::commands::{
     get_channels_runtime_snapshot, get_cron_config_snapshot, get_cron_runs,
     get_cron_runtime_snapshot, get_instance_config_snapshot, get_instance_runtime_snapshot,
     get_rescue_bot_status, get_session_model_override, get_ssh_transfer_stats, get_status_extra,
-    get_status_light, get_system_status, get_watchdog_status, list_agents_overview, list_backups,
-    list_bindings, list_channels_minimal, list_cron_jobs, list_discord_guild_channels,
-    list_history, list_model_profiles, list_recipe_instances, list_recipe_runs,
-    list_recipe_workspace_entries, list_recipes, list_recipes_from_source_text,
+    get_status_light, get_system_status, get_watchdog_status, import_recipe_library,
+    list_agents_overview, list_backups, list_bindings, list_channels_minimal, list_cron_jobs,
+    list_discord_guild_channels, list_history, list_model_profiles, list_recipe_instances,
+    list_recipe_runs, list_recipe_workspace_entries, list_recipes, list_recipes_from_source_text,
     list_registered_instances, list_session_files, list_ssh_config_hosts, list_ssh_hosts,
     local_openclaw_cli_available, local_openclaw_config_exists, log_app_event, manage_rescue_bot,
     migrate_legacy_instances, open_url, plan_recipe, plan_recipe_source, precheck_auth,
@@ -94,6 +94,7 @@ pub mod recipe;
 pub mod recipe_adapter;
 pub mod recipe_bundle;
 pub mod recipe_executor;
+pub mod recipe_library;
 pub mod recipe_planner;
 pub mod recipe_runtime;
 pub mod recipe_store;
@@ -108,6 +109,8 @@ mod recipe_adapter_tests;
 mod recipe_bundle_tests;
 #[cfg(test)]
 mod recipe_executor_tests;
+#[cfg(test)]
+mod recipe_library_tests;
 #[cfg(test)]
 mod recipe_planner_tests;
 #[cfg(test)]
@@ -165,6 +168,7 @@ pub fn run() {
             list_recipe_workspace_entries,
             read_recipe_workspace_source,
             save_recipe_workspace_source,
+            import_recipe_library,
             delete_recipe_workspace_source,
             export_recipe_source,
             execute_recipe,

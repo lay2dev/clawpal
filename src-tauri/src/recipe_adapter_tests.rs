@@ -1,6 +1,9 @@
 use serde_json::{Map, Value};
 
-use crate::recipe::{builtin_recipes, validate_recipe_source, Recipe, RecipeParam, RecipeStep};
+use crate::recipe::{
+    builtin_recipes, load_recipes_from_source_text, validate_recipe_source, Recipe, RecipeParam,
+    RecipeStep,
+};
 use crate::recipe_adapter::{compile_recipe_to_spec, export_recipe_source};
 
 fn sample_params() -> Map<String, Value> {
@@ -107,6 +110,7 @@ fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
                 placeholder: None,
                 depends_on: None,
                 default_value: None,
+                options: None,
             },
             RecipeParam {
                 id: "channel_id".into(),
@@ -119,6 +123,7 @@ fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
                 placeholder: None,
                 depends_on: None,
                 default_value: None,
+                options: None,
             },
         ],
         steps: vec![RecipeStep {
@@ -129,6 +134,7 @@ fn export_recipe_source_normalizes_step_only_recipe_to_structured_document() {
             }))
             .expect("step args"),
         }],
+        clawpal_preset_maps: None,
         bundle: None,
         execution_spec_template: None,
     };
@@ -264,6 +270,114 @@ fn validate_recipe_source_flags_step_alignment_errors() {
 }
 
 #[test]
+fn structured_recipe_template_resolves_preset_map_placeholders_from_compiled_source() {
+    let recipe = crate::recipe::load_recipes_from_source_text(
+        r#"{
+          "id": "channel-persona-pack",
+          "name": "Channel Persona Pack",
+          "description": "Apply a preset persona to a Discord channel",
+          "version": "1.0.0",
+          "tags": ["discord", "persona"],
+          "difficulty": "easy",
+          "params": [
+            { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
+            { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },
+            {
+              "id": "persona_preset",
+              "label": "Persona preset",
+              "type": "string",
+              "required": true,
+              "options": [
+                { "value": "ops", "label": "Ops" }
+              ]
+            }
+          ],
+          "steps": [
+            {
+              "action": "config_patch",
+              "label": "Apply persona preset",
+              "args": {
+                "patchTemplate": "{\"channels\":{\"discord\":{\"guilds\":{\"{{guild_id}}\":{\"channels\":{\"{{channel_id}}\":{\"systemPrompt\":\"{{presetMap:persona_preset}}\"}}}}}}"
+              }
+            }
+          ],
+          "bundle": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "StrategyBundle",
+            "metadata": {},
+            "compatibility": {},
+            "inputs": [],
+            "capabilities": { "allowed": ["config.write"] },
+            "resources": { "supportedKinds": ["file"] },
+            "execution": { "supportedKinds": ["attachment"] },
+            "runner": {},
+            "outputs": []
+          },
+          "executionSpecTemplate": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "ExecutionSpec",
+            "metadata": { "name": "channel-persona-pack" },
+            "source": {},
+            "target": {},
+            "execution": { "kind": "attachment" },
+            "capabilities": { "usedCapabilities": ["config.write"] },
+            "resources": { "claims": [] },
+            "secrets": { "bindings": [] },
+            "desiredState": {},
+            "actions": [
+              {
+                "kind": "config_patch",
+                "name": "Apply persona preset",
+                "args": {
+                  "patch": {
+                    "channels": {
+                      "discord": {
+                        "guilds": {
+                          "{{guild_id}}": {
+                            "channels": {
+                              "{{channel_id}}": {
+                                "systemPrompt": "{{presetMap:persona_preset}}"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "outputs": []
+          },
+          "clawpalPresetMaps": {
+            "persona_preset": {
+              "ops": "You are an on-call operations coordinator."
+            }
+          }
+        }"#,
+    )
+    .expect("load source")
+    .into_iter()
+    .next()
+    .expect("recipe");
+
+    let mut params = Map::new();
+    params.insert("guild_id".into(), Value::String("guild-1".into()));
+    params.insert("channel_id".into(), Value::String("channel-2".into()));
+    params.insert("persona_preset".into(), Value::String("ops".into()));
+
+    let spec = compile_recipe_to_spec(&recipe, &params).expect("compile spec");
+
+    assert_eq!(
+        spec.actions[0]
+            .args
+            .pointer("/patch/channels/discord/guilds/guild-1/channels/channel-2/systemPrompt")
+            .and_then(Value::as_str),
+        Some("You are an on-call operations coordinator.")
+    );
+}
+
+#[test]
 fn validate_recipe_source_flags_hidden_actions_without_ui_steps() {
     let diagnostics = validate_recipe_source(
         r#"{
@@ -311,4 +425,197 @@ fn validate_recipe_source_flags_hidden_actions_without_ui_steps() {
 
     assert_eq!(diagnostics.errors.len(), 1);
     assert_eq!(diagnostics.errors[0].category, "alignment");
+}
+
+#[test]
+fn structured_recipe_template_resolves_agent_persona_preset_text() {
+    let recipe = load_recipes_from_source_text(
+        r#"{
+          "id": "agent-persona-pack",
+          "name": "Agent Persona Pack",
+          "description": "Import persona presets into an existing agent",
+          "version": "1.0.0",
+          "tags": ["agent", "persona"],
+          "difficulty": "easy",
+          "params": [
+            { "id": "agent_id", "label": "Agent", "type": "agent", "required": true },
+            {
+              "id": "persona_preset",
+              "label": "Persona preset",
+              "type": "string",
+              "required": true,
+              "options": [{ "value": "friendly", "label": "Friendly" }]
+            }
+          ],
+          "steps": [
+            {
+              "action": "setup_identity",
+              "label": "Apply preset",
+              "args": {
+                "agentId": "{{agent_id}}",
+                "persona": "{{presetMap:persona_preset}}"
+              }
+            }
+          ],
+          "bundle": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "StrategyBundle",
+            "metadata": {},
+            "compatibility": {},
+            "inputs": [],
+            "capabilities": { "allowed": ["agent.identity.write"] },
+            "resources": { "supportedKinds": ["agent"] },
+            "execution": { "supportedKinds": ["job"] },
+            "runner": {},
+            "outputs": []
+          },
+          "executionSpecTemplate": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "ExecutionSpec",
+            "metadata": { "name": "agent-persona-pack" },
+            "source": {},
+            "target": {},
+            "execution": { "kind": "job" },
+            "capabilities": { "usedCapabilities": ["agent.identity.write"] },
+            "resources": { "claims": [] },
+            "secrets": { "bindings": [] },
+            "desiredState": {},
+            "actions": [
+              {
+                "kind": "setup_identity",
+                "name": "Apply preset",
+                "args": {
+                  "agentId": "{{agent_id}}",
+                  "persona": "{{presetMap:persona_preset}}"
+                }
+              }
+            ],
+            "outputs": []
+          },
+          "clawpalPresetMaps": {
+            "persona_preset": {
+              "friendly": "You are warm, concise, and practical."
+            }
+          }
+        }"#,
+    )
+    .expect("load recipe")
+    .into_iter()
+    .next()
+    .expect("recipe");
+
+    let mut params = Map::new();
+    params.insert("agent_id".into(), Value::String("lobster".into()));
+    params.insert("persona_preset".into(), Value::String("friendly".into()));
+
+    let spec = compile_recipe_to_spec(&recipe, &params).expect("compile spec");
+
+    assert_eq!(
+        spec.actions[0].args.get("persona").and_then(Value::as_str),
+        Some("You are warm, concise, and practical.")
+    );
+}
+
+#[test]
+fn structured_recipe_template_resolves_channel_persona_preset_into_patch() {
+    let recipe = load_recipes_from_source_text(
+        r#"{
+          "id": "channel-persona-pack",
+          "name": "Channel Persona Pack",
+          "description": "Import persona presets into a Discord channel",
+          "version": "1.0.0",
+          "tags": ["discord", "persona"],
+          "difficulty": "easy",
+          "params": [
+            { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
+            { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },
+            {
+              "id": "persona_preset",
+              "label": "Persona preset",
+              "type": "string",
+              "required": true,
+              "options": [{ "value": "ops", "label": "Ops" }]
+            }
+          ],
+          "steps": [
+            {
+              "action": "config_patch",
+              "label": "Apply preset",
+              "args": {}
+            }
+          ],
+          "bundle": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "StrategyBundle",
+            "metadata": {},
+            "compatibility": {},
+            "inputs": [],
+            "capabilities": { "allowed": ["config.write"] },
+            "resources": { "supportedKinds": ["file"] },
+            "execution": { "supportedKinds": ["attachment"] },
+            "runner": {},
+            "outputs": []
+          },
+          "executionSpecTemplate": {
+            "apiVersion": "strategy.platform/v1",
+            "kind": "ExecutionSpec",
+            "metadata": { "name": "channel-persona-pack" },
+            "source": {},
+            "target": {},
+            "execution": { "kind": "attachment" },
+            "capabilities": { "usedCapabilities": ["config.write"] },
+            "resources": { "claims": [] },
+            "secrets": { "bindings": [] },
+            "desiredState": {},
+            "actions": [
+              {
+                "kind": "config_patch",
+                "name": "Apply preset",
+                "args": {
+                  "patch": {
+                    "channels": {
+                      "discord": {
+                        "guilds": {
+                          "{{guild_id}}": {
+                            "channels": {
+                              "{{channel_id}}": {
+                                "systemPrompt": "{{presetMap:persona_preset}}"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "outputs": []
+          },
+          "clawpalPresetMaps": {
+            "persona_preset": {
+              "ops": "You are a crisp channel ops assistant."
+            }
+          }
+        }"#,
+    )
+    .expect("load recipe")
+    .into_iter()
+    .next()
+    .expect("recipe");
+
+    let mut params = Map::new();
+    params.insert("guild_id".into(), Value::String("guild-1".into()));
+    params.insert("channel_id".into(), Value::String("channel-1".into()));
+    params.insert("persona_preset".into(), Value::String("ops".into()));
+
+    let spec = compile_recipe_to_spec(&recipe, &params).expect("compile spec");
+
+    assert_eq!(
+        spec.actions[0]
+            .args
+            .pointer("/patch/channels/discord/guilds/guild-1/channels/channel-1/systemPrompt")
+            .and_then(Value::as_str),
+        Some("You are a crisp channel ops assistant.")
+    );
 }

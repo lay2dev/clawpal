@@ -26,6 +26,13 @@ enum RecipeDocument {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct RecipeParamOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct RecipeParam {
     pub id: String,
     pub label: String,
@@ -44,6 +51,8 @@ pub struct RecipeParam {
     pub depends_on: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<RecipeParamOption>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -65,6 +74,12 @@ pub struct Recipe {
     pub difficulty: String,
     pub params: Vec<RecipeParam>,
     pub steps: Vec<RecipeStep>,
+    #[serde(
+        rename = "clawpalPresetMaps",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub clawpal_preset_maps: Option<Map<String, Value>>,
     #[serde(skip_serializing, default)]
     pub bundle: Option<RecipeBundle>,
     #[serde(skip_serializing, default)]
@@ -346,7 +361,7 @@ fn param_value_to_string(value: &Value) -> String {
 }
 
 fn extract_placeholders(text: &str) -> Vec<String> {
-    Regex::new(r"\{\{(\w+)\}\}")
+    Regex::new(r"\{\{(?:(?:presetMap:)?(\w+))\}\}")
         .ok()
         .map(|regex| {
             regex
@@ -367,9 +382,36 @@ pub fn render_template_string(template: &str, params: &Map<String, Value>) -> St
     text
 }
 
-pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Value {
+fn resolve_preset_map_value(
+    param_id: &str,
+    params: &Map<String, Value>,
+    preset_maps: Option<&Map<String, Value>>,
+) -> Value {
+    let selected = params
+        .get(param_id)
+        .map(param_value_to_string)
+        .unwrap_or_default();
+    preset_maps
+        .and_then(|maps| maps.get(param_id))
+        .and_then(Value::as_object)
+        .and_then(|values| values.get(&selected))
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()))
+}
+
+pub fn render_template_value(
+    value: &Value,
+    params: &Map<String, Value>,
+    preset_maps: Option<&Map<String, Value>>,
+) -> Value {
     match value {
         Value::String(text) => {
+            if let Some(param_id) = text
+                .strip_prefix("{{presetMap:")
+                .and_then(|rest| rest.strip_suffix("}}"))
+            {
+                return resolve_preset_map_value(param_id, params, preset_maps);
+            }
             if let Some(param_id) = text
                 .strip_prefix("{{")
                 .and_then(|rest| rest.strip_suffix("}}"))
@@ -389,7 +431,7 @@ pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Valu
         Value::Array(items) => Value::Array(
             items
                 .iter()
-                .map(|item| render_template_value(item, params))
+                .map(|item| render_template_value(item, params, preset_maps))
                 .collect(),
         ),
         Value::Object(map) => Value::Object(
@@ -397,7 +439,7 @@ pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Valu
                 .map(|(key, value)| {
                     (
                         render_template_string(key, params),
-                        render_template_value(value, params),
+                        render_template_value(value, params, preset_maps),
                     )
                 })
                 .collect(),
@@ -409,9 +451,15 @@ pub fn render_template_value(value: &Value, params: &Map<String, Value>) -> Valu
 pub fn render_step_args(
     args: &Map<String, Value>,
     params: &Map<String, Value>,
+    preset_maps: Option<&Map<String, Value>>,
 ) -> Map<String, Value> {
     args.iter()
-        .map(|(key, value)| (key.clone(), render_template_value(value, params)))
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                render_template_value(value, params, preset_maps),
+            )
+        })
         .collect()
 }
 

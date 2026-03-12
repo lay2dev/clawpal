@@ -106,6 +106,7 @@ use crate::recipe::{
     ApplyResult, PreviewResult, RecipeSourceDiagnostics,
 };
 use crate::recipe_adapter::export_recipe_source as export_recipe_source_document;
+use crate::recipe_library::RecipeLibraryImportResult;
 use crate::recipe_planner::{build_recipe_plan, build_recipe_plan_from_source_text, RecipePlan};
 use crate::recipe_workspace::{RecipeSourceSaveResult, RecipeWorkspace, RecipeWorkspaceEntry};
 
@@ -1271,6 +1272,12 @@ pub fn save_recipe_workspace_source(
 }
 
 #[tauri::command]
+pub fn import_recipe_library(root_path: String) -> Result<RecipeLibraryImportResult, String> {
+    let root = std::path::PathBuf::from(shellexpand::tilde(root_path.trim()).to_string());
+    RecipeWorkspace::from_resolved_paths().import_recipe_library(&root)
+}
+
+#[tauri::command]
 pub fn delete_recipe_workspace_source(slug: String) -> Result<bool, String> {
     RecipeWorkspace::from_resolved_paths().delete_recipe_source(&slug)?;
     Ok(true)
@@ -1647,18 +1654,28 @@ fn action_bool(value: Option<&Value>) -> bool {
 
 fn recipe_action_setup_identity_command(
     agent_id: &str,
-    name: &str,
+    name: Option<&str>,
     emoji: Option<&str>,
+    persona: Option<&str>,
 ) -> (String, Vec<String>) {
-    let mut command = vec![
-        INTERNAL_SETUP_IDENTITY_COMMAND.to_string(),
-        agent_id.to_string(),
-        name.to_string(),
-    ];
-    if let Some(emoji) = emoji.map(str::trim).filter(|value| !value.is_empty()) {
-        command.push(emoji.to_string());
+    let mut payload = Map::new();
+    payload.insert("agentId".into(), Value::String(agent_id.to_string()));
+    if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+        payload.insert("name".into(), Value::String(name.to_string()));
     }
-    (format!("Setup identity: {}", agent_id), command)
+    if let Some(emoji) = emoji.map(str::trim).filter(|value| !value.is_empty()) {
+        payload.insert("emoji".into(), Value::String(emoji.to_string()));
+    }
+    if let Some(persona) = persona.map(str::trim).filter(|value| !value.is_empty()) {
+        payload.insert("persona".into(), Value::String(persona.to_string()));
+    }
+    (
+        format!("Setup identity: {}", agent_id),
+        vec![
+            INTERNAL_SETUP_IDENTITY_COMMAND.to_string(),
+            Value::Object(payload).to_string(),
+        ],
+    )
 }
 
 fn append_config_patch_commands(
@@ -1887,13 +1904,19 @@ async fn materialize_recipe_action_commands(
         "setup_identity" => {
             let agent_id = action_string(args.get("agentId"))
                 .ok_or_else(|| "setup_identity requires agentId".to_string())?;
-            let name = action_string(args.get("name"))
-                .ok_or_else(|| "setup_identity requires name".to_string())?;
+            let name = action_string(args.get("name"));
             let emoji = action_string(args.get("emoji"));
+            let persona = action_string(args.get("persona"));
+            if name.is_none() && emoji.is_none() && persona.is_none() {
+                return Err(
+                    "setup_identity requires at least one of name, emoji, or persona".to_string(),
+                );
+            }
             Ok(vec![recipe_action_setup_identity_command(
                 &agent_id,
-                &name,
+                name.as_deref(),
                 emoji.as_deref(),
+                persona.as_deref(),
             )])
         }
         "bind_channel" => {
@@ -1953,21 +1976,39 @@ async fn materialize_recipe_commands(
 #[cfg(test)]
 mod recipe_action_materializer_tests {
     use super::{recipe_action_setup_identity_command, INTERNAL_SETUP_IDENTITY_COMMAND};
+    use serde_json::Value;
 
     #[test]
     fn setup_identity_materializes_to_internal_command() {
         let (label, command) =
-            recipe_action_setup_identity_command("lobster", "Lobster", Some("🦞"));
+            recipe_action_setup_identity_command("lobster", Some("Lobster"), Some("🦞"), None);
 
         assert_eq!(label, "Setup identity: lobster");
+        assert_eq!(command[0], INTERNAL_SETUP_IDENTITY_COMMAND);
+        let payload: Value = serde_json::from_str(&command[1]).expect("identity payload");
         assert_eq!(
-            command,
-            vec![
-                INTERNAL_SETUP_IDENTITY_COMMAND.to_string(),
-                "lobster".into(),
-                "Lobster".into(),
-                "🦞".into(),
-            ]
+            payload.get("agentId").and_then(Value::as_str),
+            Some("lobster")
+        );
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("Lobster"));
+        assert_eq!(payload.get("emoji").and_then(Value::as_str), Some("🦞"));
+    }
+
+    #[test]
+    fn setup_identity_materializes_to_internal_command_without_name() {
+        let (_label, command) =
+            recipe_action_setup_identity_command("lobster", None, None, Some("New persona"));
+
+        assert_eq!(command[0], INTERNAL_SETUP_IDENTITY_COMMAND);
+        let payload: Value = serde_json::from_str(&command[1]).expect("identity payload");
+        assert_eq!(
+            payload.get("agentId").and_then(Value::as_str),
+            Some("lobster")
+        );
+        assert_eq!(payload.get("name"), None);
+        assert_eq!(
+            payload.get("persona").and_then(Value::as_str),
+            Some("New persona")
         );
     }
 }

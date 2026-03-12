@@ -20,8 +20,9 @@ pub async fn remote_setup_agent_identity(
         pool.inner(),
         &host_id,
         &agent_id,
-        &name,
+        Some(&name),
         emoji.as_deref(),
+        None,
     )
     .await?;
     Ok(true)
@@ -206,7 +207,13 @@ pub fn setup_agent_identity(
     }
 
     let paths = resolve_paths();
-    crate::agent_identity::write_local_agent_identity(&paths, &agent_id, &name, emoji.as_deref())?;
+    crate::agent_identity::write_local_agent_identity(
+        &paths,
+        &agent_id,
+        Some(&name),
+        emoji.as_deref(),
+        None,
+    )?;
     Ok(true)
 }
 

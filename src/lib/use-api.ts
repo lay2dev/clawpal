@@ -1002,6 +1002,10 @@ export function useApi() {
         4_000,
         api.readRecipeWorkspaceSource,
       ),
+      importRecipeLibrary: withInvalidation(
+        api.importRecipeLibrary,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
       saveRecipeWorkspaceSource: withInvalidation(
         api.saveRecipeWorkspaceSource,
         ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],

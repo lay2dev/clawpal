@@ -36,13 +36,23 @@ export function Recipes({
   initialRecipes,
   initialInstances,
   initialRuns,
+  initialWorkspaceEntries,
 }: {
-  onCook: (id: string, source?: string) => void;
+  onCook: (
+    id: string,
+    options?: {
+      source?: string;
+      sourceText?: string;
+      sourceOrigin?: "saved" | "draft";
+      workspaceSlug?: string;
+    },
+  ) => void;
   onOpenStudio?: (draft: RecipeStudioDraft) => void;
   onOpenRuntimeDashboard?: () => void;
   initialRecipes?: Recipe[];
   initialInstances?: RecipeRuntimeInstance[];
   initialRuns?: RecipeRuntimeRun[];
+  initialWorkspaceEntries?: RecipeWorkspaceEntry[];
 }) {
   const { t } = useTranslation();
   const ua = useApi();
@@ -51,10 +61,13 @@ export function Recipes({
   const [runs, setRuns] = useState<RecipeRuntimeRun[]>(() => initialRuns ?? []);
   const [source, setSource] = useState("");
   const [loadedSource, setLoadedSource] = useState<string | undefined>(undefined);
-  const [workspaceEntries, setWorkspaceEntries] = useState<RecipeWorkspaceEntry[]>([]);
+  const [workspaceEntries, setWorkspaceEntries] = useState<RecipeWorkspaceEntry[]>(
+    () => initialWorkspaceEntries ?? [],
+  );
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [sourcePreviewName, setSourcePreviewName] = useState<string>("");
   const [copiedSource, setCopiedSource] = useState(false);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
 
   const load = async (nextSource: string) => {
     const value = nextSource.trim();
@@ -75,12 +88,37 @@ export function Recipes({
     }
   };
 
+  const handleImport = async () => {
+    const value = source.trim();
+    if (!value) {
+      setImportNotice(t("recipes.importRequiresPath"));
+      return;
+    }
+    try {
+      const result = await ua.importRecipeLibrary(value);
+      await load(loadedSource ?? "");
+      setImportNotice(
+        t("recipes.importSummary", {
+          imported: result.imported.length,
+          skipped: result.skipped.length,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to import recipe library:", error);
+      setImportNotice(
+        t("recipes.importFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  };
+
   useEffect(() => {
-    if (initialRecipes || initialInstances || initialRuns) {
+    if (initialRecipes || initialInstances || initialRuns || initialWorkspaceEntries) {
       return;
     }
     void load("");
-  }, [initialRecipes, initialInstances, initialRuns]);
+  }, [initialRecipes, initialInstances, initialRuns, initialWorkspaceEntries]);
 
   const latestRun = useMemo(
     () => [...runs].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
@@ -140,15 +178,32 @@ export function Recipes({
     }
     try {
       const sourceText = await ua.readRecipeWorkspaceSource(entry.slug);
+      const workspaceRecipes = await ua.listRecipesFromSourceText(sourceText);
+      const primaryRecipe = workspaceRecipes[0];
       onOpenStudio({
-        recipeId: entry.slug,
-        recipeName: entry.slug,
+        recipeId: primaryRecipe?.id ?? entry.slug,
+        recipeName: primaryRecipe?.name ?? entry.slug,
         source: sourceText,
         origin: "workspace",
         workspaceSlug: entry.slug,
       });
     } catch (error) {
       console.error("Failed to open workspace recipe:", error);
+    }
+  };
+
+  const handleCookWorkspaceEntry = async (entry: RecipeWorkspaceEntry) => {
+    try {
+      const sourceText = await ua.readRecipeWorkspaceSource(entry.slug);
+      const workspaceRecipes = await ua.listRecipesFromSourceText(sourceText);
+      const primaryRecipe = workspaceRecipes[0];
+      onCook(primaryRecipe?.id ?? entry.slug, {
+        sourceText,
+        sourceOrigin: "saved",
+        workspaceSlug: entry.slug,
+      });
+    } catch (error) {
+      console.error("Failed to cook workspace recipe:", error);
     }
   };
 
@@ -171,16 +226,24 @@ export function Recipes({
         <Input
           value={source}
           onChange={(event) => setSource(event.target.value)}
-          placeholder="/path/recipes.json or https://example.com/recipes.json"
+          placeholder="/path/recipes.json or /path/recipe-library or https://example.com/recipes.json"
           className="w-[380px]"
         />
         <AsyncActionButton className="ml-2" onClick={() => load(source)} loadingText={t('recipes.loading')}>
           {t('recipes.load')}
         </AsyncActionButton>
+        <AsyncActionButton variant="outline" onClick={handleImport} loadingText={t("recipes.importing")}>
+          {t("recipes.import")}
+        </AsyncActionButton>
       </div>
       <p className="text-sm text-muted-foreground mt-0">
         {t('recipes.loadedFrom', { source: loadedSource || t('recipes.builtinSource') })}
       </p>
+      {importNotice && (
+        <p className="text-sm text-muted-foreground mt-2">
+          {importNotice}
+        </p>
+      )}
       <Card className="mt-4 mb-4">
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -195,16 +258,30 @@ export function Recipes({
             <Badge variant="outline">{workspaceEntries.length}</Badge>
           </div>
           {workspaceEntries.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2">
               {workspaceEntries.map((entry) => (
-                <Button
+                <div
                   key={entry.slug}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleOpenWorkspaceEntry(entry)}
+                  className="flex items-center justify-between gap-3 rounded-xl border bg-background px-3 py-2"
                 >
-                  {t("recipes.workspaceOpen", { slug: entry.slug })}
-                </Button>
+                  <div className="text-sm font-medium">{entry.slug}</div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleCookWorkspaceEntry(entry)}
+                    >
+                      {t("recipes.workspaceCook")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleOpenWorkspaceEntry(entry)}
+                    >
+                      {t("recipes.workspaceOpen", { slug: entry.slug })}
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -269,7 +346,7 @@ export function Recipes({
           <div key={recipe.id} className="space-y-2">
             <RecipeCard
               recipe={recipe}
-              onCook={() => onCook(recipe.id, loadedSource)}
+              onCook={() => onCook(recipe.id, { source: loadedSource })}
               onViewSource={() => void handleViewSource(recipe)}
               onEditSource={
                 loadedSource

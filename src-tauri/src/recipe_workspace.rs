@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config_io::write_text;
 use crate::models::resolve_paths;
+use crate::recipe_library::RecipeLibraryImportResult;
 
 const WORKSPACE_FILE_SUFFIX: &str = ".recipe.json";
 
@@ -86,7 +87,7 @@ impl RecipeWorkspace {
         raw_slug: &str,
         source: &str,
     ) -> Result<RecipeSourceSaveResult, String> {
-        let slug = normalize_slug(raw_slug)?;
+        let slug = normalize_recipe_slug(raw_slug)?;
         let path = self.root.join(format!("{}{}", slug, WORKSPACE_FILE_SUFFIX));
         write_text(&path, source)?;
         Ok(RecipeSourceSaveResult {
@@ -103,13 +104,20 @@ impl RecipeWorkspace {
         Ok(())
     }
 
+    pub fn import_recipe_library(
+        &self,
+        root: &PathBuf,
+    ) -> Result<RecipeLibraryImportResult, String> {
+        crate::recipe_library::import_recipe_library(root, self)
+    }
+
     fn path_for_slug(&self, raw_slug: &str) -> Result<PathBuf, String> {
-        let slug = normalize_slug(raw_slug)?;
+        let slug = normalize_recipe_slug(raw_slug)?;
         Ok(self.root.join(format!("{}{}", slug, WORKSPACE_FILE_SUFFIX)))
     }
 }
 
-fn normalize_slug(raw_slug: &str) -> Result<String, String> {
+pub(crate) fn normalize_recipe_slug(raw_slug: &str) -> Result<String, String> {
     let trimmed = raw_slug.trim();
     if trimmed.is_empty() {
         return Err("recipe slug cannot be empty".into());

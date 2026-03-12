@@ -1700,12 +1700,12 @@ export function App() {
           )}
           {!inStart && route === "recipes" && (
             <Recipes
-              onCook={(id, source) => {
+              onCook={(id, options) => {
                 setRecipeId(id);
-                setRecipeSource(source);
-                setRecipeSourceText(undefined);
-                setRecipeSourceOrigin("saved");
-                setRecipeSourceWorkspaceSlug(undefined);
+                setRecipeSource(options?.source);
+                setRecipeSourceText(options?.sourceText);
+                setRecipeSourceOrigin(options?.sourceOrigin ?? "saved");
+                setRecipeSourceWorkspaceSlug(options?.workspaceSlug);
                 setCookReturnRoute("recipes");
                 navigateRoute("cook");
               }}

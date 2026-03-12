@@ -151,13 +151,14 @@ pub fn read_snapshot(path: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{add_snapshot, list_snapshots, read_snapshot};
-    use crate::cli_runner::set_active_clawpal_data_override;
+    use crate::cli_runner::{lock_active_override_test_state, set_active_clawpal_data_override};
     use crate::recipe_store::Artifact;
     use std::fs;
     use uuid::Uuid;
 
     #[test]
     fn read_snapshot_allows_files_under_active_history_dir() {
+        let _override_guard = lock_active_override_test_state();
         let temp_root = std::env::temp_dir().join(format!("clawpal-history-{}", Uuid::new_v4()));
         let history_dir = temp_root.join("history");
         fs::create_dir_all(&history_dir).expect("create history dir");

@@ -127,6 +127,29 @@ export function ParamForm({
       );
     }
 
+    if ((param.options?.length ?? 0) > 0) {
+      return (
+        <Select
+          value={values[param.id] || undefined}
+          onValueChange={(val) => {
+            onChange(param.id, val);
+            setTouched((prev) => ({ ...prev, [param.id]: true }));
+          }}
+        >
+          <SelectTrigger id={param.id} size="sm" className="w-full">
+            <SelectValue placeholder={param.placeholder || param.label} />
+          </SelectTrigger>
+          <SelectContent>
+            {param.options?.map((option) => (
+              <SelectItem key={`${param.id}-${option.value}`} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+
     if (param.type === "discord_guild") {
       return (
         <Select

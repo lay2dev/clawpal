@@ -1,0 +1,127 @@
+{
+  "id": "dedicated-channel-agent",
+  "name": "Dedicated Channel Agent",
+  "description": "Create an independent agent, set its identity, and bind it to a Discord channel",
+  "version": "1.0.0",
+  "tags": ["discord", "agent", "identity"],
+  "difficulty": "easy",
+  "params": [
+    { "id": "agent_id", "label": "Agent ID", "type": "string", "required": true, "placeholder": "e.g. ops-bot" },
+    { "id": "model", "label": "Model", "type": "model_profile", "required": true, "defaultValue": "__default__" },
+    { "id": "guild_id", "label": "Guild", "type": "discord_guild", "required": true },
+    { "id": "channel_id", "label": "Channel", "type": "discord_channel", "required": true },
+    { "id": "name", "label": "Display Name", "type": "string", "required": true, "placeholder": "e.g. Ops Bot" },
+    { "id": "emoji", "label": "Emoji", "type": "string", "required": false, "placeholder": "e.g. :satellite:" },
+    { "id": "persona", "label": "Persona", "type": "textarea", "required": true, "placeholder": "Describe the role and tone for this agent." }
+  ],
+  "steps": [
+    {
+      "action": "create_agent",
+      "label": "Create dedicated agent",
+      "args": {
+        "agentId": "{{agent_id}}",
+        "modelProfileId": "{{model}}",
+        "independent": true
+      }
+    },
+    {
+      "action": "setup_identity",
+      "label": "Set agent identity",
+      "args": {
+        "agentId": "{{agent_id}}",
+        "name": "{{name}}",
+        "emoji": "{{emoji}}",
+        "persona": "{{persona}}"
+      }
+    },
+    {
+      "action": "bind_channel",
+      "label": "Bind Discord channel",
+      "args": {
+        "channelType": "discord",
+        "peerId": "{{channel_id}}",
+        "agentId": "{{agent_id}}"
+      }
+    }
+  ],
+  "bundle": {
+    "apiVersion": "strategy.platform/v1",
+    "kind": "StrategyBundle",
+    "metadata": {
+      "name": "dedicated-channel-agent",
+      "version": "1.0.0",
+      "description": "Create and bind a dedicated Discord agent"
+    },
+    "compatibility": {},
+    "inputs": [],
+    "capabilities": {
+      "allowed": ["agent.manage", "agent.identity.write", "binding.manage"]
+    },
+    "resources": {
+      "supportedKinds": ["agent", "channel"]
+    },
+    "execution": {
+      "supportedKinds": ["job"]
+    },
+    "runner": {},
+    "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-channel-agent" }]
+  },
+  "executionSpecTemplate": {
+    "apiVersion": "strategy.platform/v1",
+    "kind": "ExecutionSpec",
+    "metadata": {
+      "name": "dedicated-channel-agent"
+    },
+    "source": {},
+    "target": {},
+    "execution": {
+      "kind": "job"
+    },
+    "capabilities": {
+      "usedCapabilities": ["agent.manage", "agent.identity.write", "binding.manage"]
+    },
+    "resources": {
+      "claims": [
+        { "kind": "agent", "id": "{{agent_id}}" },
+        { "kind": "channel", "id": "{{channel_id}}", "target": "{{agent_id}}" }
+      ]
+    },
+    "secrets": {
+      "bindings": []
+    },
+    "desiredState": {
+      "actionCount": 3
+    },
+    "actions": [
+      {
+        "kind": "create_agent",
+        "name": "Create dedicated agent",
+        "args": {
+          "agentId": "{{agent_id}}",
+          "modelProfileId": "{{model}}",
+          "independent": true
+        }
+      },
+      {
+        "kind": "setup_identity",
+        "name": "Set agent identity",
+        "args": {
+          "agentId": "{{agent_id}}",
+          "name": "{{name}}",
+          "emoji": "{{emoji}}",
+          "persona": "{{persona}}"
+        }
+      },
+      {
+        "kind": "bind_channel",
+        "name": "Bind Discord channel",
+        "args": {
+          "channelType": "discord",
+          "peerId": "{{channel_id}}",
+          "agentId": "{{agent_id}}"
+        }
+      }
+    ],
+    "outputs": [{ "kind": "recipe-summary", "recipeId": "dedicated-channel-agent" }]
+  }
+}

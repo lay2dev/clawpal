@@ -16,6 +16,8 @@ static ACTIVE_OPENCLAW_HOME_OVERRIDE: LazyLock<Mutex<Option<String>>> =
     LazyLock::new(|| Mutex::new(None));
 static ACTIVE_CLAWPAL_DATA_OVERRIDE: LazyLock<Mutex<Option<String>>> =
     LazyLock::new(|| Mutex::new(None));
+#[cfg(test)]
+static ACTIVE_OVERRIDE_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub fn set_active_openclaw_home_override(path: Option<String>) -> Result<(), String> {
     let mut guard = ACTIVE_OPENCLAW_HOME_OVERRIDE
@@ -55,6 +57,13 @@ pub fn get_active_clawpal_data_override() -> Option<String> {
         .lock()
         .ok()
         .and_then(|g| g.clone())
+}
+
+#[cfg(test)]
+pub fn lock_active_override_test_state() -> std::sync::MutexGuard<'static, ()> {
+    ACTIVE_OVERRIDE_TEST_MUTEX
+        .lock()
+        .expect("active override test mutex poisoned")
 }
 
 pub type CliOutput = clawpal_core::openclaw::CliOutput;
@@ -1542,17 +1551,21 @@ fn apply_internal_local_command(
             Ok(true)
         }
         Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
-            let agent_id = command
+            let payload = command
                 .get(1)
+                .ok_or_else(|| "setup_identity command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
-            let name = command
-                .get(2)
-                .ok_or_else(|| "setup_identity command missing name".to_string())?;
             crate::agent_identity::write_local_agent_identity(
                 paths,
                 agent_id,
-                name,
-                command.get(3).map(String::as_str),
+                payload.get("name").and_then(serde_json::Value::as_str),
+                payload.get("emoji").and_then(serde_json::Value::as_str),
+                payload.get("persona").and_then(serde_json::Value::as_str),
             )?;
             Ok(true)
         }
@@ -1594,18 +1607,22 @@ async fn apply_internal_remote_command(
             Ok(true)
         }
         Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
-            let agent_id = command
+            let payload = command
                 .get(1)
+                .ok_or_else(|| "setup_identity command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
-            let name = command
-                .get(2)
-                .ok_or_else(|| "setup_identity command missing name".to_string())?;
             crate::agent_identity::write_remote_agent_identity(
                 pool,
                 host_id,
                 agent_id,
-                name,
-                command.get(3).map(String::as_str),
+                payload.get("name").and_then(serde_json::Value::as_str),
+                payload.get("emoji").and_then(serde_json::Value::as_str),
+                payload.get("persona").and_then(serde_json::Value::as_str),
             )
             .await?;
             Ok(true)

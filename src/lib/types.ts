@@ -30,6 +30,7 @@ export interface RecipeParam {
   placeholder?: string;
   dependsOn?: string;
   defaultValue?: string;
+  options?: Array<{ value: string; label: string }>;
 }
 
 export interface RecipeStep {
@@ -57,6 +58,23 @@ export interface RecipeWorkspaceEntry {
 export interface RecipeSourceSaveResult {
   slug: string;
   path: string;
+}
+
+export interface ImportedRecipe {
+  slug: string;
+  recipeId: string;
+  path: string;
+}
+
+export interface SkippedRecipeImport {
+  recipeDir: string;
+  reason: string;
+}
+
+export interface RecipeLibraryImportResult {
+  imported: ImportedRecipe[];
+  skipped: SkippedRecipeImport[];
+  warnings: string[];
 }
 
 export interface RecipeSourceDiagnostic {
