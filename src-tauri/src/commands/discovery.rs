@@ -1,5 +1,28 @@
 use super::*;
 
+fn discord_sections_from_openclaw_config(cfg: &Value) -> (Value, Value) {
+    let discord_section = cfg
+        .pointer("/channels/discord")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let bindings_section = cfg
+        .get("bindings")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    (discord_section, bindings_section)
+}
+
+fn agent_overviews_from_openclaw_config(
+    cfg: &Value,
+    online_set: &std::collections::HashSet<String>,
+) -> Vec<AgentOverview> {
+    let mut agents = collect_agent_overviews_from_config(cfg);
+    for agent in &mut agents {
+        agent.online = online_set.contains(&agent.id);
+    }
+    agents
+}
+
 #[tauri::command]
 pub async fn remote_list_discord_guild_channels(
     pool: State<'_, SshConnectionPool>,
@@ -11,22 +34,34 @@ pub async fn remote_list_discord_guild_channels(
         &["config", "get", "channels.discord", "--json"],
     )
     .await?;
-    let discord_section = if output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
     let bindings_output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
         &["config", "get", "bindings", "--json"],
     )
     .await?;
+    let config_fallback = if output.exit_code == 0 && bindings_output.exit_code == 0 {
+        None
+    } else {
+        remote_read_openclaw_config_text_and_json(&pool, &host_id)
+            .await
+            .ok()
+            .map(|(_, _, cfg)| cfg)
+    };
+    let (fallback_discord_section, fallback_bindings_section) = config_fallback
+        .as_ref()
+        .map(discord_sections_from_openclaw_config)
+        .unwrap_or_else(|| (Value::Null, Value::Array(Vec::new())));
+    let discord_section = if output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
+    } else {
+        fallback_discord_section
+    };
     let bindings_section = if bindings_output.exit_code == 0 {
         crate::cli_runner::parse_json_output(&bindings_output)
             .unwrap_or_else(|_| Value::Array(Vec::new()))
     } else {
-        Value::Array(Vec::new())
+        fallback_bindings_section
     };
     // Wrap to match existing code expectations (rest of function uses cfg.get("channels").and_then(|c| c.get("discord")))
     let cfg = serde_json::json!({
@@ -346,15 +381,6 @@ pub async fn remote_list_agents_overview_with_pool(
 ) -> Result<Vec<AgentOverview>, String> {
     let output =
         run_openclaw_remote_with_autofix(pool, &host_id, &["agents", "list", "--json"]).await?;
-    if output.exit_code != 0 {
-        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
-        return Err(format!(
-            "openclaw agents list failed ({}): {}",
-            output.exit_code,
-            details.trim()
-        ));
-    }
-    let json = crate::cli_runner::parse_json_output(&output)?;
     // Check which agents have sessions remotely (single command, batch check)
     // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
     let online_set = match pool.exec_login(
@@ -369,6 +395,18 @@ pub async fn remote_list_agents_overview_with_pool(
         }
         Err(_) => std::collections::HashSet::new(), // fallback: all offline
     };
+    if output.exit_code != 0 {
+        if let Ok((_, _, cfg)) = remote_read_openclaw_config_text_and_json(pool, &host_id).await {
+            return Ok(agent_overviews_from_openclaw_config(&cfg, &online_set));
+        }
+        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+        return Err(format!(
+            "openclaw agents list failed ({}): {}",
+            output.exit_code,
+            details.trim()
+        ));
+    }
+    let json = crate::cli_runner::parse_json_output(&output)?;
     parse_agents_cli_output(&json, Some(&online_set))
 }
 
@@ -878,4 +916,69 @@ pub async fn list_agents_overview(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<AgentOverview>, String> {
     list_agents_overview_with_cache(cache.inner()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    #[test]
+    fn discord_sections_from_openclaw_config_extracts_discord_and_bindings() {
+        let cfg = json!({
+            "channels": {
+                "discord": {
+                    "guilds": {
+                        "guild-recipe-lab": {
+                            "name": "Recipe Lab",
+                            "channels": {
+                                "channel-general": { "systemPrompt": "" }
+                            }
+                        }
+                    }
+                }
+            },
+            "bindings": [
+                { "agentId": "main" }
+            ]
+        });
+
+        let (discord, bindings) = discord_sections_from_openclaw_config(&cfg);
+
+        assert_eq!(
+            discord
+                .pointer("/guilds/guild-recipe-lab/name")
+                .and_then(Value::as_str),
+            Some("Recipe Lab")
+        );
+        assert_eq!(bindings.as_array().map(|items| items.len()), Some(1));
+    }
+
+    #[test]
+    fn agent_overviews_from_openclaw_config_marks_online_agents() {
+        let cfg = json!({
+            "agents": {
+                "list": [
+                    { "id": "main", "model": "anthropic/claude-sonnet-4-20250514" },
+                    { "id": "helper", "identityName": "Helper", "model": "openai/gpt-4o" }
+                ]
+            }
+        });
+        let online_set = HashSet::from([String::from("helper")]);
+
+        let agents = agent_overviews_from_openclaw_config(&cfg, &online_set);
+
+        assert_eq!(agents.len(), 2);
+        assert!(
+            !agents
+                .iter()
+                .find(|agent| agent.id == "main")
+                .unwrap()
+                .online
+        );
+        let helper = agents.iter().find(|agent| agent.id == "helper").unwrap();
+        assert!(helper.online);
+        assert_eq!(helper.name.as_deref(), Some("Helper"));
+    }
 }
