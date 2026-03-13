@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::recipe_workspace::{BundledSeedStatus, RecipeWorkspace};
+use crate::recipe_workspace::{BundledRecipeState, RecipeWorkspace};
 
 const SAMPLE_SOURCE: &str = r#"{
   "id": "channel-persona",
@@ -130,14 +130,14 @@ fn bundled_seeded_recipe_is_tracked_until_user_saves_a_workspace_copy() {
     let store = RecipeWorkspace::new(root.path().clone());
 
     store
-        .save_bundled_recipe_source("channel-persona", SAMPLE_SOURCE, "channel-persona")
+        .save_bundled_recipe_source("channel-persona", SAMPLE_SOURCE, "channel-persona", "1.0.0")
         .expect("save bundled recipe");
 
     assert_eq!(
         store
-            .bundled_seed_status("channel-persona")
+            .bundled_recipe_state("channel-persona", SAMPLE_SOURCE)
             .expect("bundled seed status"),
-        BundledSeedStatus::Unchanged
+        BundledRecipeState::UpToDate
     );
 
     store
@@ -149,8 +149,83 @@ fn bundled_seeded_recipe_is_tracked_until_user_saves_a_workspace_copy() {
 
     assert_eq!(
         store
-            .bundled_seed_status("channel-persona")
+            .bundled_recipe_state("channel-persona", SAMPLE_SOURCE)
             .expect("bundled seed status after manual save"),
-        BundledSeedStatus::UntrackedExisting
+        BundledRecipeState::LocalModified
     );
+}
+
+#[test]
+fn bundled_recipe_state_distinguishes_available_update_and_conflicted_update() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
+
+    let seeded = SAMPLE_SOURCE;
+    let updated = SAMPLE_SOURCE
+        .replace("1.0.0", "1.1.0")
+        .replace("easy", "normal");
+
+    store
+        .save_bundled_recipe_source("channel-persona", seeded, "channel-persona", "1.0.0")
+        .expect("save bundled recipe");
+
+    assert_eq!(
+        store
+            .bundled_recipe_state("channel-persona", &updated)
+            .expect("bundled seed status with available update"),
+        BundledRecipeState::UpdateAvailable
+    );
+
+    store
+        .save_recipe_source(
+            "channel-persona",
+            seeded.replace("easy", "advanced").as_str(),
+        )
+        .expect("save local modification");
+
+    assert_eq!(
+        store
+            .bundled_recipe_state("channel-persona", &updated)
+            .expect("bundled seed status with local conflict"),
+        BundledRecipeState::ConflictedUpdate
+    );
+}
+
+#[test]
+fn recipe_approval_digest_is_invalidated_after_workspace_recipe_changes() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
+
+    store
+        .save_bundled_recipe_source("channel-persona", SAMPLE_SOURCE, "channel-persona", "1.0.0")
+        .expect("save bundled recipe");
+
+    let initial_source = store
+        .read_recipe_source("channel-persona")
+        .expect("read initial source");
+    let initial_digest = RecipeWorkspace::source_digest(&initial_source);
+    store
+        .approve_recipe("channel-persona", &initial_digest)
+        .expect("approve bundled recipe");
+
+    assert!(store
+        .is_recipe_approved("channel-persona", &initial_digest)
+        .expect("approval should exist"));
+
+    store
+        .save_recipe_source(
+            "channel-persona",
+            SAMPLE_SOURCE.replace("easy", "normal").as_str(),
+        )
+        .expect("save local change");
+
+    let next_source = store
+        .read_recipe_source("channel-persona")
+        .expect("read updated source");
+    let next_digest = RecipeWorkspace::source_digest(&next_source);
+
+    assert_ne!(initial_digest, next_digest);
+    assert!(!store
+        .is_recipe_approved("channel-persona", &next_digest)
+        .expect("approval should be invalidated"));
 }

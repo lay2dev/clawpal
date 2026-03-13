@@ -8,8 +8,8 @@ use crate::cli_runner::{
     remove_queued_command, CliCache, CommandQueue, RemoteCommandQueues,
 };
 use crate::commands::{
-    analyze_sessions, apply_config_patch, backup_before_upgrade, chat_via_openclaw,
-    check_openclaw_update, clear_all_sessions, clear_session_model_override,
+    analyze_sessions, apply_config_patch, approve_recipe_workspace_source, backup_before_upgrade,
+    chat_via_openclaw, check_openclaw_update, clear_all_sessions, clear_session_model_override,
     connect_docker_instance, connect_local_instance, connect_ssh_instance, create_agent,
     delete_agent, delete_backup, delete_cron_job, delete_local_instance_home, delete_model_profile,
     delete_recipe_runs, delete_recipe_workspace_source, delete_registered_instance,
@@ -63,7 +63,8 @@ use crate::commands::{
     set_ssh_transfer_speed_ui_preference, setup_agent_identity, sftp_list_dir, sftp_read_file,
     sftp_remove_file, sftp_write_file, ssh_connect, ssh_connect_with_passphrase, ssh_disconnect,
     ssh_exec, ssh_status, start_watchdog, stop_watchdog, test_model_profile, trigger_cron_job,
-    uninstall_watchdog, upsert_model_profile, upsert_ssh_host, validate_recipe_source_text,
+    uninstall_watchdog, upgrade_bundled_recipe_workspace_source, upsert_model_profile,
+    upsert_ssh_host, validate_recipe_source_text,
 };
 use crate::install::commands::{
     install_create_session, install_decide_target, install_get_session, install_list_methods,
@@ -177,9 +178,11 @@ pub fn run() {
             list_recipe_workspace_entries,
             read_recipe_workspace_source,
             save_recipe_workspace_source,
+            approve_recipe_workspace_source,
             import_recipe_library,
             import_recipe_source,
             delete_recipe_workspace_source,
+            upgrade_bundled_recipe_workspace_source,
             export_recipe_source,
             execute_recipe,
             plan_recipe,

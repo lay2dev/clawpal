@@ -9,7 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { InlineProgressBar } from "@/components/InlineProgressBar";
 import { cn } from "@/lib/utils";
-import type { ExecuteRecipeResult, PrecheckIssue, Recipe, RecipePlan } from "../lib/types";
+import type {
+  ExecuteRecipeResult,
+  PrecheckIssue,
+  Recipe,
+  RecipePlan,
+  RecipeWorkspaceEntry,
+} from "../lib/types";
 import { useInstance } from "@/lib/instance-context";
 import { RecipePlanPreview } from "@/components/RecipePlanPreview";
 import { formatRecipeClaimForPeople } from "@/lib/recipe-run-copy";
@@ -81,12 +87,15 @@ export function Cook({
   const [authIssues, setAuthIssues] = useState<PrecheckIssue[]>([]);
   const [contextWarnings, setContextWarnings] = useState<string[]>([]);
   const [doneSupportDetailsOpen, setDoneSupportDetailsOpen] = useState(false);
+  const [workspaceEntry, setWorkspaceEntry] = useState<RecipeWorkspaceEntry | null>(null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
 
   const routeSummary = useMemo(
     () => buildCookRouteSummary({ instanceId, instanceLabel, isRemote, isDocker }),
     [instanceId, instanceLabel, isRemote, isDocker],
   );
   const blockingAuthIssues = hasBlockingAuthIssues(authIssues);
+  const approvalRequired = Boolean(recipeWorkspaceSlug && workspaceEntry?.approvalRequired);
   const planningProgress = planningStage ? getCookPlanningProgress(planningStage) : null;
   const phaseItems = useMemo(
     () => buildCookPhaseItems(phase as CookPhase),
@@ -122,6 +131,33 @@ export function Cook({
       }
     }).finally(() => setLoading(false));
   }, [recipeId, recipeSource, recipeSourceText]);
+
+  useEffect(() => {
+    if (!recipeWorkspaceSlug) {
+      setWorkspaceEntry(null);
+      return;
+    }
+
+    let cancelled = false;
+    void ua
+      .listRecipeWorkspaceEntries()
+      .then((entries) => {
+        if (cancelled) {
+          return;
+        }
+        setWorkspaceEntry(entries.find((entry) => entry.slug === recipeWorkspaceSlug) ?? null);
+      })
+      .catch((error) => {
+        console.error("Failed to load recipe workspace entry:", error);
+        if (!cancelled) {
+          setWorkspaceEntry(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recipeWorkspaceSlug]);
 
   // Pre-populate fields from existing config when channel is selected
   useEffect(() => {
@@ -234,6 +270,10 @@ export function Cook({
       setExecutionError("Resolve auth precheck errors before execution.");
       return;
     }
+    if (approvalRequired && recipeWorkspaceSlug) {
+      setExecutionError(t("cook.approvalBlocked"));
+      return;
+    }
 
     setPhase("execute");
     setExecutionError(null);
@@ -255,6 +295,24 @@ export function Cook({
       setExecutionError(String(error));
       setExecutionResult(null);
       setStepStatuses((current) => markCookFailure(current));
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!recipeWorkspaceSlug) {
+      return;
+    }
+    setApprovalSubmitting(true);
+    setExecutionError(null);
+    try {
+      await ua.approveRecipeWorkspaceSource(recipeWorkspaceSlug);
+      const entries = await ua.listRecipeWorkspaceEntries();
+      setWorkspaceEntry(entries.find((entry) => entry.slug === recipeWorkspaceSlug) ?? null);
+    } catch (error) {
+      console.error("Failed to approve recipe execution:", error);
+      setExecutionError(String(error));
+    } finally {
+      setApprovalSubmitting(false);
     }
   };
 
@@ -365,6 +423,7 @@ export function Cook({
                 routeSummary={routeSummary}
                 authIssues={authIssues}
                 contextWarnings={contextWarnings}
+                workspaceEntry={workspaceEntry}
               />
             )}
             <div>
@@ -397,13 +456,28 @@ export function Cook({
                 {t("cook.authBlocker")}
               </div>
             )}
+            {approvalRequired && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-950">
+                <div className="font-medium">{t("cook.approvalTitle")}</div>
+                <div className="mt-1">{t("cook.approvalDescription")}</div>
+                <div className="mt-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleApprove()}
+                    disabled={approvalSubmitting}
+                  >
+                    {approvalSubmitting ? t("cook.approving") : t("cook.approveToContinue")}
+                  </Button>
+                </div>
+              </div>
+            )}
             {executionError && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {executionError}
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button disabled={blockingAuthIssues} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
+              <Button disabled={blockingAuthIssues || approvalRequired} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
               <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.backToConfiguration')}</Button>
             </div>
           </CardContent>

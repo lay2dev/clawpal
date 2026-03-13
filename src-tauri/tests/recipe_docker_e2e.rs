@@ -10,10 +10,11 @@ use clawpal::cli_runner::{
 };
 use clawpal::commands::{
     execute_recipe_with_services, import_recipe_library, list_recipe_runs,
-    list_recipe_workspace_entries, read_recipe_workspace_source,
+    read_recipe_workspace_source,
 };
 use clawpal::recipe_executor::ExecuteRecipeRequest;
 use clawpal::recipe_planner::build_recipe_plan_from_source_text;
+use clawpal::recipe_workspace::RecipeWorkspace;
 use clawpal::ssh::{SshConnectionPool, SshHostConfig};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -456,7 +457,8 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
     assert_eq!(import_result.imported.len(), 3);
     assert!(import_result.skipped.is_empty());
     assert_eq!(
-        list_recipe_workspace_entries()
+        RecipeWorkspace::from_resolved_paths()
+            .list_entries()
             .expect("list workspace recipes")
             .len(),
         3

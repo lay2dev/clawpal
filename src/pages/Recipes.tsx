@@ -69,6 +69,58 @@ function humanizeWorkspaceSlug(slug: string): string {
     .join(" ");
 }
 
+function getWorkspaceSourceBadgeLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  entry: RecipeWorkspaceEntry,
+): string | null {
+  switch (entry.sourceKind) {
+    case "bundled":
+      return t("recipes.workspaceSourceBundled");
+    case "localImport":
+      return t("recipes.workspaceSourceLocal");
+    case "remoteUrl":
+      return t("recipes.workspaceSourceUrl");
+    default:
+      return null;
+  }
+}
+
+function getWorkspaceStateBadgeLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  entry: RecipeWorkspaceEntry,
+): string | null {
+  switch (entry.bundledState) {
+    case "upToDate":
+      return t("recipes.workspaceStateUpToDate");
+    case "updateAvailable":
+      return t("recipes.workspaceStateUpdateAvailable");
+    case "localModified":
+      return t("recipes.workspaceStateModified");
+    case "conflictedUpdate":
+      return t("recipes.workspaceStateConflict");
+    default:
+      return null;
+  }
+}
+
+function getWorkspaceStateBadgeVariant(entry: RecipeWorkspaceEntry): "outline" | "secondary" {
+  return entry.bundledState === "updateAvailable" ? "secondary" : "outline";
+}
+
+function getWorkspaceRiskBadgeLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  entry: RecipeWorkspaceEntry,
+): string {
+  switch (entry.riskLevel) {
+    case "high":
+      return t("recipes.workspaceRiskHigh");
+    case "medium":
+      return t("recipes.workspaceRiskMedium");
+    default:
+      return t("recipes.workspaceRiskLow");
+  }
+}
+
 function CookIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" className="size-3.5 fill-current">
@@ -454,6 +506,25 @@ export function Recipes({
     }
   };
 
+  const handleUpgradeWorkspaceEntry = async (entry: RecipeWorkspaceEntry) => {
+    try {
+      await ua.upgradeBundledRecipeWorkspaceSource(entry.slug);
+      await refreshPage();
+      setImportNotice(
+        t("recipes.workspaceUpdateSuccess", {
+          slug: entry.recipeId ?? entry.slug,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to upgrade bundled recipe:", error);
+      setImportNotice(
+        t("recipes.workspaceUpdateFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  };
+
   const handleCopySource = async () => {
     if (!sourcePreview) return;
     const writer = navigator?.clipboard?.writeText;
@@ -563,6 +634,24 @@ export function Recipes({
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-1.5 mb-3">
+                      {getWorkspaceSourceBadgeLabel(t, draft.entry) && (
+                        <Badge variant="outline">
+                          {getWorkspaceSourceBadgeLabel(t, draft.entry)}
+                        </Badge>
+                      )}
+                      {getWorkspaceStateBadgeLabel(t, draft.entry) && (
+                        <Badge variant={getWorkspaceStateBadgeVariant(draft.entry)}>
+                          {getWorkspaceStateBadgeLabel(t, draft.entry)}
+                        </Badge>
+                      )}
+                      <Badge variant="outline">
+                        {getWorkspaceRiskBadgeLabel(t, draft.entry)}
+                      </Badge>
+                      {draft.entry.approvalRequired && (
+                        <Badge variant="secondary">
+                          {t("recipes.workspaceApprovalRequired")}
+                        </Badge>
+                      )}
                       {draft.tags.map((tag) => (
                         <Badge
                           key={`${draft.entry.slug}-${tag}`}
@@ -580,10 +669,30 @@ export function Recipes({
                       <span className="inline-flex items-center gap-1 bg-muted px-2 py-0.5 rounded-full text-xs">
                         {t(`recipeCard.${draft.difficulty}`)}
                       </span>
+                      {draft.entry.version && (
+                        <span className="inline-flex items-center gap-1 bg-muted px-2 py-0.5 rounded-full text-xs">
+                          {t("recipes.workspaceVersion", { version: draft.entry.version })}
+                        </span>
+                      )}
                     </p>
+                    {draft.entry.bundledState === "conflictedUpdate" && (
+                      <p className="mt-3 text-xs text-amber-700">
+                        {t("recipes.workspaceConflictHint")}
+                      </p>
+                    )}
                   </CardContent>
                   <CardFooter>
                     <div className="flex items-center gap-1">
+                      {draft.entry.bundledState === "updateAvailable" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="px-2 text-xs"
+                          onClick={() => void handleUpgradeWorkspaceEntry(draft.entry)}
+                        >
+                          {t("recipes.workspaceUpdate")}
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"

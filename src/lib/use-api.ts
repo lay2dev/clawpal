@@ -1026,9 +1026,17 @@ export function useApi() {
         api.saveRecipeWorkspaceSource,
         ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
       ),
+      approveRecipeWorkspaceSource: withInvalidation(
+        api.approveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
       deleteRecipeWorkspaceSource: withInvalidation(
         api.deleteRecipeWorkspaceSource,
         ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      upgradeBundledRecipeWorkspaceSource: withInvalidation(
+        api.upgradeBundledRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource", "listRecipes"],
       ),
       exportRecipeSource: api.exportRecipeSource,
       validateRecipeSourceText: api.validateRecipeSourceText,

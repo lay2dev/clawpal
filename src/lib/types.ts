@@ -58,6 +58,19 @@ export interface Recipe {
 export interface RecipeWorkspaceEntry {
   slug: string;
   path: string;
+  recipeId?: string;
+  version?: string;
+  sourceKind?: "bundled" | "localImport" | "remoteUrl";
+  bundledVersion?: string;
+  bundledState?:
+    | "missing"
+    | "upToDate"
+    | "updateAvailable"
+    | "localModified"
+    | "conflictedUpdate";
+  trustLevel: "trusted" | "caution" | "untrusted";
+  riskLevel: "low" | "medium" | "high";
+  approvalRequired: boolean;
 }
 
 export interface RecipeActionCatalogEntry {

@@ -86,6 +86,14 @@ describe("Recipes runtime summary", () => {
               {
                 slug: "agent-persona-pack",
                 path: "/tmp/agent-persona-pack.recipe.json",
+                recipeId: "agent-persona-pack",
+                version: "1.2.0",
+                sourceKind: "bundled",
+                bundledVersion: "1.3.0",
+                bundledState: "updateAvailable",
+                trustLevel: "trusted",
+                riskLevel: "medium",
+                approvalRequired: true,
               },
             ],
         }),
@@ -106,6 +114,10 @@ describe("Recipes runtime summary", () => {
     expect(html).toContain("/path/recipe.json");
     expect(html).toContain('title="Choose folder"');
     expect(html).toContain("Agent Persona Pack");
+    expect(html).toContain("Bundled");
+    expect(html).toContain("Update available");
+    expect(html).toContain("Approval required");
+    expect(html).toContain(">Update<");
     expect(html).toContain('title="Cook"');
     expect(html).toContain('title="Open Agent Persona Pack"');
     expect(html).toContain('title="Delete"');

@@ -18,6 +18,18 @@ describe("RecipePlanPreview", () => {
             kind: "ssh",
             targetLabel: "prod-a",
           },
+          workspaceEntry: {
+            slug: "channel-persona-pack",
+            path: "/tmp/channel-persona-pack.recipe.json",
+            recipeId: "channel-persona-pack",
+            version: "1.0.0",
+            sourceKind: "remoteUrl",
+            bundledVersion: undefined,
+            bundledState: undefined,
+            trustLevel: "untrusted",
+            riskLevel: "medium",
+            approvalRequired: true,
+          },
           authIssues: [
             {
               code: "AUTH_CREDENTIAL_UNRESOLVED",
@@ -81,6 +93,9 @@ describe("RecipePlanPreview", () => {
     expect(html).toContain("SSH");
     expect(html).toContain("prod-a");
     expect(html).toContain("What will be updated");
+    expect(html).toContain("What must be ready before this runs");
+    expect(html).toContain("Why this cannot continue yet");
+    expect(html).toContain("Approve the current saved version before you continue.");
     expect(html).toContain("Needs attention before you continue");
     expect(html).toContain("Advanced details");
     expect(html).toContain("digest-123");

@@ -6,10 +6,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::Manager;
 
-use crate::recipe::{load_recipes_from_source, validate_recipe_source};
+use crate::recipe::{
+    load_recipes_from_source, load_recipes_from_source_text, validate_recipe_source,
+};
 use crate::recipe_adapter::export_recipe_source as export_recipe_source_document;
-use crate::recipe_workspace::BundledSeedStatus;
-use crate::recipe_workspace::RecipeWorkspace;
+use crate::recipe_workspace::{
+    BundledRecipeDescriptor, BundledRecipeState, RecipeWorkspace, RecipeWorkspaceSourceKind,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +83,14 @@ struct PreparedRecipeImport {
     slug: String,
     recipe_id: String,
     source_text: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BundledRecipeSource {
+    pub recipe_id: String,
+    pub version: String,
+    pub source_text: String,
+    pub digest: String,
 }
 
 pub fn import_recipe_library(
@@ -196,24 +207,37 @@ pub fn seed_recipe_library(
             continue;
         }
 
-        match workspace.bundled_seed_status(&slug)? {
-            BundledSeedStatus::Missing => {}
-            BundledSeedStatus::Unchanged => {
-                let current = workspace.read_recipe_source(&slug)?;
-                if current == compiled_source {
-                    continue;
-                }
-            }
-            BundledSeedStatus::ModifiedSinceSeed | BundledSeedStatus::UntrackedExisting => {
+        match workspace.bundled_recipe_state(&slug, &compiled_source) {
+            Ok(BundledRecipeState::UpToDate | BundledRecipeState::UpdateAvailable) => continue,
+            Ok(BundledRecipeState::LocalModified | BundledRecipeState::ConflictedUpdate) => {
                 result.warnings.push(format!(
                     "Skipped bundled recipe '{}' because workspace recipe '{}' was modified locally.",
                     recipe_id, slug
                 ));
                 continue;
             }
+            Ok(BundledRecipeState::Missing) | Err(_) => {
+                if workspace
+                    .resolve_recipe_source_path(&slug)
+                    .ok()
+                    .is_some_and(|path| Path::new(&path).exists())
+                {
+                    result.warnings.push(format!(
+                        "Skipped bundled recipe '{}' because workspace recipe '{}' already exists.",
+                        recipe_id, slug
+                    ));
+                    continue;
+                }
+            }
         }
 
-        let saved = workspace.save_bundled_recipe_source(&slug, &compiled_source, &recipe_id)?;
+        let version = load_recipes_from_source_text(&compiled_source)?
+            .into_iter()
+            .next()
+            .map(|recipe| recipe.version)
+            .unwrap_or_else(|| "0.0.0".into());
+        let saved =
+            workspace.save_bundled_recipe_source(&slug, &compiled_source, &recipe_id, &version)?;
         result.imported.push(ImportedRecipe {
             slug: saved.slug,
             recipe_id,
@@ -235,8 +259,9 @@ pub fn import_recipe_source(
     }
 
     let prepared = prepare_recipe_imports(trimmed)?;
+    let import_source_kind = workspace_source_kind_for_import(prepared.source_kind.clone());
     let mut result = RecipeSourceImportResult {
-        source_kind: Some(prepared.source_kind),
+        source_kind: Some(prepared.source_kind.clone()),
         skipped: prepared.skipped,
         warnings: prepared.warnings,
         ..RecipeSourceImportResult::default()
@@ -266,7 +291,11 @@ pub fn import_recipe_source(
     }
 
     for item in prepared.items {
-        let saved = workspace.save_recipe_source(&item.slug, &item.source_text)?;
+        let saved = workspace.save_imported_recipe_source(
+            &item.slug,
+            &item.source_text,
+            import_source_kind.clone(),
+        )?;
         result.imported.push(ImportedRecipe {
             slug: saved.slug,
             recipe_id: item.recipe_id,
@@ -283,6 +312,59 @@ pub fn seed_bundled_recipe_library(
     let root = resolve_bundled_recipe_library_root(app_handle)?;
     let workspace = RecipeWorkspace::from_resolved_paths();
     seed_recipe_library(&root, &workspace)
+}
+
+pub fn upgrade_bundled_recipe(
+    app_handle: &tauri::AppHandle,
+    workspace: &RecipeWorkspace,
+    slug: &str,
+) -> Result<crate::recipe_workspace::RecipeSourceSaveResult, String> {
+    let sources = load_bundled_recipe_sources(app_handle)?;
+    let bundled = sources
+        .get(slug)
+        .ok_or_else(|| format!("bundled recipe '{}' not found", slug))?;
+    match workspace.bundled_recipe_state(slug, &bundled.source_text)? {
+        BundledRecipeState::UpdateAvailable | BundledRecipeState::Missing => {}
+        BundledRecipeState::UpToDate => {
+            return Err(format!("bundled recipe '{}' is already up to date", slug));
+        }
+        BundledRecipeState::LocalModified => {
+            return Err(format!(
+                "bundled recipe '{}' has local changes and must be reviewed before replacing",
+                slug
+            ));
+        }
+        BundledRecipeState::ConflictedUpdate => {
+            return Err(format!(
+                "bundled recipe '{}' has local changes and a newer bundled version",
+                slug
+            ));
+        }
+    }
+    workspace.save_bundled_recipe_source(
+        slug,
+        &bundled.source_text,
+        &bundled.recipe_id,
+        &bundled.version,
+    )
+}
+
+pub(crate) fn load_bundled_recipe_descriptors(
+    app_handle: &tauri::AppHandle,
+) -> Result<BTreeMap<String, BundledRecipeDescriptor>, String> {
+    Ok(load_bundled_recipe_sources(app_handle)?
+        .into_iter()
+        .map(|(slug, source)| {
+            (
+                slug,
+                BundledRecipeDescriptor {
+                    recipe_id: source.recipe_id,
+                    version: source.version,
+                    digest: source.digest,
+                },
+            )
+        })
+        .collect())
 }
 
 fn resolve_bundled_recipe_library_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -428,12 +510,59 @@ fn import_recipe_dir(
             .join("; "));
     }
 
-    let saved = workspace.save_recipe_source(&slug, &compiled_source)?;
+    let saved = workspace.save_imported_recipe_source(
+        &slug,
+        &compiled_source,
+        RecipeWorkspaceSourceKind::LocalImport,
+    )?;
     Ok(ImportedRecipe {
         slug: saved.slug,
         recipe_id,
         path: saved.path,
     })
+}
+
+fn load_bundled_recipe_sources(
+    app_handle: &tauri::AppHandle,
+) -> Result<BTreeMap<String, BundledRecipeSource>, String> {
+    let root = resolve_bundled_recipe_library_root(app_handle)?;
+    load_bundled_recipe_sources_from_root(&root)
+}
+
+fn load_bundled_recipe_sources_from_root(
+    root: &Path,
+) -> Result<BTreeMap<String, BundledRecipeSource>, String> {
+    let mut sources = BTreeMap::new();
+    for recipe_dir in collect_recipe_dirs(root)? {
+        let (recipe_id, compiled_source) = compile_recipe_directory_source(&recipe_dir)?;
+        let slug = crate::recipe_workspace::normalize_recipe_slug(&recipe_id)?;
+        let version = load_recipes_from_source_text(&compiled_source)?
+            .into_iter()
+            .next()
+            .map(|recipe| recipe.version)
+            .unwrap_or_else(|| "0.0.0".into());
+        sources.insert(
+            slug.clone(),
+            BundledRecipeSource {
+                recipe_id,
+                version,
+                digest: RecipeWorkspace::source_digest(&compiled_source),
+                source_text: compiled_source,
+            },
+        );
+    }
+    Ok(sources)
+}
+
+fn workspace_source_kind_for_import(
+    source_kind: RecipeImportSourceKind,
+) -> RecipeWorkspaceSourceKind {
+    match source_kind {
+        RecipeImportSourceKind::RemoteUrl => RecipeWorkspaceSourceKind::RemoteUrl,
+        RecipeImportSourceKind::LocalFile
+        | RecipeImportSourceKind::LocalRecipeDirectory
+        | RecipeImportSourceKind::LocalRecipeLibrary => RecipeWorkspaceSourceKind::LocalImport,
+    }
 }
 
 pub(crate) fn compile_recipe_directory_source(

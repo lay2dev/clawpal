@@ -111,9 +111,14 @@ use crate::recipe_action_catalog::{
     RecipeActionCatalogEntry,
 };
 use crate::recipe_adapter::export_recipe_source as export_recipe_source_document;
-use crate::recipe_library::{RecipeLibraryImportResult, RecipeSourceImportResult};
+use crate::recipe_library::{
+    load_bundled_recipe_descriptors, upgrade_bundled_recipe, RecipeLibraryImportResult,
+    RecipeSourceImportResult,
+};
 use crate::recipe_planner::{build_recipe_plan, build_recipe_plan_from_source_text, RecipePlan};
-use crate::recipe_workspace::{RecipeSourceSaveResult, RecipeWorkspace, RecipeWorkspaceEntry};
+use crate::recipe_workspace::{
+    approval_required_for, RecipeSourceSaveResult, RecipeWorkspace, RecipeWorkspaceEntry,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1280,8 +1285,12 @@ pub fn validate_recipe_source_text(source_text: String) -> Result<RecipeSourceDi
 }
 
 #[tauri::command]
-pub fn list_recipe_workspace_entries() -> Result<Vec<RecipeWorkspaceEntry>, String> {
-    RecipeWorkspace::from_resolved_paths().list_entries()
+pub fn list_recipe_workspace_entries(
+    app_handle: AppHandle,
+) -> Result<Vec<RecipeWorkspaceEntry>, String> {
+    let workspace = RecipeWorkspace::from_resolved_paths();
+    let bundled = load_bundled_recipe_descriptors(&app_handle)?;
+    workspace.describe_entries(&bundled)
 }
 
 #[tauri::command]
@@ -1319,6 +1328,24 @@ pub fn import_recipe_source(
 pub fn delete_recipe_workspace_source(slug: String) -> Result<bool, String> {
     RecipeWorkspace::from_resolved_paths().delete_recipe_source(&slug)?;
     Ok(true)
+}
+
+#[tauri::command]
+pub fn approve_recipe_workspace_source(slug: String) -> Result<bool, String> {
+    let workspace = RecipeWorkspace::from_resolved_paths();
+    let source = workspace.read_recipe_source(&slug)?;
+    let digest = RecipeWorkspace::source_digest(&source);
+    workspace.approve_recipe(&slug, &digest)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn upgrade_bundled_recipe_workspace_source(
+    app_handle: AppHandle,
+    slug: String,
+) -> Result<RecipeSourceSaveResult, String> {
+    let workspace = RecipeWorkspace::from_resolved_paths();
+    upgrade_bundled_recipe(&app_handle, &workspace, &slug)
 }
 
 #[tauri::command]
@@ -3277,6 +3304,36 @@ pub async fn execute_recipe_with_services(
     remote_queues: &crate::cli_runner::RemoteCommandQueues,
     mut request: ExecuteRecipeRequest,
 ) -> Result<ExecuteRecipeResult, String> {
+    if let Some(workspace_slug) = request
+        .workspace_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let workspace = RecipeWorkspace::from_resolved_paths();
+        let source_kind = workspace
+            .workspace_source_kind(workspace_slug)?
+            .unwrap_or(crate::recipe_workspace::RecipeWorkspaceSourceKind::LocalImport);
+        let risk_level = workspace.workspace_risk_level(workspace_slug)?;
+        let current_source = request
+            .source_text
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .map(Ok)
+            .unwrap_or_else(|| workspace.read_recipe_source(workspace_slug))?;
+        let current_digest = RecipeWorkspace::source_digest(&current_source);
+
+        if approval_required_for(source_kind, risk_level)
+            && !workspace.is_recipe_approved(workspace_slug, &current_digest)?
+        {
+            return Err(
+                "This recipe needs your approval before it can run in this environment."
+                    .to_string(),
+            );
+        }
+    }
+
     let mut source = request.spec.source.as_object().cloned().unwrap_or_default();
 
     if let Some(source_origin) = request

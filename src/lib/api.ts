@@ -112,6 +112,8 @@ export const api = {
     invoke("read_recipe_workspace_source", { slug }),
   saveRecipeWorkspaceSource: (slug: string, source: string): Promise<RecipeSourceSaveResult> =>
     invoke("save_recipe_workspace_source", { slug, source }),
+  approveRecipeWorkspaceSource: (slug: string): Promise<boolean> =>
+    invoke("approve_recipe_workspace_source", { slug }),
   importRecipeLibrary: (rootPath: string): Promise<RecipeLibraryImportResult> =>
     invoke("import_recipe_library", { rootPath }),
   importRecipeSource: (
@@ -121,6 +123,8 @@ export const api = {
     invoke("import_recipe_source", { source, overwriteExisting }),
   deleteRecipeWorkspaceSource: (slug: string): Promise<boolean> =>
     invoke("delete_recipe_workspace_source", { slug }),
+  upgradeBundledRecipeWorkspaceSource: (slug: string): Promise<RecipeSourceSaveResult> =>
+    invoke("upgrade_bundled_recipe_workspace_source", { slug }),
   exportRecipeSource: (recipeId: string, source?: string): Promise<string> =>
     invoke("export_recipe_source", { recipeId, source: source ?? null }),
   validateRecipeSourceText: (sourceText: string): Promise<RecipeSourceDiagnostics> =>

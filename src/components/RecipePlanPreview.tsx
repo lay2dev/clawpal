@@ -3,7 +3,7 @@ import { ChevronDownIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
-import type { PrecheckIssue, RecipePlan } from "@/lib/types";
+import type { PrecheckIssue, RecipePlan, RecipeWorkspaceEntry } from "@/lib/types";
 import type { CookRouteSummary } from "@/pages/cook-plan-context";
 
 function formatIssue(issue: PrecheckIssue) {
@@ -15,15 +15,18 @@ export function RecipePlanPreview({
   routeSummary,
   authIssues = [],
   contextWarnings = [],
+  workspaceEntry = null,
 }: {
   plan: RecipePlan;
   routeSummary?: CookRouteSummary;
   authIssues?: PrecheckIssue[];
   contextWarnings?: string[];
+  workspaceEntry?: RecipeWorkspaceEntry | null;
 }) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const hasBlockingAuthIssue = authIssues.some((issue) => issue.severity === "error");
+  const approvalRequired = Boolean(workspaceEntry?.approvalRequired);
   const combinedWarnings = [...plan.warnings, ...contextWarnings];
   const plannedActions = plan.executionSpec.actions.map((action, index) => ({
     id: `${action.kind ?? "action"}-${index}`,
@@ -58,8 +61,28 @@ export function RecipePlanPreview({
         return { key, label: t("cook.reviewClaimGeneric", { kind: claim.kind, value: detail }) };
     }
   });
+  const blockingItems = [
+    ...authIssues
+      .filter((issue) => issue.severity === "error")
+      .map((issue) => ({
+        key: `auth:${issue.code}:${issue.message}`,
+        summary: issue.message,
+        detail: formatIssue(issue),
+      })),
+    ...(approvalRequired
+      ? [
+          {
+            key: "approval-required",
+            summary: t("cook.reviewApprovalBlocker"),
+            detail: t("cook.reviewApprovalBlockerDetail"),
+          },
+        ]
+      : []),
+  ];
   const attentionItems = [
-    ...authIssues.map((issue) => ({
+    ...authIssues
+      .filter((issue) => issue.severity !== "error")
+      .map((issue) => ({
       key: `auth:${issue.code}:${issue.message}`,
       summary: issue.message,
       detail: formatIssue(issue),
@@ -151,13 +174,49 @@ export function RecipePlanPreview({
         </ul>
       </div>
 
+      <div className="mt-4 rounded-md border border-border/70 bg-background/80 p-3">
+        <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+          {t("cook.reviewRequirementsTitle")}
+        </div>
+        <ul className="mt-2 space-y-2 text-sm text-foreground">
+          <li className="flex gap-2">
+            <span className="mt-0.5 text-muted-foreground">•</span>
+            <span>{t("cook.reviewRequirementEnvironment", { name: routeSummary?.targetLabel ?? t("cook.reviewDefaultRoute") })}</span>
+          </li>
+          {approvalRequired && (
+            <li className="flex gap-2">
+              <span className="mt-0.5 text-muted-foreground">•</span>
+              <span>{t("cook.reviewRequirementApproval")}</span>
+            </li>
+          )}
+          {!approvalRequired && !hasBlockingAuthIssue && (
+            <li className="flex gap-2">
+              <span className="mt-0.5 text-muted-foreground">•</span>
+              <span>{t("cook.reviewRequirementReady")}</span>
+            </li>
+          )}
+        </ul>
+      </div>
+
+      {blockingItems.length > 0 && (
+        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          <div className="font-medium">{t("cook.reviewBlockingTitle")}</div>
+          <div className="mt-2 space-y-2">
+            {blockingItems.map((item) => (
+              <div key={item.key}>
+                <div>{item.summary}</div>
+                {item.detail !== item.summary && (
+                  <div className="mt-1 text-xs opacity-80">{item.detail}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {attentionItems.length > 0 && (
         <div
-          className={
-            hasBlockingAuthIssue
-              ? "mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-              : "mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-950"
-          }
+          className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-950"
         >
           <div className="font-medium">{t("cook.reviewAttentionTitle")}</div>
           <div className="mt-2 space-y-2">

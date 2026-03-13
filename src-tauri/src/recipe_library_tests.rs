@@ -357,7 +357,7 @@ fn import_recipe_source_reports_conflicts_without_overwriting_workspace_recipe()
 }
 
 #[test]
-fn seed_recipe_library_upgrades_unchanged_bundled_recipe_but_preserves_user_edits() {
+fn seed_recipe_library_marks_bundled_updates_but_preserves_user_edits() {
     let library_root = temp_dir("bundled-seed-library");
     let workspace_root = temp_dir("bundled-seed-workspace");
     let workspace = RecipeWorkspace::new(workspace_root.path().to_path_buf());
@@ -407,11 +407,12 @@ fn seed_recipe_library_upgrades_unchanged_bundled_recipe_but_preserves_user_edit
 
     let v2 = v1.replace("Version one", "Version two");
     write_recipe(library_root.path(), "agent-persona-pack", &v2);
-    seed_recipe_library(library_root.path(), &workspace).expect("seed v2");
+    let result = seed_recipe_library(library_root.path(), &workspace).expect("seed v2");
+    assert!(result.imported.is_empty());
     assert!(workspace
         .read_recipe_source("agent-persona-pack")
-        .expect("read seeded v2")
-        .contains("Version two"));
+        .expect("read still-seeded v1")
+        .contains("Version one"));
 
     workspace
         .save_recipe_source(
