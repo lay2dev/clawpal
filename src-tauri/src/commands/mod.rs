@@ -1254,16 +1254,19 @@ pub fn list_recipes_from_source_text(
 }
 
 #[tauri::command]
-pub fn pick_recipe_source_directory(app: AppHandle) -> Result<Option<String>, String> {
-    let selected_path: Option<String> = match app.dialog().file().blocking_pick_folder() {
-        Some(folder_path) => {
-            let resolved_path = folder_path.into_path().map_err(|error| error.to_string())?;
-            Some(resolved_path.to_string_lossy().to_string())
-        }
-        None => None,
-    };
+pub async fn pick_recipe_source_directory(app: AppHandle) -> Result<Option<String>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |folder_path| {
+        let result = folder_path
+            .map(|path| path.into_path().map_err(|error| error.to_string()))
+            .transpose()
+            .map(|path| path.map(|value| value.to_string_lossy().to_string()));
+        let _ = sender.send(result);
+    });
 
-    Ok(selected_path)
+    receiver
+        .await
+        .map_err(|_| "recipe folder picker was closed before returning a result".to_string())?
 }
 
 #[tauri::command]
