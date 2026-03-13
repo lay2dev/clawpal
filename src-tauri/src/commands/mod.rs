@@ -1672,6 +1672,19 @@ fn action_string(value: Option<&Value>) -> Option<String> {
     })
 }
 
+fn action_content_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| match value {
+        Value::String(text) => {
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text.clone())
+            }
+        }
+        _ => None,
+    })
+}
+
 fn action_bool(value: Option<&Value>) -> bool {
     match value {
         Some(Value::Bool(value)) => *value,
@@ -2102,7 +2115,7 @@ async fn materialize_recipe_action_commands(
                 .ok_or_else(|| "setup_identity requires agentId".to_string())?;
             let name = action_string(args.get("name"));
             let emoji = action_string(args.get("emoji"));
-            let persona = action_string(args.get("persona"));
+            let persona = action_content_string(args.get("persona"));
             if name.is_none() && emoji.is_none() && persona.is_none() {
                 return Err(
                     "setup_identity requires at least one of name, emoji, or persona".to_string(),
@@ -2118,7 +2131,7 @@ async fn materialize_recipe_action_commands(
         "set_agent_persona" => {
             let agent_id = action_string(args.get("agentId"))
                 .ok_or_else(|| "set_agent_persona requires agentId".to_string())?;
-            let persona = action_string(args.get("persona"))
+            let persona = action_content_string(args.get("persona"))
                 .ok_or_else(|| "set_agent_persona requires persona".to_string())?;
             Ok(vec![recipe_action_agent_persona_command(
                 &agent_id,
@@ -2212,7 +2225,7 @@ async fn materialize_recipe_action_commands(
                 .ok_or_else(|| "set_channel_persona requires channelType".to_string())?;
             let peer_id = action_string(args.get("peerId"))
                 .ok_or_else(|| "set_channel_persona requires peerId".to_string())?;
-            let persona = action_string(args.get("persona"))
+            let persona = action_content_string(args.get("persona"))
                 .ok_or_else(|| "set_channel_persona requires persona".to_string())?;
             let guild_id = action_string(args.get("guildId"));
             let patch =
@@ -2412,10 +2425,14 @@ async fn materialize_recipe_commands(
 #[cfg(test)]
 mod recipe_action_materializer_tests {
     use super::{
-        recipe_action_agent_persona_command, recipe_action_markdown_document_command,
-        recipe_action_setup_identity_command, remove_binding_entries,
-        INTERNAL_AGENT_PERSONA_COMMAND, INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND,
-        INTERNAL_SETUP_IDENTITY_COMMAND,
+        materialize_recipe_action_commands, recipe_action_agent_persona_command,
+        recipe_action_markdown_document_command, recipe_action_setup_identity_command,
+        remove_binding_entries, INTERNAL_AGENT_PERSONA_COMMAND,
+        INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND, INTERNAL_SETUP_IDENTITY_COMMAND,
+    };
+    use crate::{
+        cli_runner::CliCache, execution_spec::ExecutionAction, recipe_executor::ExecutionRoute,
+        ssh::SshConnectionPool,
     };
     use serde_json::{json, Value};
 
@@ -2495,6 +2512,47 @@ mod recipe_action_materializer_tests {
             payload.pointer("/target/agentId").and_then(Value::as_str),
             Some("lobster")
         );
+    }
+
+    #[tokio::test]
+    async fn set_channel_persona_materialization_preserves_trailing_newline() {
+        let action = ExecutionAction {
+            kind: Some("set_channel_persona".into()),
+            name: Some("Apply channel persona preset".into()),
+            args: json!({
+                "channelType": "discord",
+                "guildId": "guild-1",
+                "peerId": "channel-1",
+                "persona": "Line one\n\nLine two\n"
+            }),
+        };
+
+        let cache = CliCache::new();
+        let pool = SshConnectionPool::default();
+        let route = ExecutionRoute {
+            runner: "local".into(),
+            target_kind: "local".into(),
+            host_id: None,
+        };
+
+        let commands = materialize_recipe_action_commands(&action, &cache, &pool, &route)
+            .await
+            .expect("materialize channel persona action");
+
+        let payload = commands
+            .iter()
+            .find(|(_, command)| {
+                command.len() >= 5
+                    && command[0] == "openclaw"
+                    && command[1] == "config"
+                    && command[2] == "set"
+                    && command[3]
+                        == "channels.discord.guilds.guild-1.channels.channel-1.systemPrompt"
+            })
+            .map(|(_, command)| command[4].clone())
+            .expect("systemPrompt config set command");
+
+        assert_eq!(payload, "\"Line one\\n\\nLine two\\n\"");
     }
 
     #[test]
