@@ -239,6 +239,32 @@ Recipe 不应携带明文 secret。
 - `ensure_model_profile` 可以触发 profile + auth 的准备
 - 但 recipe source 自己不应成为 secret 载体
 
+## 8.1 信任与批准不属于 runner 的“可选增强”
+
+当前平台把来源信任和批准当成执行边界，而不是单纯 UI 提示。
+
+来源分级：
+
+- `bundled`
+- `localImport`
+- `remoteUrl`
+
+runner / command layer 必须配合上层保证：
+
+- 高风险 bundled recipe 未批准时不能执行
+- 本地导入 recipe 在需要批准时不能执行
+- 远程 URL recipe 的 mutating 行为未批准时不能执行
+
+批准绑定到 `workspace slug + recipe digest`：
+
+- digest 不变，批准可复用
+- digest 变化，批准立即失效
+
+这也是为什么 bundled recipe 升级不能静默覆盖：
+
+- 一旦 source 变化，之前的批准就不再可信
+- 用户需要明确看见新版本，并重新决定是否接受
+
 ## 9. Review / Done 为什么要依赖 action 语义
 
 当前 UI 面向非技术用户，因此：

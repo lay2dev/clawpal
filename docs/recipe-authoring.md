@@ -23,6 +23,46 @@
 - import/seed 之后会变成自包含单文件
 - runner 永远不直接依赖外部 `assets/` 目录
 
+### Bundled Recipe 的升级规则
+
+内置 bundled recipe 现在采用“`digest 判定，显式升级`”模型：
+
+- 首次启动时，如果 workspace 缺失，会自动 seed
+- 如果 bundled source 更新了，但用户没有改本地副本，UI 会显示 `Update available`
+- 如果用户改过本地副本，不会被静默覆盖
+- 只有用户显式点击升级，workspace copy 才会被替换
+
+状态语义：
+
+- `upToDate`
+- `updateAvailable`
+- `localModified`
+- `conflictedUpdate`
+
+这里 `version` 只用于展示；真正判断是否有升级，始终看 source `digest`。
+
+### 来源、信任与批准
+
+workspace recipe 会记录来源：
+
+- `bundled`
+- `localImport`
+- `remoteUrl`
+
+这会影响执行前的信任和批准规则：
+
+- `bundled`
+  普通变更默认可执行，高风险动作需要批准
+- `localImport`
+  中风险和高风险 recipe 首次执行前需要批准
+- `remoteUrl`
+  任何会修改环境的 recipe 首次执行前都需要批准
+
+批准是按 `workspace recipe + 当前 digest` 记忆的：
+
+- 同一个 digest 只需批准一次
+- 只要 recipe 被编辑、重新导入或升级，digest 变化，批准自动失效
+
 ## 2. 推荐的作者目录结构
 
 新增一个可维护的 Recipe，推荐放在独立目录里，而不是直接写进 `src-tauri/recipes.json`。
@@ -255,6 +295,20 @@ UI 规则：
 注意：
 - 文档里出现并不等于 runner 一定支持执行
 - interactive 或携带 secret payload 的 CLI 子命令，只会记录在 catalog 里，不建议写进 recipe
+
+## 7.6 Review 阶段现在会严格阻断什么
+
+当前 `Cook -> Review` 会把下面这些情况当成阻断项，而不是“执行后再失败”：
+
+- 当前 recipe 需要批准，但还没批准
+- auth 预检返回 `error`
+- destructive action 默认删除仍被引用的资源
+
+因此作者在设计 recipe 时，应优先做到：
+
+- 结果语义清晰
+- claim 和 capability 可稳定推导
+- destructive 行为显式声明 `force` / `rebind` 之类的意图参数
 
 ### 7.5 兼容 / escape hatch
 
