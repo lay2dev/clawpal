@@ -38,7 +38,7 @@ cargo clippy               # Rust lint
 ## 代码分层约束
 
 ### UI 层 (`src/`)
-- 不直接在组件中使用 `invoke("xxx")`，通过 `src/lib/api/` 封装调用
+- 不直接在组件中使用 `invoke("xxx")`，通过 `src/lib/api.ts` 封装调用
 - 不直接访问原生能力
 - 不拼接 command 名称和错误字符串
 
