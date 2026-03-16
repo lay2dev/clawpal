@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AgentOverview, ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -37,6 +39,7 @@ export function ParamForm({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const { discordChannelsResolved } = useInstance();
   const discordGuildChannels = ua.discordGuildChannels ?? [];
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
@@ -139,6 +142,9 @@ export function ParamForm({
             {uniqueGuilds.map((g) => (
               <SelectItem key={g.id} value={g.id}>
                 {g.name}
+                {!discordChannelsResolved && g.name === g.id && (
+                  <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -166,6 +172,9 @@ export function ParamForm({
             {filteredChannels.map((c) => (
               <SelectItem key={c.channelId} value={c.channelId}>
                 {c.channelName}
+                {!discordChannelsResolved && c.channelName === c.channelId && (
+                  <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                )}
               </SelectItem>
             ))}
           </SelectContent>

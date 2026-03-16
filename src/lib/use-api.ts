@@ -98,6 +98,24 @@ function makeCacheKey(instanceCacheKey: string, method: string, args: unknown[])
   return `${instanceCacheKey}:${method}:${serializedArgs}`;
 }
 
+/** Seed a read-cache entry from a parent response (e.g. RuntimeSnapshot → listAgents).
+ *  Only writes if no valid entry exists, avoiding overwrites of fresher data. */
+function seedReadCache(
+  instanceCacheKey: string,
+  method: string,
+  args: unknown[],
+  value: unknown,
+  ttlMs: number,
+) {
+  const key = makeCacheKey(instanceCacheKey, method, args);
+  const existing = API_READ_CACHE.get(key);
+  const now = Date.now();
+  if (existing && existing.expiresAt > now) return; // already fresh
+  API_READ_CACHE.set(key, { value, expiresAt: now + ttlMs });
+  _notifyCacheSubscribers(key);
+}
+
+
 function trimReadCacheIfNeeded() {
   if (API_READ_CACHE.size <= API_READ_CACHE_MAX_ENTRIES) return;
   const deleteCount = API_READ_CACHE.size - API_READ_CACHE_MAX_ENTRIES;
@@ -646,12 +664,26 @@ export function useApi() {
         api.getInstanceConfigSnapshot,
         api.remoteGetInstanceConfigSnapshot,
       ),
-      getInstanceRuntimeSnapshot: dispatchCached(
-        "getInstanceRuntimeSnapshot",
-        isRemote ? 10_000 : 6_000,
-        api.getInstanceRuntimeSnapshot,
-        api.remoteGetInstanceRuntimeSnapshot,
-      ),
+      getInstanceRuntimeSnapshot: (() => {
+        const _inner = dispatchCached(
+          "getInstanceRuntimeSnapshot",
+          isRemote ? 10_000 : 6_000,
+          api.getInstanceRuntimeSnapshot,
+          api.remoteGetInstanceRuntimeSnapshot,
+        );
+        return (...args: Parameters<typeof _inner>) =>
+          _inner(...args).then((snapshot) => {
+            // Seed listAgents cache from the snapshot to avoid a redundant fetch
+            seedReadCache(
+              instanceCacheKey,
+              "listAgents",
+              [],
+              snapshot.agents,
+              isRemote ? 12_000 : 6_000,
+            );
+            return snapshot;
+          });
+      })(),
       getStatusExtra: dispatchCached(
         "getStatusExtra",
         isRemote ? 15_000 : 10_000,
@@ -708,6 +740,14 @@ export function useApi() {
         api.refreshDiscordGuildChannels,
         api.remoteListDiscordGuildChannels,
       ),
+      // Fast path: config-derived structure + disk cache, no Discord REST / CLI
+      listDiscordGuildChannelsFast: dispatchCached(
+        "listDiscordGuildChannelsFast",
+        isRemote ? 60_000 : 30_000,
+        api.listDiscordGuildChannelsFast,
+        api.remoteListDiscordGuildChannelsFast,
+      ),
+
 
       // Models
       listModelProfiles: localGlobalCached(

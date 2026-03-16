@@ -15,6 +15,7 @@ interface InstanceContextValue {
   discordGuildChannels: DiscordGuildChannel[] | null;
   channelsLoading: boolean;
   discordChannelsLoading: boolean;
+  discordChannelsResolved: boolean;
   refreshChannelNodesCache: () => Promise<ChannelNode[]>;
   refreshDiscordChannelsCache: () => Promise<DiscordGuildChannel[]>;
 }
@@ -33,6 +34,7 @@ export const InstanceContext = createContext<InstanceContextValue>({
   discordGuildChannels: null,
   channelsLoading: false,
   discordChannelsLoading: false,
+  discordChannelsResolved: false,
   refreshChannelNodesCache: async () => [],
   refreshDiscordChannelsCache: async () => [],
 });

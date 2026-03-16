@@ -45,6 +45,7 @@ describe("Doctor page rescue header", () => {
             discordGuildChannels: null,
             channelsLoading: false,
             discordChannelsLoading: false,
+            discordChannelsResolved: false,
             refreshChannelNodesCache: async () => [],
             refreshDiscordChannelsCache: async () => [],
           },

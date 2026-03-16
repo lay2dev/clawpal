@@ -225,6 +225,8 @@ export const api = {
     invoke("list_discord_guild_channels", {}),
   refreshDiscordGuildChannels: (): Promise<DiscordGuildChannel[]> =>
     invoke("refresh_discord_guild_channels", {}),
+  listDiscordGuildChannelsFast: (): Promise<DiscordGuildChannel[]> =>
+    invoke("list_discord_guild_channels_fast", {}),
   restartGateway: (): Promise<boolean> =>
     invoke("restart_gateway", {}),
   diagnoseDoctorAssistant: (): Promise<RescuePrimaryDiagnosisResult> =>
@@ -326,6 +328,8 @@ export const api = {
     invoke("remote_apply_config_patch", { hostId, patchTemplate, params }),
   remoteListDiscordGuildChannels: (hostId: string): Promise<DiscordGuildChannel[]> =>
     invoke("remote_list_discord_guild_channels", { hostId }),
+  remoteListDiscordGuildChannelsFast: (hostId: string): Promise<DiscordGuildChannel[]> =>
+    invoke("remote_list_discord_guild_channels_fast", { hostId }),
   remoteRunDoctor: (hostId: string): Promise<DoctorReport> =>
     invoke("remote_run_doctor", { hostId }),
   remoteFixIssues: (hostId: string, ids: string[]): Promise<{ ok: boolean; applied: string[]; remainingIssues: string[] }> =>

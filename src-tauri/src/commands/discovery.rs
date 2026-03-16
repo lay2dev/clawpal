@@ -483,6 +483,179 @@ pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String>
     Ok(Vec::new())
 }
 
+/// Fast path: return guild channels from disk cache merged with config-derived
+/// structure.  Never calls Discord REST or CLI subprocesses, so it completes in
+/// < 50 ms locally.  Unresolved names are left as raw IDs — the caller is
+/// expected to trigger a full `refresh_discord_guild_channels` in the background
+/// to enrich them.
+#[tauri::command]
+pub async fn list_discord_guild_channels_fast() -> Result<Vec<DiscordGuildChannel>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = resolve_paths();
+        // Layer 0: read existing cache (may contain resolved names from a prior refresh)
+        let cache_file = paths.clawpal_dir.join("discord-guild-channels.json");
+        let cached: Vec<DiscordGuildChannel> = if cache_file.exists() {
+            fs::read_to_string(&cache_file)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Layer 1: parse config to discover any guild/channel pairs not yet in the cache
+        let cfg = match read_openclaw_config(&paths) {
+            Ok(c) => c,
+            Err(_) => return Ok(cached), // config unreadable — return cache-only
+        };
+        let core_channels =
+            clawpal_core::discovery::parse_guild_channels(&cfg.to_string()).unwrap_or_default();
+
+        // Build a lookup from cached entries so we can reuse resolved names
+        let mut cache_map: std::collections::HashMap<(String, String), DiscordGuildChannel> =
+            cached
+                .into_iter()
+                .map(|e| ((e.guild_id.clone(), e.channel_id.clone()), e))
+                .collect();
+
+        let mut result: Vec<DiscordGuildChannel> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for ch in &core_channels {
+            let key = (ch.guild_id.clone(), ch.channel_id.clone());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if let Some(cached_entry) = cache_map.remove(&key) {
+                // Prefer cached entry — it has resolved names from the last full refresh
+                result.push(cached_entry);
+            } else {
+                result.push(DiscordGuildChannel {
+                    guild_id: ch.guild_id.clone(),
+                    guild_name: ch.guild_name.clone(),
+                    channel_id: ch.channel_id.clone(),
+                    channel_name: ch.channel_name.clone(),
+                    default_agent_id: None,
+                });
+            }
+        }
+
+        // Append any cached entries not in config (e.g. from bindings or directory discovery)
+        for (key, entry) in cache_map {
+            if seen.insert(key) {
+                result.push(entry);
+            }
+        }
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Fast path for remote instances: read config-derived guild channels without
+/// calling Discord REST or remote CLI resolve.
+#[tauri::command]
+pub async fn remote_list_discord_guild_channels_fast(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<DiscordGuildChannel>, String> {
+    // Read remote config
+    let output = crate::cli_runner::run_openclaw_remote(
+        &pool,
+        &host_id,
+        &["config", "get", "channels.discord", "--json"],
+    )
+    .await?;
+    let bindings_output = crate::cli_runner::run_openclaw_remote(
+        &pool,
+        &host_id,
+        &["config", "get", "bindings", "--json"],
+    )
+    .await?;
+    let config_fallback = if output.exit_code == 0 && bindings_output.exit_code == 0 {
+        None
+    } else {
+        remote_read_openclaw_config_text_and_json(&pool, &host_id)
+            .await
+            .ok()
+            .map(|(_, _, cfg)| cfg)
+    };
+    let (fallback_discord_section, fallback_bindings_section) = config_fallback
+        .as_ref()
+        .map(discord_sections_from_openclaw_config)
+        .unwrap_or_else(|| (Value::Null, Value::Array(Vec::new())));
+    let discord_section = if output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
+    } else {
+        fallback_discord_section
+    };
+    let bindings_section = if bindings_output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&bindings_output)
+            .unwrap_or_else(|_| Value::Array(Vec::new()))
+    } else {
+        fallback_bindings_section
+    };
+    let cfg = serde_json::json!({
+        "channels": { "discord": discord_section },
+        "bindings": bindings_section
+    });
+
+    let core_channels =
+        clawpal_core::discovery::parse_guild_channels(&cfg.to_string()).unwrap_or_default();
+
+    // Read remote cache for resolved names
+    let cached: Vec<DiscordGuildChannel> = pool
+        .sftp_read(&host_id, "~/.clawpal/discord-guild-channels.json")
+        .await
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+
+    // Merge: prefer cached names, fill in config-derived entries
+    let mut cache_map: std::collections::HashMap<(String, String), DiscordGuildChannel> = cached
+        .into_iter()
+        .map(|e| ((e.guild_id.clone(), e.channel_id.clone()), e))
+        .collect();
+
+    // Enrich guild names from config (slug/name fields)
+    let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
+    let guild_name_fallback = collect_discord_config_guild_name_fallbacks(discord_cfg);
+
+    let mut result: Vec<DiscordGuildChannel> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for ch in &core_channels {
+        let key = (ch.guild_id.clone(), ch.channel_id.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if let Some(cached_entry) = cache_map.remove(&key) {
+            result.push(cached_entry);
+        } else {
+            let guild_name = guild_name_fallback
+                .get(&ch.guild_id)
+                .cloned()
+                .unwrap_or_else(|| ch.guild_name.clone());
+            result.push(DiscordGuildChannel {
+                guild_id: ch.guild_id.clone(),
+                guild_name,
+                channel_id: ch.channel_id.clone(),
+                channel_name: ch.channel_name.clone(),
+                default_agent_id: None,
+            });
+        }
+    }
+
+    for (key, entry) in cache_map {
+        if seen.insert(key) {
+            result.push(entry);
+        }
+    }
+
+    Ok(result)
+}
+
 #[tauri::command]
 pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
     tauri::async_runtime::spawn_blocking(move || {
