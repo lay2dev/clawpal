@@ -20,28 +20,28 @@ docs/runbooks/                # 启动、调试、发布、回滚、故障处理
 docs/testing/                 # 测试矩阵与验证策略
 harness/fixtures/             # 最小稳定测试数据
 harness/artifacts/            # 日志、截图、trace、失败产物收集
-justfile                      # 统一命令入口
+Makefile                      # 统一命令入口
 ```
 
 ## 启动命令
 
-本项目使用 [just](https://github.com/casey/just) 作为统一命令入口：
+本项目使用 `Makefile` 作为统一命令入口（无需额外安装，macOS/Linux 自带 `make`）：
 
 ```bash
-just install        # 安装前端依赖
-just dev            # 启动开发模式（前端 + Tauri）
-just dev-frontend   # 仅启动前端
-just test-unit      # 运行所有单元测试（前端 + Rust）
-just lint           # 运行所有 lint（TypeScript + Rust fmt + clippy）
-just fmt            # 自动修复 Rust 格式
-just build          # 构建 Tauri 应用（debug）
-just ci             # 本地运行完整 CI 检查
-just doctor         # 检查开发环境依赖
+make install        # 安装前端依赖
+make dev            # 启动开发模式（前端 + Tauri）
+make dev-frontend   # 仅启动前端
+make test-unit      # 运行所有单元测试（前端 + Rust）
+make lint           # 运行所有 lint（TypeScript + Rust fmt + clippy）
+make fmt            # 自动修复 Rust 格式
+make build          # 构建 Tauri 应用（debug）
+make ci             # 本地运行完整 CI 检查
+make doctor         # 检查开发环境依赖
 ```
 
-完整命令列表：`just --list`
+完整命令列表：`make help`
 
-底层命令（不使用 just 时）：
+底层命令（不使用 make 时）：
 
 ```bash
 bun install               # 安装前端依赖

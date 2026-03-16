@@ -26,13 +26,13 @@
 
 独立 PR。
 
-- [x] 落地 `justfile`，统一 dev/test/lint/smoke/package 命令
+- [x] 落地 `Makefile`，统一 dev/test/lint/smoke/package 命令
 - [ ] 统一包管理器策略（Bun vs npm）
 - [x] 增加 PR 模板 (`.github/PULL_REQUEST_TEMPLATE.md`)
 - [x] 增加 issue 模板（bug report、feature request、task）
 - [ ] 将 `business-flow-test-matrix.md` 升级为标准 gate 文档
 - [ ] 补 packaged app smoke test 入口
-- [x] 补 artifacts 汇总命令（`just artifacts`）
+- [x] 补 artifacts 汇总命令（`make artifacts`）
 
 ### Phase 3: 代码可读性改造
 
@@ -57,7 +57,7 @@
 ## 验收标准
 
 - Agent 能在 30 分钟内通过 `AGENTS.md` 独立启动项目
-- 所有验证命令通过 `justfile` 一站式入口调用
+- 所有验证命令通过 `Makefile` 一站式入口调用
 - 关键模块有 architecture note
 - PR 有统一模板和证据要求
 

@@ -28,8 +28,8 @@
 ## 修复后验证
 
 ```bash
-just lint           # 确保类型和格式正确
-just test-unit      # 确保没有引入回归
+make lint           # 确保类型和格式正确
+make test-unit      # 确保没有引入回归
 ```
 
 DevTools Console 中 invoke 调用返回预期结果，无错误。
