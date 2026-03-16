@@ -1,0 +1,38 @@
+# ClawPal - OpenClaw Desktop Companion
+# https://clawpal.xyz
+
+User-agent: *
+Allow: /
+
+# Explicitly allow AI search crawlers
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+# Content signals (per robots.txt Content-Signal proposal)
+# search=yes: Allow search indexing
+# ai-input=yes: Allow AI to use content for answers (RAG, grounding)
+# ai-train=no: Do not use for model training
+Content-Signal: search=yes,ai-input=yes,ai-train=no
+
+Sitemap: https://clawpal.xyz/sitemap.xml

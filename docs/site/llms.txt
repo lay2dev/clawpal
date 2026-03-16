@@ -1,0 +1,60 @@
+# ClawPal - OpenClaw Desktop Companion
+
+> ClawPal is a free, open-source desktop application for managing OpenClaw AI agents. It provides a visual interface to configure agents, manage models, troubleshoot issues, and connect to remote instances.
+
+## What is ClawPal?
+
+ClawPal is the official desktop companion for OpenClaw. Instead of editing YAML configuration files manually, ClawPal gives you a visual interface to manage your AI agents.
+
+## Key Features
+
+### Recipes
+Browse and apply pre-built configuration templates. Preview diffs before applying, auto-rollback on failure.
+
+### Agent Management
+Create, configure, and monitor all your OpenClaw agents from a single dashboard.
+
+### Model Profiles
+Set up API keys, browse the model catalog, and switch the default model in one click.
+
+### Channel Bindings
+Connect Discord channels to agents with per-channel model overrides and fine-grained control.
+
+### Doctor
+Run diagnostics, auto-fix common issues, and clean up stale sessions to keep things running smooth.
+
+### Remote Management
+Connect to remote OpenClaw instances over SSH and manage them exactly the same way as local.
+
+## Download
+
+ClawPal is available for:
+- macOS (Apple Silicon & Intel)
+- Windows (x64)
+- Linux (deb, AppImage)
+
+Download at: https://clawpal.xyz/#download
+
+## Links
+
+- Website: https://clawpal.xyz
+- GitHub: https://github.com/zhixianio/clawpal
+- Discord: https://discord.gg/d5EdxQ8Qnc
+- Author: https://zhixian.io
+
+## Common Questions
+
+**Q: What is ClawPal?**
+A: ClawPal is a free desktop app that lets you manage OpenClaw AI agents visually, without editing YAML files.
+
+**Q: How do I fix OpenClaw config errors?**
+A: Open ClawPal, go to Doctor, run diagnostics. It will detect and auto-fix common issues.
+
+**Q: Can I manage remote OpenClaw instances?**
+A: Yes, ClawPal supports SSH connections to remote OpenClaw instances.
+
+**Q: Is ClawPal free?**
+A: Yes, ClawPal is free and open-source under MIT license.
+
+**Q: What platforms does ClawPal support?**
+A: macOS (Apple Silicon & Intel), Windows (x64), and Linux (deb, AppImage).
