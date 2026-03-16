@@ -188,6 +188,7 @@ export function App() {
   const [discordGuildChannels, setDiscordGuildChannels] = useState<DiscordGuildChannel[] | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [discordChannelsLoading, setDiscordChannelsLoading] = useState(false);
+  const [discordChannelsResolved, setDiscordChannelsResolved] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [startSection, setStartSection] = useState<"overview" | "profiles" | "settings">("overview");
   const [inStart, setInStart] = useState(true);
@@ -1206,6 +1207,7 @@ export function App() {
     if (!persistenceResolved || !persistenceScope) {
       setChannelNodes(null);
       setDiscordGuildChannels(null);
+      setDiscordChannelsResolved(false);
       return;
     }
     setChannelNodes(
@@ -1239,6 +1241,7 @@ export function App() {
         ? await api.remoteListDiscordGuildChannels(activeInstance)
         : await api.listDiscordGuildChannels();
       setDiscordGuildChannels(channels);
+      setDiscordChannelsResolved(true);
       if (persistenceScope) {
         writePersistedReadCache(persistenceScope, "listDiscordGuildChannels", [], channels);
       }
@@ -1248,9 +1251,30 @@ export function App() {
     }
   }, [activeInstance, isRemote, persistenceScope]);
 
-  // Load unified channel cache lazily when Channels tab is active.
+  /** Fast path: config-derived structure + disk cache, no Discord REST.
+   *  Populates the dropdown immediately; a subsequent full refresh enriches names. */
+  const refreshDiscordChannelsCacheFast = useCallback(async () => {
+    try {
+      const channels = isRemote
+        ? await api.remoteListDiscordGuildChannelsFast(activeInstance)
+        : await api.listDiscordGuildChannelsFast();
+      // Only apply if we haven't already received fully-resolved data
+      setDiscordGuildChannels((prev) => {
+        if (prev && prev.length > 0) return prev; // full data already loaded
+        return channels;
+      });
+      return channels;
+    } catch {
+      return []; // non-critical — full refresh will follow
+    }
+  }, [activeInstance, isRemote]);
+
+  // Load unified channel cache lazily when relevant tabs are active.
+  // Channels tab: full refresh.
+  // Cook/Recipes tabs: fast (config-derived) first, then full in background.
   useEffect(() => {
-    if (route !== "channels" || !persistenceResolved) return;
+    const needsChannels = route === "channels" || route === "cook" || route === "recipes";
+    if (!needsChannels || !persistenceResolved) return;
     if (isRemote && !isConnected) return;
     if (!shouldEnableInstanceLiveReads({
       instanceToken,
@@ -1258,6 +1282,11 @@ export function App() {
       persistenceScope,
       isRemote,
     })) return;
+    if (route === "cook" || route === "recipes") {
+      // Layer 1: fast load (config + disk cache) → immediate dropdown population
+      void refreshDiscordChannelsCacheFast();
+    }
+    // Layer 2: full refresh (Discord REST + CLI resolve) → enriched names
     void Promise.allSettled([
       refreshChannelNodesCache(),
       refreshDiscordChannelsCache(),
@@ -1271,6 +1300,7 @@ export function App() {
     isConnected,
     refreshChannelNodesCache,
     refreshDiscordChannelsCache,
+    refreshDiscordChannelsCacheFast,
   ]);
 
   const bumpConfigVersion = useCallback(() => {
@@ -1511,6 +1541,7 @@ export function App() {
         discordGuildChannels,
         channelsLoading,
         discordChannelsLoading,
+        discordChannelsResolved,
         refreshChannelNodesCache,
         refreshDiscordChannelsCache,
       }}>
