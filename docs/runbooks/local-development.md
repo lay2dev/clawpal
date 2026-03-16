@@ -20,7 +20,7 @@
 
 2. 启动开发模式：
    ```bash
-   bun run tauri dev
+   bun run dev:tauri
    ```
 
 3. 仅启动前端（不含 Tauri）：

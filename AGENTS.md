@@ -26,7 +26,7 @@ harness/artifacts/            # 日志、截图、trace、失败产物收集
 
 ```bash
 bun install               # 安装前端依赖
-bun run tauri dev          # 启动开发模式（前端 + Tauri）
+bun run dev:tauri           # 启动开发模式（前端 + Tauri）
 bun run dev                # 仅启动前端
 cargo test --workspace     # Rust 单元测试
 bun run test               # 前端单元测试
