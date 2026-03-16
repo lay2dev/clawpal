@@ -52,7 +52,7 @@ PR #126 (merged) + PR #127
 
 PR #127
 
-- [x] 关键目录加 CODEOWNERS
+- [ ] 关键目录加 CODEOWNERS（已移除，当前团队规模不需要）
 - [x] Runbook: 故障诊断与回滚路径（`docs/runbooks/failure-diagnosis.md`）
 - [x] 建立每周熵治理 checklist（`docs/runbooks/entropy-governance.md`）
 
