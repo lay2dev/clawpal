@@ -28,6 +28,7 @@ describe("Recipes runtime summary", () => {
             discordGuildChannels: null,
             channelsLoading: false,
             discordChannelsLoading: false,
+            discordChannelsResolved: false,
             refreshChannelNodesCache: async () => [],
             refreshDiscordChannelsCache: async () => [],
           },

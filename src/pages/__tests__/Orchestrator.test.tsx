@@ -29,6 +29,7 @@ describe("Orchestrator runtime timeline", () => {
             discordGuildChannels: null,
             channelsLoading: false,
             discordChannelsLoading: false,
+            discordChannelsResolved: false,
             refreshChannelNodesCache: async () => [],
             refreshDiscordChannelsCache: async () => [],
           },
