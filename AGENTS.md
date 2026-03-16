@@ -20,16 +20,35 @@ docs/runbooks/                # 启动、调试、发布、回滚、故障处理
 docs/testing/                 # 测试矩阵与验证策略
 harness/fixtures/             # 最小稳定测试数据
 harness/artifacts/            # 日志、截图、trace、失败产物收集
+Makefile                      # 统一命令入口
 ```
 
 ## 启动命令
 
+本项目使用 `Makefile` 作为统一命令入口（无需额外安装，macOS/Linux 自带 `make`）：
+
+```bash
+make install        # 安装前端依赖
+make dev            # 启动开发模式（前端 + Tauri）
+make dev-frontend   # 仅启动前端
+make test-unit      # 运行所有单元测试（前端 + Rust）
+make lint           # 运行所有 lint（TypeScript + Rust fmt + clippy）
+make fmt            # 自动修复 Rust 格式
+make build          # 构建 Tauri 应用（debug）
+make ci             # 本地运行完整 CI 检查
+make doctor         # 检查开发环境依赖
+```
+
+完整命令列表：`make help`
+
+底层命令（不使用 make 时）：
+
 ```bash
 bun install               # 安装前端依赖
-bun run dev:tauri           # 启动开发模式（前端 + Tauri）
+bun run dev:tauri          # 启动开发模式（前端 + Tauri）
 bun run dev                # 仅启动前端
 cargo test --workspace     # Rust 单元测试
-bun run test               # 前端单元测试
+bun test                   # 前端单元测试
 bun run typecheck          # TypeScript 类型检查
 cargo fmt --check          # Rust 格式检查
 cargo clippy               # Rust lint
