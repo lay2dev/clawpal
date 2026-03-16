@@ -1258,9 +1258,11 @@ export function App() {
       const channels = isRemote
         ? await api.remoteListDiscordGuildChannelsFast(activeInstance)
         : await api.listDiscordGuildChannelsFast();
-      // Only apply if we haven't already received fully-resolved data
+      // Apply fast data — it may have fresher structure than persisted cache.
+      // Full refresh will overwrite with resolved names later.
       setDiscordGuildChannels((prev) => {
-        if (prev && prev.length > 0) return prev; // full data already loaded
+        // Keep fully-resolved data if already loaded (full refresh beat us)
+        if (prev && prev.some((ch) => ch.channelName !== ch.channelId)) return prev;
         return channels;
       });
       return channels;
@@ -1282,10 +1284,8 @@ export function App() {
       persistenceScope,
       isRemote,
     })) return;
-    if (route === "cook" || route === "recipes") {
-      // Layer 1: fast load (config + disk cache) → immediate dropdown population
-      void refreshDiscordChannelsCacheFast();
-    }
+    // Layer 1: fast load (config + disk cache) → immediate structure display
+    void refreshDiscordChannelsCacheFast();
     // Layer 2: full refresh (Discord REST + CLI resolve) → enriched names
     void Promise.allSettled([
       refreshChannelNodesCache(),
