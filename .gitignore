@@ -14,3 +14,4 @@ tmp/
 *.sqlite
 *.sqlite3
 *.log
+src-tauri/gen/
