@@ -26,13 +26,13 @@
 
 独立 PR。
 
-- [ ] 落地 `justfile`，统一 dev/test/lint/smoke/package 命令
+- [x] 落地 `justfile`，统一 dev/test/lint/smoke/package 命令
 - [ ] 统一包管理器策略（Bun vs npm）
-- [ ] 增加 PR 模板 (`.github/PULL_REQUEST_TEMPLATE.md`)
-- [ ] 增加 issue 模板
+- [x] 增加 PR 模板 (`.github/PULL_REQUEST_TEMPLATE.md`)
+- [x] 增加 issue 模板（bug report、feature request、task）
 - [ ] 将 `business-flow-test-matrix.md` 升级为标准 gate 文档
 - [ ] 补 packaged app smoke test 入口
-- [ ] 补 artifacts 汇总命令
+- [x] 补 artifacts 汇总命令（`just artifacts`）
 
 ### Phase 3: 代码可读性改造
 

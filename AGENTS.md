@@ -20,16 +20,35 @@ docs/runbooks/                # 启动、调试、发布、回滚、故障处理
 docs/testing/                 # 测试矩阵与验证策略
 harness/fixtures/             # 最小稳定测试数据
 harness/artifacts/            # 日志、截图、trace、失败产物收集
+justfile                      # 统一命令入口
 ```
 
 ## 启动命令
 
+本项目使用 [just](https://github.com/casey/just) 作为统一命令入口：
+
+```bash
+just install        # 安装前端依赖
+just dev            # 启动开发模式（前端 + Tauri）
+just dev-frontend   # 仅启动前端
+just test-unit      # 运行所有单元测试（前端 + Rust）
+just lint           # 运行所有 lint（TypeScript + Rust fmt + clippy）
+just fmt            # 自动修复 Rust 格式
+just build          # 构建 Tauri 应用（debug）
+just ci             # 本地运行完整 CI 检查
+just doctor         # 检查开发环境依赖
+```
+
+完整命令列表：`just --list`
+
+底层命令（不使用 just 时）：
+
 ```bash
 bun install               # 安装前端依赖
-bun run dev:tauri           # 启动开发模式（前端 + Tauri）
+bun run dev:tauri          # 启动开发模式（前端 + Tauri）
 bun run dev                # 仅启动前端
 cargo test --workspace     # Rust 单元测试
-bun run test               # 前端单元测试
+bun test                   # 前端单元测试
 bun run typecheck          # TypeScript 类型检查
 cargo fmt --check          # Rust 格式检查
 cargo clippy               # Rust lint
