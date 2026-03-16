@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { AgentOverview, ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
+import { readPersistedReadCache } from "@/lib/persistent-read-cache";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -39,11 +40,18 @@ export function ParamForm({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { discordChannelsResolved } = useInstance();
+  const { discordChannelsResolved, persistenceScope } = useInstance();
   const discordGuildChannels = ua.discordGuildChannels ?? [];
   const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
-  const [agents, setAgents] = useState<AgentOverview[]>([]);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(() => {
+    if (!persistenceScope) return [];
+    return readPersistedReadCache<ModelProfile[]>(persistenceScope, "listModelProfiles", []) ?? [];
+  });
+  // Initialize agents from persisted cache to avoid loading delay
+  const [agents, setAgents] = useState<AgentOverview[]>(() => {
+    if (!persistenceScope) return [];
+    return readPersistedReadCache<AgentOverview[]>(persistenceScope, "listAgents", []) ?? [];
+  });
 
   // Lazily load model profiles if any param needs them
   const needsProfiles = recipe.params.some((p) => p.type === "model_profile");

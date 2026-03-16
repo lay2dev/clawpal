@@ -679,7 +679,7 @@ export function useApi() {
               "listAgents",
               [],
               snapshot.agents,
-              isRemote ? 12_000 : 6_000,
+              isRemote ? 60_000 : 30_000,
             );
             return snapshot;
           });
@@ -694,7 +694,7 @@ export function useApi() {
       // Agents
       listAgents: dispatchCached(
         "listAgents",
-        isRemote ? 12_000 : 6_000,
+        isRemote ? 60_000 : 30_000,
         api.listAgentsOverview,
         api.remoteListAgentsOverview,
       ),
