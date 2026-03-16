@@ -25,6 +25,11 @@
 - 类型不一致：检查 `#[tauri::command]` 参数与前端 invoke 调用
 - 权限缺失：更新 `src-tauri/capabilities/`
 
-## 验证方法
+## 修复后验证
+
+```bash
+just lint           # 确保类型和格式正确
+just test-unit      # 确保没有引入回归
+```
 
 DevTools Console 中 invoke 调用返回预期结果，无错误。
