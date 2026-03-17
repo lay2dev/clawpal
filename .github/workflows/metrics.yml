@@ -35,6 +35,8 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.sha }}"
           FAIL=0
+          FAIL_COUNT=0
+          MAX_SEEN=0
           DETAILS=""
 
           for COMMIT in $(git rev-list $BASE..$HEAD); do
@@ -49,16 +51,24 @@ jobs:
             ADDS=$(echo "$STAT" | grep -oP '\d+ insertion' | grep -oP '\d+' || echo 0)
             DELS=$(echo "$STAT" | grep -oP '\d+ deletion' | grep -oP '\d+' || echo 0)
             TOTAL=$(( ${ADDS:-0} + ${DELS:-0} ))
+            if [ "$TOTAL" -gt "$MAX_SEEN" ]; then MAX_SEEN=$TOTAL; fi
 
             if [ "$TOTAL" -gt "$MAX_LINES" ]; then
               DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ❌ | ${SUBJECT} |\n"
               FAIL=1
+              FAIL_COUNT=$(( FAIL_COUNT + 1 ))
             else
               DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ✅ | ${SUBJECT} |\n"
             fi
           done
 
+          TOTAL_COMMITS=$(git rev-list --no-merges $BASE..$HEAD | wc -l)
+          PASSED_COMMITS=$(( TOTAL_COMMITS - FAIL_COUNT ))
+          
           echo "fail=${FAIL}" >> "$GITHUB_OUTPUT"
+          echo "total=${TOTAL_COMMITS}" >> "$GITHUB_OUTPUT"
+          echo "passed=${PASSED_COMMITS}" >> "$GITHUB_OUTPUT"
+          echo "max_seen=${MAX_SEEN}" >> "$GITHUB_OUTPUT"
           printf "%b" "$DETAILS" > /tmp/commit_details.txt
           echo "max_lines=${MAX_LINES}" >> "$GITHUB_OUTPUT"
 
@@ -254,8 +264,7 @@ jobs:
             TIMES=$(grep "REMOTE_CMD:${SHORT}:" /tmp/remote_perf.txt | grep -oP '\d+(?=ms)' | sort -n)
             MEDIAN=$(echo "$TIMES" | sed -n '2p')
             MAX=$(echo "$TIMES" | tail -1)
-            DETAILS="${DETAILS}${SHORT}:median=${MEDIAN:-0}:max=${MAX:-0}
-"
+            DETAILS="${DETAILS}${SHORT}:median=${MEDIAN:-0}:max=${MAX:-0}\n"
           done
           printf "%b" "$DETAILS" > /tmp/remote_perf_summary.txt
 
@@ -265,7 +274,7 @@ jobs:
         if: always()
         run: docker rm -f oc-remote-perf 2>/dev/null || true
 
-            # ── Gate 5: Home page render probes ──
+      # ── Gate 5: Home page render probes ──
       - name: Install Playwright
         run: |
           bun add -d @playwright/test
