@@ -45,6 +45,11 @@ jobs:
             if [ "$PARENTS" -gt 2 ]; then
               continue
             fi
+            # Skip style-only commits (rustfmt, prettier, etc.)
+            SUBJECT=$(git log --format=%s -1 $COMMIT)
+            if echo "$SUBJECT" | grep -qiE '^style(\(|:)'; then
+              continue
+            fi
             SHORT=$(git rev-parse --short $COMMIT)
             SUBJECT=$(git log --format=%s -1 $COMMIT)
             STAT=$(git diff --shortstat ${COMMIT}^..${COMMIT} 2>/dev/null || echo "0")
