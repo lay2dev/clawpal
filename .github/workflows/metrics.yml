@@ -219,6 +219,9 @@ jobs:
           fi
 
       # ── Gate 4c: Command perf E2E (remote via SSH Docker) ──
+      - name: Install sshpass (for SSH perf tests)
+        run: sudo apt-get install -y sshpass
+
       - name: Build Docker OpenClaw container (for remote perf)
         run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
 
@@ -233,6 +236,7 @@ jobs:
       - name: Run remote command timing via SSH
         id: remote_perf
         run: |
+          set +e
           SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
 
           # Exercise remote OpenClaw commands and measure timing
