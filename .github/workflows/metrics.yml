@@ -38,6 +38,11 @@ jobs:
           DETAILS=""
 
           for COMMIT in $(git rev-list $BASE..$HEAD); do
+            # Skip merge commits (GitHub auto-generated)
+            PARENTS=$(git rev-list --parents -1 $COMMIT | wc -w)
+            if [ "$PARENTS" -gt 2 ]; then
+              continue
+            fi
             SHORT=$(git rev-parse --short $COMMIT)
             SUBJECT=$(git log --format=%s -1 $COMMIT)
             STAT=$(git diff --shortstat ${COMMIT}^..${COMMIT} 2>/dev/null || echo "0")
