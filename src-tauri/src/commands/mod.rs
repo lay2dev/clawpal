@@ -1,4 +1,25 @@
-use crate::{timed_async, timed_sync};
+/// Macro for wrapping synchronous command bodies with timing.
+macro_rules! timed_sync {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = $body;
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
+
+/// Macro for wrapping async command bodies with timing.
+macro_rules! timed_async {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = $body;
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
