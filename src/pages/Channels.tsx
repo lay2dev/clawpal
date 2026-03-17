@@ -10,10 +10,12 @@ import type {
   ModelProfile,
 } from "../lib/types";
 import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -74,6 +76,7 @@ export function Channels({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const { discordChannelsResolved } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<ChannelsConfigSnapshot>(ua.persistenceScope, "getChannelsConfigSnapshot", []) ?? null
@@ -90,7 +93,14 @@ export function Channels({
     () => buildInitialChannelsState(persistedConfigSnapshot, persistedRuntimeSnapshot),
     [persistedConfigSnapshot, persistedRuntimeSnapshot],
   );
-  const [agents, setAgents] = useState<AgentOverview[]>(() => initialChannelsState.agents);
+  const [agents, setAgents] = useState<AgentOverview[]>(() => {
+    if (initialChannelsState.agents.length > 0) return initialChannelsState.agents;
+    // Fall back to persisted listAgents cache for instant agent dropdown
+    if (ua.persistenceResolved && ua.persistenceScope) {
+      return readPersistedReadCache<AgentOverview[]>(ua.persistenceScope, "listAgents", []) ?? [];
+    }
+    return [];
+  });
   const [bindings, setBindings] = useState<Binding[]>(() => initialChannelsState.bindings);
   const [channelNodes, setChannelNodes] = useState<ChannelNode[]>(() => initialChannelsState.channels);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
@@ -369,13 +379,27 @@ export function Channels({
                 {discordGuilds.map(([guildId, { guildName, channels }]) => (
                   <div key={guildId}>
                     <div className="flex items-center gap-1.5 mb-2">
-                      <span className="text-sm font-medium">{guildName}</span>
+                      <span className="text-sm font-medium">
+                        {guildName}
+                        {!discordChannelsResolved && guildName === guildId && (
+                          <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                        )}
+                      </span>
                       <Badge variant="secondary" className="text-[10px]">{guildId}</Badge>
                     </div>
                     <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
                       {channels.map((ch) => (
                         <div key={ch.channelId} className="rounded-md border px-3 py-2">
-                          <div className="text-sm font-medium">{ch.channelName}</div>
+                          <div className="text-sm font-medium">
+                            {ch.channelName === ch.channelId && !discordChannelsResolved ? (
+                              <span className="text-muted-foreground font-mono text-xs">
+                                {ch.channelId}
+                                <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
+                              </span>
+                            ) : (
+                              ch.channelName
+                            )}
+                          </div>
                           <div className="text-xs text-muted-foreground mt-0.5 mb-1.5">{ch.channelId}</div>
                           {renderAgentSelect("discord", ch.channelId, ch.defaultAgentId)}
                         </div>
@@ -437,6 +461,7 @@ export function Channels({
           if (!open) setPendingChannel(null);
         }}
         modelProfiles={modelProfiles}
+        allowPersona
         onCreated={(result: CreateAgentResult) => {
           void loadChannelsRuntime();
           if (pendingChannel) {

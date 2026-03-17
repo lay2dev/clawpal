@@ -1,0 +1,19 @@
+name: Mirror to GitLab
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  delete:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mirror to GitLab
+        uses: yesolutions/mirror-action@master
+        with:
+          REMOTE: 'https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/lay2dev/clawpal.git'
+          GIT_PUSH_ARGS: '--force --tags'

@@ -36,6 +36,7 @@ describe("Channels page cached discord rendering", () => {
             ],
             channelsLoading: false,
             discordChannelsLoading: true,
+            discordChannelsResolved: false,
             refreshChannelNodesCache: async () => [],
             refreshDiscordChannelsCache: async () => [],
           },

@@ -98,6 +98,24 @@ function makeCacheKey(instanceCacheKey: string, method: string, args: unknown[])
   return `${instanceCacheKey}:${method}:${serializedArgs}`;
 }
 
+/** Seed a read-cache entry from a parent response (e.g. RuntimeSnapshot → listAgents).
+ *  Only writes if no valid entry exists, avoiding overwrites of fresher data. */
+function seedReadCache(
+  instanceCacheKey: string,
+  method: string,
+  args: unknown[],
+  value: unknown,
+  ttlMs: number,
+) {
+  const key = makeCacheKey(instanceCacheKey, method, args);
+  const existing = API_READ_CACHE.get(key);
+  const now = Date.now();
+  if (existing && existing.expiresAt > now) return; // already fresh
+  API_READ_CACHE.set(key, { value, expiresAt: now + ttlMs });
+  _notifyCacheSubscribers(key);
+}
+
+
 function trimReadCacheIfNeeded() {
   if (API_READ_CACHE.size <= API_READ_CACHE_MAX_ENTRIES) return;
   const deleteCount = API_READ_CACHE.size - API_READ_CACHE_MAX_ENTRIES;
@@ -646,12 +664,26 @@ export function useApi() {
         api.getInstanceConfigSnapshot,
         api.remoteGetInstanceConfigSnapshot,
       ),
-      getInstanceRuntimeSnapshot: dispatchCached(
-        "getInstanceRuntimeSnapshot",
-        isRemote ? 10_000 : 6_000,
-        api.getInstanceRuntimeSnapshot,
-        api.remoteGetInstanceRuntimeSnapshot,
-      ),
+      getInstanceRuntimeSnapshot: (() => {
+        const _inner = dispatchCached(
+          "getInstanceRuntimeSnapshot",
+          isRemote ? 10_000 : 6_000,
+          api.getInstanceRuntimeSnapshot,
+          api.remoteGetInstanceRuntimeSnapshot,
+        );
+        return (...args: Parameters<typeof _inner>) =>
+          _inner(...args).then((snapshot) => {
+            // Seed listAgents cache from the snapshot to avoid a redundant fetch
+            seedReadCache(
+              instanceCacheKey,
+              "listAgents",
+              [],
+              snapshot.agents,
+              isRemote ? 60_000 : 30_000,
+            );
+            return snapshot;
+          });
+      })(),
       getStatusExtra: dispatchCached(
         "getStatusExtra",
         isRemote ? 15_000 : 10_000,
@@ -662,10 +694,11 @@ export function useApi() {
       // Agents
       listAgents: dispatchCached(
         "listAgents",
-        isRemote ? 12_000 : 6_000,
+        isRemote ? 60_000 : 30_000,
         api.listAgentsOverview,
         api.remoteListAgentsOverview,
       ),
+      createAgent: api.createAgent,
       setupAgentIdentity: dispatch(
         api.setupAgentIdentity,
         api.remoteSetupAgentIdentity,
@@ -707,12 +740,26 @@ export function useApi() {
         api.refreshDiscordGuildChannels,
         api.remoteListDiscordGuildChannels,
       ),
+      // Fast path: config-derived structure + disk cache, no Discord REST / CLI
+      listDiscordGuildChannelsFast: dispatchCached(
+        "listDiscordGuildChannelsFast",
+        isRemote ? 60_000 : 30_000,
+        api.listDiscordGuildChannelsFast,
+        api.remoteListDiscordGuildChannelsFast,
+      ),
+
 
       // Models
       listModelProfiles: localGlobalCached(
         "listModelProfiles",
         10_000,
         api.listModelProfiles,
+      ),
+      listRecipeModelProfiles: dispatchCached(
+        "listRecipeModelProfiles",
+        isRemote ? 10_000 : 10_000,
+        api.listModelProfiles,
+        api.remoteListModelProfiles,
       ),
       upsertModelProfile: withGlobalInvalidation(
         api.upsertModelProfile,
@@ -781,6 +828,7 @@ export function useApi() {
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),
       fixIssues: withInvalidation(dispatch(api.fixIssues, api.remoteFixIssues)),
+      precheckAuth: localCached("precheckAuth", 5_000, api.precheckAuth),
 
       // History
       listHistory: dispatchCached(
@@ -989,7 +1037,76 @@ export function useApi() {
         api.getCachedModelCatalog,
       ),
       getSystemStatus: api.getSystemStatus,
+      listRegisteredInstances: localCached(
+        "listRegisteredInstances",
+        10_000,
+        api.listRegisteredInstances,
+      ),
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
+      listRecipesFromSourceText: api.listRecipesFromSourceText,
+      pickRecipeSourceDirectory: api.pickRecipeSourceDirectory,
+      listRecipeWorkspaceEntries: localCached(
+        "listRecipeWorkspaceEntries",
+        4_000,
+        api.listRecipeWorkspaceEntries,
+      ),
+      readRecipeWorkspaceSource: localCached(
+        "readRecipeWorkspaceSource",
+        4_000,
+        api.readRecipeWorkspaceSource,
+      ),
+      importRecipeLibrary: withInvalidation(
+        api.importRecipeLibrary,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      importRecipeSource: withInvalidation(
+        api.importRecipeSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      saveRecipeWorkspaceSource: withInvalidation(
+        api.saveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      approveRecipeWorkspaceSource: withInvalidation(
+        api.approveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      deleteRecipeWorkspaceSource: withInvalidation(
+        api.deleteRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      upgradeBundledRecipeWorkspaceSource: withInvalidation(
+        api.upgradeBundledRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource", "listRecipes"],
+      ),
+      exportRecipeSource: api.exportRecipeSource,
+      validateRecipeSourceText: api.validateRecipeSourceText,
+      listRecipeInstances: localCached(
+        "listRecipeInstances",
+        4_000,
+        api.listRecipeInstances,
+      ),
+      listRecipeRuns: localCached("listRecipeRuns", 4_000, api.listRecipeRuns),
+      deleteRecipeRuns: withInvalidation(api.deleteRecipeRuns, [
+        "listRecipeInstances",
+        "listRecipeRuns",
+      ]),
+      planRecipe: localCached("planRecipe", 5_000, api.planRecipe),
+      planRecipeSource: api.planRecipeSource,
+      executeRecipe: withInvalidation(api.executeRecipe, [
+        "listHistory",
+        "listRecipeInstances",
+        "listRecipeRuns",
+        "listBindings",
+        "listAgentsOverview",
+        "getInstanceRuntimeSnapshot",
+        "getChannelsRuntimeSnapshot",
+        "getStatusExtra",
+        "listQueuedCommands",
+        "queuedCommandsCount",
+        "previewQueuedCommands",
+        "getSystemStatus",
+      ]),
       connectDockerInstance: api.connectDockerInstance,
       listInstallMethods: localCached(
         "installListMethods",

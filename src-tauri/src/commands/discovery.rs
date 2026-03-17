@@ -1,5 +1,28 @@
 use super::*;
 
+fn discord_sections_from_openclaw_config(cfg: &Value) -> (Value, Value) {
+    let discord_section = cfg
+        .pointer("/channels/discord")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let bindings_section = cfg
+        .get("bindings")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    (discord_section, bindings_section)
+}
+
+fn agent_overviews_from_openclaw_config(
+    cfg: &Value,
+    online_set: &std::collections::HashSet<String>,
+) -> Vec<AgentOverview> {
+    let mut agents = collect_agent_overviews_from_config(cfg);
+    for agent in &mut agents {
+        agent.online = online_set.contains(&agent.id);
+    }
+    agents
+}
+
 #[tauri::command]
 pub async fn remote_list_discord_guild_channels(
     pool: State<'_, SshConnectionPool>,
@@ -11,22 +34,34 @@ pub async fn remote_list_discord_guild_channels(
         &["config", "get", "channels.discord", "--json"],
     )
     .await?;
-    let discord_section = if output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
     let bindings_output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
         &["config", "get", "bindings", "--json"],
     )
     .await?;
+    let config_fallback = if output.exit_code == 0 && bindings_output.exit_code == 0 {
+        None
+    } else {
+        remote_read_openclaw_config_text_and_json(&pool, &host_id)
+            .await
+            .ok()
+            .map(|(_, _, cfg)| cfg)
+    };
+    let (fallback_discord_section, fallback_bindings_section) = config_fallback
+        .as_ref()
+        .map(discord_sections_from_openclaw_config)
+        .unwrap_or_else(|| (Value::Null, Value::Array(Vec::new())));
+    let discord_section = if output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
+    } else {
+        fallback_discord_section
+    };
     let bindings_section = if bindings_output.exit_code == 0 {
         crate::cli_runner::parse_json_output(&bindings_output)
             .unwrap_or_else(|_| Value::Array(Vec::new()))
     } else {
-        Value::Array(Vec::new())
+        fallback_bindings_section
     };
     // Wrap to match existing code expectations (rest of function uses cfg.get("channels").and_then(|c| c.get("discord")))
     let cfg = serde_json::json!({
@@ -283,13 +318,12 @@ pub async fn remote_list_discord_guild_channels(
     Ok(entries)
 }
 
-#[tauri::command]
-pub async fn remote_list_bindings(
-    pool: State<'_, SshConnectionPool>,
+pub async fn remote_list_bindings_with_pool(
+    pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<Value>, String> {
     let output = crate::cli_runner::run_openclaw_remote(
-        &pool,
+        pool,
         &host_id,
         &["config", "get", "bindings", "--json"],
     )
@@ -303,6 +337,14 @@ pub async fn remote_list_bindings(
     }
     let json = crate::cli_runner::parse_json_output(&output)?;
     clawpal_core::discovery::parse_bindings(&json.to_string())
+}
+
+#[tauri::command]
+pub async fn remote_list_bindings(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<Value>, String> {
+    remote_list_bindings_with_pool(pool.inner(), host_id).await
 }
 
 #[tauri::command]
@@ -333,22 +375,12 @@ pub async fn remote_list_channels_minimal(
     Ok(collect_channel_nodes(&cfg))
 }
 
-#[tauri::command]
-pub async fn remote_list_agents_overview(
-    pool: State<'_, SshConnectionPool>,
+pub async fn remote_list_agents_overview_with_pool(
+    pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
     let output =
-        run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
-    if output.exit_code != 0 {
-        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
-        return Err(format!(
-            "openclaw agents list failed ({}): {}",
-            output.exit_code,
-            details.trim()
-        ));
-    }
-    let json = crate::cli_runner::parse_json_output(&output)?;
+        run_openclaw_remote_with_autofix(pool, &host_id, &["agents", "list", "--json"]).await?;
     // Check which agents have sessions remotely (single command, batch check)
     // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
     let online_set = match pool.exec_login(
@@ -363,7 +395,27 @@ pub async fn remote_list_agents_overview(
         }
         Err(_) => std::collections::HashSet::new(), // fallback: all offline
     };
+    if output.exit_code != 0 {
+        if let Ok((_, _, cfg)) = remote_read_openclaw_config_text_and_json(pool, &host_id).await {
+            return Ok(agent_overviews_from_openclaw_config(&cfg, &online_set));
+        }
+        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+        return Err(format!(
+            "openclaw agents list failed ({}): {}",
+            output.exit_code,
+            details.trim()
+        ));
+    }
+    let json = crate::cli_runner::parse_json_output(&output)?;
     parse_agents_cli_output(&json, Some(&online_set))
+}
+
+#[tauri::command]
+pub async fn remote_list_agents_overview(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<AgentOverview>, String> {
+    remote_list_agents_overview_with_pool(pool.inner(), host_id).await
 }
 
 #[tauri::command]
@@ -429,6 +481,179 @@ pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String>
         return Ok(entries);
     }
     Ok(Vec::new())
+}
+
+/// Fast path: return guild channels from disk cache merged with config-derived
+/// structure.  Never calls Discord REST or CLI subprocesses, so it completes in
+/// < 50 ms locally.  Unresolved names are left as raw IDs — the caller is
+/// expected to trigger a full `refresh_discord_guild_channels` in the background
+/// to enrich them.
+#[tauri::command]
+pub async fn list_discord_guild_channels_fast() -> Result<Vec<DiscordGuildChannel>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = resolve_paths();
+        // Layer 0: read existing cache (may contain resolved names from a prior refresh)
+        let cache_file = paths.clawpal_dir.join("discord-guild-channels.json");
+        let cached: Vec<DiscordGuildChannel> = if cache_file.exists() {
+            fs::read_to_string(&cache_file)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Layer 1: parse config to discover any guild/channel pairs not yet in the cache
+        let cfg = match read_openclaw_config(&paths) {
+            Ok(c) => c,
+            Err(_) => return Ok(cached), // config unreadable — return cache-only
+        };
+        let core_channels =
+            clawpal_core::discovery::parse_guild_channels(&cfg.to_string()).unwrap_or_default();
+
+        // Build a lookup from cached entries so we can reuse resolved names
+        let mut cache_map: std::collections::HashMap<(String, String), DiscordGuildChannel> =
+            cached
+                .into_iter()
+                .map(|e| ((e.guild_id.clone(), e.channel_id.clone()), e))
+                .collect();
+
+        let mut result: Vec<DiscordGuildChannel> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for ch in &core_channels {
+            let key = (ch.guild_id.clone(), ch.channel_id.clone());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if let Some(cached_entry) = cache_map.remove(&key) {
+                // Prefer cached entry — it has resolved names from the last full refresh
+                result.push(cached_entry);
+            } else {
+                result.push(DiscordGuildChannel {
+                    guild_id: ch.guild_id.clone(),
+                    guild_name: ch.guild_name.clone(),
+                    channel_id: ch.channel_id.clone(),
+                    channel_name: ch.channel_name.clone(),
+                    default_agent_id: None,
+                });
+            }
+        }
+
+        // Append any cached entries not in config (e.g. from bindings or directory discovery)
+        for (key, entry) in cache_map {
+            if seen.insert(key) {
+                result.push(entry);
+            }
+        }
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Fast path for remote instances: read config-derived guild channels without
+/// calling Discord REST or remote CLI resolve.
+#[tauri::command]
+pub async fn remote_list_discord_guild_channels_fast(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<Vec<DiscordGuildChannel>, String> {
+    // Read remote config
+    let output = crate::cli_runner::run_openclaw_remote(
+        &pool,
+        &host_id,
+        &["config", "get", "channels.discord", "--json"],
+    )
+    .await?;
+    let bindings_output = crate::cli_runner::run_openclaw_remote(
+        &pool,
+        &host_id,
+        &["config", "get", "bindings", "--json"],
+    )
+    .await?;
+    let config_fallback = if output.exit_code == 0 && bindings_output.exit_code == 0 {
+        None
+    } else {
+        remote_read_openclaw_config_text_and_json(&pool, &host_id)
+            .await
+            .ok()
+            .map(|(_, _, cfg)| cfg)
+    };
+    let (fallback_discord_section, fallback_bindings_section) = config_fallback
+        .as_ref()
+        .map(discord_sections_from_openclaw_config)
+        .unwrap_or_else(|| (Value::Null, Value::Array(Vec::new())));
+    let discord_section = if output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
+    } else {
+        fallback_discord_section
+    };
+    let bindings_section = if bindings_output.exit_code == 0 {
+        crate::cli_runner::parse_json_output(&bindings_output)
+            .unwrap_or_else(|_| Value::Array(Vec::new()))
+    } else {
+        fallback_bindings_section
+    };
+    let cfg = serde_json::json!({
+        "channels": { "discord": discord_section },
+        "bindings": bindings_section
+    });
+
+    let core_channels =
+        clawpal_core::discovery::parse_guild_channels(&cfg.to_string()).unwrap_or_default();
+
+    // Read remote cache for resolved names
+    let cached: Vec<DiscordGuildChannel> = pool
+        .sftp_read(&host_id, "~/.clawpal/discord-guild-channels.json")
+        .await
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+
+    // Merge: prefer cached names, fill in config-derived entries
+    let mut cache_map: std::collections::HashMap<(String, String), DiscordGuildChannel> = cached
+        .into_iter()
+        .map(|e| ((e.guild_id.clone(), e.channel_id.clone()), e))
+        .collect();
+
+    // Enrich guild names from config (slug/name fields)
+    let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
+    let guild_name_fallback = collect_discord_config_guild_name_fallbacks(discord_cfg);
+
+    let mut result: Vec<DiscordGuildChannel> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for ch in &core_channels {
+        let key = (ch.guild_id.clone(), ch.channel_id.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if let Some(cached_entry) = cache_map.remove(&key) {
+            result.push(cached_entry);
+        } else {
+            let guild_name = guild_name_fallback
+                .get(&ch.guild_id)
+                .cloned()
+                .unwrap_or_else(|| ch.guild_name.clone());
+            result.push(DiscordGuildChannel {
+                guild_id: ch.guild_id.clone(),
+                guild_name,
+                channel_id: ch.channel_id.clone(),
+                channel_name: ch.channel_name.clone(),
+                default_agent_id: None,
+            });
+        }
+    }
+
+    for (key, entry) in cache_map {
+        if seen.insert(key) {
+            result.push(entry);
+        }
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -801,15 +1026,14 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn list_bindings(
-    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+pub async fn list_bindings_with_cache(
+    cache: &crate::cli_runner::CliCache,
 ) -> Result<Vec<Value>, String> {
     let cache_key = local_cli_cache_key("bindings");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let cache = cache.inner().clone();
+    let cache = cache.clone();
     let cache_key_cloned = cache_key.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
@@ -832,14 +1056,20 @@ pub async fn list_bindings(
 }
 
 #[tauri::command]
-pub async fn list_agents_overview(
+pub async fn list_bindings(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<Value>, String> {
+    list_bindings_with_cache(cache.inner()).await
+}
+
+pub async fn list_agents_overview_with_cache(
+    cache: &crate::cli_runner::CliCache,
 ) -> Result<Vec<AgentOverview>, String> {
     let cache_key = local_cli_cache_key("agents-list");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
     }
-    let cache = cache.inner().clone();
+    let cache = cache.clone();
     let cache_key_cloned = cache_key.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
@@ -852,4 +1082,76 @@ pub async fn list_agents_overview(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_agents_overview(
+    cache: tauri::State<'_, crate::cli_runner::CliCache>,
+) -> Result<Vec<AgentOverview>, String> {
+    list_agents_overview_with_cache(cache.inner()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    #[test]
+    fn discord_sections_from_openclaw_config_extracts_discord_and_bindings() {
+        let cfg = json!({
+            "channels": {
+                "discord": {
+                    "guilds": {
+                        "guild-recipe-lab": {
+                            "name": "Recipe Lab",
+                            "channels": {
+                                "channel-general": { "systemPrompt": "" }
+                            }
+                        }
+                    }
+                }
+            },
+            "bindings": [
+                { "agentId": "main" }
+            ]
+        });
+
+        let (discord, bindings) = discord_sections_from_openclaw_config(&cfg);
+
+        assert_eq!(
+            discord
+                .pointer("/guilds/guild-recipe-lab/name")
+                .and_then(Value::as_str),
+            Some("Recipe Lab")
+        );
+        assert_eq!(bindings.as_array().map(|items| items.len()), Some(1));
+    }
+
+    #[test]
+    fn agent_overviews_from_openclaw_config_marks_online_agents() {
+        let cfg = json!({
+            "agents": {
+                "list": [
+                    { "id": "main", "model": "anthropic/claude-sonnet-4-20250514" },
+                    { "id": "helper", "identityName": "Helper", "model": "openai/gpt-4o" }
+                ]
+            }
+        });
+        let online_set = HashSet::from([String::from("helper")]);
+
+        let agents = agent_overviews_from_openclaw_config(&cfg, &online_set);
+
+        assert_eq!(agents.len(), 2);
+        assert!(
+            !agents
+                .iter()
+                .find(|agent| agent.id == "main")
+                .unwrap()
+                .online
+        );
+        let helper = agents.iter().find(|agent| agent.id == "helper").unwrap();
+        assert!(helper.online);
+        assert_eq!(helper.name.as_deref(), Some("Helper"));
+    }
 }

@@ -3,6 +3,7 @@ import type { ChannelNode, DiscordGuildChannel } from "./types";
 
 interface InstanceContextValue {
   instanceId: string;
+  instanceLabel?: string | null;
   instanceViewToken: string;
   instanceToken: number;
   persistenceScope: string | null;
@@ -14,12 +15,14 @@ interface InstanceContextValue {
   discordGuildChannels: DiscordGuildChannel[] | null;
   channelsLoading: boolean;
   discordChannelsLoading: boolean;
+  discordChannelsResolved: boolean;
   refreshChannelNodesCache: () => Promise<ChannelNode[]>;
   refreshDiscordChannelsCache: () => Promise<DiscordGuildChannel[]>;
 }
 
 export const InstanceContext = createContext<InstanceContextValue>({
   instanceId: "local",
+  instanceLabel: "local",
   instanceViewToken: "local",
   instanceToken: 0,
   persistenceScope: "local",
@@ -31,6 +34,7 @@ export const InstanceContext = createContext<InstanceContextValue>({
   discordGuildChannels: null,
   channelsLoading: false,
   discordChannelsLoading: false,
+  discordChannelsResolved: false,
   refreshChannelNodesCache: async () => [],
   refreshDiscordChannelsCache: async () => [],
 });
