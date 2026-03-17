@@ -23,7 +23,7 @@ use crate::commands::{
     list_bindings, list_channels_minimal, list_cron_jobs, list_discord_guild_channels,
     list_history, list_model_profiles, list_recipes, list_registered_instances, list_session_files,
     list_ssh_config_hosts, list_ssh_hosts, local_openclaw_cli_available,
-    local_openclaw_config_exists, log_app_event, manage_rescue_bot, migrate_legacy_instances,
+    local_openclaw_config_exists, log_app_event, get_process_metrics, manage_rescue_bot, migrate_legacy_instances,
     open_url, precheck_auth, precheck_instance, precheck_registry, precheck_transport,
     preview_rollback, preview_session, probe_ssh_connection_profile,
     push_model_profiles_to_local_openclaw, push_model_profiles_to_remote_openclaw,
@@ -278,6 +278,7 @@ pub fn run() {
             read_gateway_log,
             read_gateway_error_log,
             log_app_event,
+            get_process_metrics,
             remote_read_app_log,
             remote_read_error_log,
             remote_read_helper_log,
@@ -304,6 +305,7 @@ pub fn run() {
         ])
         .setup(|_app| {
             crate::bug_report::install_panic_hook();
+            crate::commands::perf::init_perf_clock();
             let settings = crate::commands::preferences::load_bug_report_settings_from_paths(
                 &crate::models::resolve_paths(),
             );

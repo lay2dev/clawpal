@@ -73,3 +73,7 @@ jobs:
       - name: Run tests
         run: cargo test -p clawpal-core
         working-directory: src-tauri
+
+      - name: Run perf metrics tests
+        run: cargo test -p clawpal --test perf_metrics -- --nocapture
+        working-directory: src-tauri

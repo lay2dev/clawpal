@@ -55,6 +55,7 @@ pub mod upgrade;
 pub mod util;
 pub mod watchdog;
 pub mod watchdog_cmds;
+pub mod perf;
 
 #[allow(unused_imports)]
 pub use agent::*;
@@ -106,6 +107,8 @@ pub use util::*;
 pub use watchdog::*;
 #[allow(unused_imports)]
 pub use watchdog_cmds::*;
+#[allow(unused_imports)]
+pub use perf::*;
 
 static REMOTE_OPENCLAW_CONFIG_PATH_CACHE: LazyLock<Mutex<HashMap<String, (String, Instant)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));

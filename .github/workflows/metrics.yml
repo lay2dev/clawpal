@@ -84,7 +84,55 @@ jobs:
           echo "limit_kb=${LIMIT_KB}" >> "$GITHUB_OUTPUT"
           echo "pass=${PASS}" >> "$GITHUB_OUTPUT"
 
-      # ── Gate 3: Large file check (informational) ──
+      # ── Gate 3: Perf metrics E2E ──
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run perf metrics tests
+        id: perf_tests
+        working-directory: src-tauri
+        run: |
+          set +e
+          OUTPUT=$(cargo test -p clawpal --test perf_metrics -- --nocapture 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          # Parse test results
+          PASSED=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo 0)
+          FAILED=$(echo "$OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+' || echo 0)
+
+          # Extract RSS from test output if available
+          RSS_LINE=$(echo "$OUTPUT" | grep -oP 'RSS.*?[0-9.]+ MB' | head -1 || echo "")
+
+          echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Gate 4: Large file check (informational) ──
       - name: Check large files
         id: large_files
         run: |
@@ -129,6 +177,9 @@ jobs:
           if [ "${{ steps.bundle_size.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
+          if [ "${{ steps.perf_tests.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
 
           BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
           COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
@@ -151,6 +202,13 @@ jobs:
           |--------|-------|-------|--------|
           | JS bundle (raw) | ${{ steps.bundle_size.outputs.raw_kb }} KB | — | — |
           | JS bundle (gzip) | ${{ steps.bundle_size.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle_size.outputs.limit_kb }} KB | ${BUNDLE_ICON} |
+
+          ### Perf Metrics E2E  $( [ "${{ steps.perf_tests.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Metric | Value | Status |
+          |--------|-------|--------|
+          | Tests passed | ${{ steps.perf_tests.outputs.passed }} | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | Tests failed | ${{ steps.perf_tests.outputs.failed }} | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
 
           ### Code Readability (informational)
 
