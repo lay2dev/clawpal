@@ -18,8 +18,8 @@ pub async fn restart_gateway() -> Result<bool, String> {
         tauri::async_runtime::spawn_blocking(move || {
             run_openclaw_raw(&["gateway", "restart"])?;
             Ok(true)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
     })
 }

@@ -128,46 +128,48 @@ pub async fn remote_manage_rescue_bot(
                     .command
                     .windows(2)
                     .any(|window| window[0] == "gateway" && window[1] == "status")
-        })
-        .map(|result| &result.output);
-    if action == RescueBotAction::Activate {
-        let active_now = status_output
-            .map(|output| infer_rescue_bot_runtime_state(true, Some(output), None) == "active")
-            .unwrap_or(false);
-        if !active_now {
-            let probe_status = build_gateway_status_command(&profile, true);
-            if let Ok(result) = run_remote_rescue_bot_command(&pool, &host_id, probe_status).await {
-                commands.push(result);
-                status_output = commands
-                    .iter()
-                    .rev()
-                    .find(|result| {
-                        result
-                            .command
-                            .windows(2)
-                            .any(|window| window[0] == "gateway" && window[1] == "status")
-                    })
-                    .map(|result| &result.output);
+            })
+            .map(|result| &result.output);
+        if action == RescueBotAction::Activate {
+            let active_now = status_output
+                .map(|output| infer_rescue_bot_runtime_state(true, Some(output), None) == "active")
+                .unwrap_or(false);
+            if !active_now {
+                let probe_status = build_gateway_status_command(&profile, true);
+                if let Ok(result) =
+                    run_remote_rescue_bot_command(&pool, &host_id, probe_status).await
+                {
+                    commands.push(result);
+                    status_output = commands
+                        .iter()
+                        .rev()
+                        .find(|result| {
+                            result
+                                .command
+                                .windows(2)
+                                .any(|window| window[0] == "gateway" && window[1] == "status")
+                        })
+                        .map(|result| &result.output);
+                }
             }
         }
-    }
-    let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
-    let active = runtime_state == "active";
+        let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
+        let active = runtime_state == "active";
 
-    let result = RescueBotManageResult {
-        action: action.as_str().into(),
-        profile,
-        main_port,
-        rescue_port,
-        min_recommended_port,
-        configured,
-        active,
-        runtime_state,
-        was_already_configured: already_configured,
-        commands,
-    };
+        let result = RescueBotManageResult {
+            action: action.as_str().into(),
+            profile,
+            main_port,
+            rescue_port,
+            min_recommended_port,
+            configured,
+            active,
+            runtime_state,
+            was_already_configured: already_configured,
+            commands,
+        };
 
-    remote_log_helper_event(
+        remote_log_helper_event(
         &pool,
         &host_id,
         &format!(
@@ -177,7 +179,7 @@ pub async fn remote_manage_rescue_bot(
     )
     .await;
 
-    Ok(result)
+        Ok(result)
     })
 }
 
@@ -213,7 +215,8 @@ pub async fn remote_diagnose_primary_via_rescue(
         )
         .await;
         let result =
-            diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile).await;
+            diagnose_primary_via_rescue_remote(&pool, &host_id, &target_profile, &rescue_profile)
+                .await;
         match &result {
             Ok(summary) => {
                 remote_log_helper_event(
@@ -344,7 +347,9 @@ pub async fn manage_rescue_bot(
             };
             let min_recommended_port = main_port.saturating_add(20);
 
-            if should_configure && matches!(action, RescueBotAction::Set | RescueBotAction::Activate) {
+            if should_configure
+                && matches!(action, RescueBotAction::Set | RescueBotAction::Activate)
+            {
                 clawpal_core::doctor::ensure_rescue_port_spacing(main_port, rescue_port)?;
             }
 
@@ -364,7 +369,8 @@ pub async fn manage_rescue_bot(
                 });
             }
 
-            let plan = build_rescue_bot_command_plan(action, &profile, rescue_port, should_configure);
+            let plan =
+                build_rescue_bot_command_plan(action, &profile, rescue_port, should_configure);
             let mut commands = Vec::new();
 
             for command in plan {
@@ -393,7 +399,9 @@ pub async fn manage_rescue_bot(
 
             let configured = match action {
                 RescueBotAction::Unset => false,
-                RescueBotAction::Activate | RescueBotAction::Set | RescueBotAction::Deactivate => true,
+                RescueBotAction::Activate | RescueBotAction::Set | RescueBotAction::Deactivate => {
+                    true
+                }
                 RescueBotAction::Status => already_configured,
             };
             let mut status_output = commands
@@ -404,49 +412,51 @@ pub async fn manage_rescue_bot(
                         .command
                         .windows(2)
                         .any(|window| window[0] == "gateway" && window[1] == "status")
-            })
-            .map(|result| &result.output);
-        if action == RescueBotAction::Activate {
-            let active_now = status_output
-                .map(|output| infer_rescue_bot_runtime_state(true, Some(output), None) == "active")
-                .unwrap_or(false);
-            if !active_now {
-                let probe_status = build_gateway_status_command(&profile, true);
-                if let Ok(result) = run_local_rescue_bot_command(probe_status) {
-                    commands.push(result);
-                    status_output = commands
-                        .iter()
-                        .rev()
-                        .find(|result| {
-                            result
-                                .command
-                                .windows(2)
-                                .any(|window| window[0] == "gateway" && window[1] == "status")
-                        })
-                        .map(|result| &result.output);
+                })
+                .map(|result| &result.output);
+            if action == RescueBotAction::Activate {
+                let active_now = status_output
+                    .map(|output| {
+                        infer_rescue_bot_runtime_state(true, Some(output), None) == "active"
+                    })
+                    .unwrap_or(false);
+                if !active_now {
+                    let probe_status = build_gateway_status_command(&profile, true);
+                    if let Ok(result) = run_local_rescue_bot_command(probe_status) {
+                        commands.push(result);
+                        status_output = commands
+                            .iter()
+                            .rev()
+                            .find(|result| {
+                                result
+                                    .command
+                                    .windows(2)
+                                    .any(|window| window[0] == "gateway" && window[1] == "status")
+                            })
+                            .map(|result| &result.output);
+                    }
                 }
             }
-        }
-        let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
-        let active = runtime_state == "active";
+            let runtime_state = infer_rescue_bot_runtime_state(configured, status_output, None);
+            let active = runtime_state == "active";
 
-        Ok(RescueBotManageResult {
-            action: action.as_str().into(),
-            profile,
-            main_port,
-            rescue_port,
-            min_recommended_port,
-            configured,
-            active,
-            runtime_state,
-            was_already_configured: already_configured,
-            commands,
+            Ok(RescueBotManageResult {
+                action: action.as_str().into(),
+                profile,
+                main_port,
+                rescue_port,
+                min_recommended_port,
+                configured,
+                active,
+                runtime_state,
+                was_already_configured: already_configured,
+                commands,
+            })
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
 
-    match &result {
+        match &result {
         Ok(summary) => crate::logging::log_helper(&format!(
             "[local] manage_rescue_bot success action={} profile={} state={} configured={} active={}",
             action_label, summary.profile, summary.runtime_state, summary.configured, summary.active
@@ -457,7 +467,7 @@ pub async fn manage_rescue_bot(
         )),
     }
 
-    result
+        result
     })
 }
 
@@ -487,25 +497,25 @@ pub async fn diagnose_primary_via_rescue(
             let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
             let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
             diagnose_primary_via_rescue_local(&target_profile, &rescue_profile)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
-    match &result {
-        Ok(summary) => crate::logging::log_helper(&format!(
+        match &result {
+            Ok(summary) => crate::logging::log_helper(&format!(
             "[local] diagnose_primary_via_rescue success target={} rescue={} status={} issues={}",
             summary.target_profile,
             summary.rescue_profile,
             summary.summary.status,
             summary.issues.len()
         )),
-        Err(error) => crate::logging::log_helper(&format!(
-            "[local] diagnose_primary_via_rescue failed target={} rescue={} error={}",
-            target_label, rescue_label, error
-        )),
-    }
+            Err(error) => crate::logging::log_helper(&format!(
+                "[local] diagnose_primary_via_rescue failed target={} rescue={} error={}",
+                target_label, rescue_label, error
+            )),
+        }
 
-    result
+        result
     })
 }
 
@@ -531,11 +541,11 @@ pub async fn repair_primary_via_rescue(
                 &rescue_profile,
                 issue_ids.unwrap_or_default(),
             )
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
-    match &result {
+        match &result {
         Ok(summary) => crate::logging::log_helper(&format!(
             "[local] repair_primary_via_rescue success target={} rescue={} applied={} failed={} skipped={}",
             summary.target_profile,
@@ -550,6 +560,6 @@ pub async fn repair_primary_via_rescue(
         )),
     }
 
-    result
+        result
     })
 }

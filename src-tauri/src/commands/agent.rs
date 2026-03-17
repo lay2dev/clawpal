@@ -108,7 +108,9 @@ pub fn create_agent(
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
         {
-            return Err("Agent ID may only contain letters, numbers, hyphens, and underscores".into());
+            return Err(
+                "Agent ID may only contain letters, numbers, hyphens, and underscores".into(),
+            );
         }
 
         let paths = resolve_paths();
@@ -174,7 +176,7 @@ pub fn create_agent(
             channels: vec![],
             online: false,
             workspace,
-    })
+        })
     })
 }
 
@@ -255,7 +257,8 @@ pub fn setup_agent_identity(
         }
 
         let ws_path = std::path::Path::new(&workspace);
-        fs::create_dir_all(ws_path).map_err(|e| format!("Failed to create workspace dir: {}", e))?;
+        fs::create_dir_all(ws_path)
+            .map_err(|e| format!("Failed to create workspace dir: {}", e))?;
         let identity_path = ws_path.join("IDENTITY.md");
         fs::write(&identity_path, &content)
             .map_err(|e| format!("Failed to write IDENTITY.md: {}", e))?;
@@ -295,9 +298,10 @@ pub async fn chat_via_openclaw(
             let output = run_openclaw_raw(&arg_refs)?;
             let json_str = clawpal_core::doctor::extract_json_from_output(&output.stdout)
                 .ok_or_else(|| format!("No JSON in openclaw output: {}", output.stdout))?;
-            serde_json::from_str(json_str).map_err(|e| format!("Parse openclaw response failed: {}", e))
-    })
-    .await
-    .map_err(|e| format!("Task join failed: {}", e))?
+            serde_json::from_str(json_str)
+                .map_err(|e| format!("Parse openclaw response failed: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Task join failed: {}", e))?
     })
 }

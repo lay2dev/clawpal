@@ -491,11 +491,12 @@ pub async fn remote_resolve_api_keys(
                     Err(_) => (String::new(), None),
                 }
             };
-            let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
-                Some(true)
-            } else {
-                None
-            };
+            let resolved_override =
+                if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
+                    Some(true)
+                } else {
+                    None
+                };
             out.push(build_resolved_api_key(
                 profile,
                 &resolved_key,
@@ -536,11 +537,11 @@ pub async fn remote_test_model_profile(
 
         tauri::async_runtime::spawn_blocking(move || {
             run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
-    })
-    .await
-    .map_err(|e| format!("Task join failed: {e}"))??;
+        })
+        .await
+        .map_err(|e| format!("Task join failed: {e}"))??;
 
-    Ok(true)
+        Ok(true)
     })
 }
 
@@ -573,7 +574,8 @@ pub async fn remote_sync_profiles_to_local_auth(
     host_id: String,
 ) -> Result<RemoteAuthSyncResult, String> {
     timed_async!("remote_sync_profiles_to_local_auth", {
-        let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        let (remote_profiles, _) =
+            collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
         if remote_profiles.is_empty() {
             return Ok(RemoteAuthSyncResult {
                 total_remote_profiles: 0,
@@ -668,7 +670,7 @@ pub async fn remote_sync_profiles_to_local_auth(
             resolved_keys,
             unresolved_keys,
             failed_key_resolves,
-    })
+        })
     })
 }
 
@@ -990,7 +992,8 @@ pub async fn push_related_secrets_to_remote(
     timed_async!("push_related_secrets_to_remote", {
         let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
-        let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        let (remote_profiles, _) =
+            collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
         let related = collect_related_remote_providers(&cfg, &remote_profiles);
 
         if related.is_empty() {
@@ -1044,7 +1047,9 @@ pub async fn push_related_secrets_to_remote(
         let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
         let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
             Ok(content) => content,
-            Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
+            Err(e) if is_remote_missing_path_error(&e) => {
+                r#"{"version":1,"profiles":{}}"#.to_string()
+            }
             Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
         };
         let mut remote_auth_json: Value = serde_json::from_str(&remote_auth_raw)
@@ -1076,7 +1081,7 @@ pub async fn push_related_secrets_to_remote(
             written_secrets: written,
             skipped_providers: skipped,
             failed_providers: failed,
-    })
+        })
     })
 }
 
@@ -1150,7 +1155,7 @@ pub fn push_model_profiles_to_local_openclaw(
             written_model_entries,
             written_auth_entries,
             blocked_profiles,
-    })
+        })
     })
 }
 
@@ -1205,7 +1210,9 @@ pub async fn push_model_profiles_to_remote_openclaw(
         let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
         let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
             Ok(content) => content,
-            Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
+            Err(e) if is_remote_missing_path_error(&e) => {
+                r#"{"version":1,"profiles":{}}"#.to_string()
+            }
             Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
         };
         let mut remote_auth_json = parse_auth_store_json(&remote_auth_raw)?;
@@ -1245,7 +1252,7 @@ pub async fn push_model_profiles_to_remote_openclaw(
             written_model_entries,
             written_auth_entries,
             blocked_profiles,
-    })
+        })
     })
 }
 
@@ -1652,7 +1659,8 @@ pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, Strin
     timed_sync!("upsert_model_profile", {
         let paths = resolve_paths();
         let path = model_profiles_path(&paths);
-        let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
+        let content =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
         let (saved, next_json) =
             clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
                 .map_err(|e| e.to_string())?;
@@ -1750,7 +1758,7 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
             auth_ref: None,
             has_key: false,
             source: String::new(),
-    })
+        })
     })
 }
 
@@ -1769,11 +1777,12 @@ pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
             } else {
                 (String::new(), None)
             };
-            let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
-                Some(true)
-            } else {
-                None
-            };
+            let resolved_override =
+                if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
+                    Some(true)
+                } else {
+                    None
+                };
             out.push(build_resolved_api_key(
                 profile,
                 &resolved_key,
@@ -1824,11 +1833,11 @@ pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
 
         tauri::async_runtime::spawn_blocking(move || {
             run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
-    })
-    .await
-    .map_err(|e| format!("Task join failed: {e}"))??;
+        })
+        .await
+        .map_err(|e| format!("Task join failed: {e}"))??;
 
-    Ok(true)
+        Ok(true)
     })
 }
 

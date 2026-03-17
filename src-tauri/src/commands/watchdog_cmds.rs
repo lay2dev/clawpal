@@ -53,9 +53,9 @@ pub async fn get_watchdog_status() -> Result<Value, String> {
             }
 
             Ok(status)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
     })
 }
 

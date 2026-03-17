@@ -115,7 +115,8 @@ pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>,
 pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
     timed_async!("trigger_cron_job", {
         tauri::async_runtime::spawn_blocking(move || {
-            let mut cmd = std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
+            let mut cmd =
+                std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
             cmd.args(["cron", "run", &job_id]);
             if let Some(path) = crate::cli_runner::get_active_openclaw_home_override() {
                 cmd.env("OPENCLAW_HOME", path);
@@ -133,9 +134,9 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
                     clawpal_core::doctor::strip_doctor_banner(&format!("{stdout}\n{stderr}"));
                 Err(error_msg)
             }
-    })
-    .await
-    .map_err(|e| format!("Task failed: {e}"))?
+        })
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
     })
 }
 

@@ -20,8 +20,7 @@ fn setup() {
 }
 
 fn temp_data_dir() -> std::path::PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("clawpal-perf-e2e-{}", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("clawpal-perf-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).expect("create temp dir");
     path
 }
@@ -117,7 +116,8 @@ fn local_config_commands_record_timing() {
         assert!(
             s.elapsed_ms < 100,
             "{} took {}ms — should be < 100ms for local ops",
-            s.name, s.elapsed_ms
+            s.name,
+            s.elapsed_ms
         );
     }
 }
@@ -174,12 +174,42 @@ fn z_local_perf_report_for_ci() {
 
     // Run each command 5 times
     let commands: Vec<(&str, Box<dyn Fn()>)> = vec![
-        ("local_openclaw_config_exists", Box::new(|| { let _ = local_openclaw_config_exists("/tmp".to_string()); })),
-        ("list_ssh_hosts", Box::new(|| { let _ = list_ssh_hosts(); })),
-        ("get_app_preferences", Box::new(|| { let _ = get_app_preferences(); })),
-        ("read_app_log", Box::new(|| { let _ = read_app_log(Some(10)); })),
-        ("read_error_log", Box::new(|| { let _ = read_error_log(Some(10)); })),
-        ("list_recipes", Box::new(|| { let _ = list_recipes(); })),
+        (
+            "local_openclaw_config_exists",
+            Box::new(|| {
+                let _ = local_openclaw_config_exists("/tmp".to_string());
+            }),
+        ),
+        (
+            "list_ssh_hosts",
+            Box::new(|| {
+                let _ = list_ssh_hosts();
+            }),
+        ),
+        (
+            "get_app_preferences",
+            Box::new(|| {
+                let _ = get_app_preferences();
+            }),
+        ),
+        (
+            "read_app_log",
+            Box::new(|| {
+                let _ = read_app_log(Some(10));
+            }),
+        ),
+        (
+            "read_error_log",
+            Box::new(|| {
+                let _ = read_error_log(Some(10));
+            }),
+        ),
+        (
+            "list_recipes",
+            Box::new(|| {
+                let _ = list_recipes();
+            }),
+        ),
     ];
 
     for (_, cmd_fn) in &commands {

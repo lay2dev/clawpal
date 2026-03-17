@@ -12,9 +12,7 @@ pub(crate) fn read_hosts_from_registry() -> Result<Vec<SshHostConfig>, String> {
 
 #[tauri::command]
 pub fn list_ssh_hosts() -> Result<Vec<SshHostConfig>, String> {
-    timed_sync!("list_ssh_hosts", {
-        read_hosts_from_registry()
-    })
+    timed_sync!("list_ssh_hosts", { read_hosts_from_registry() })
 }
 
 #[tauri::command]
@@ -26,8 +24,8 @@ pub fn list_ssh_config_hosts() -> Result<Vec<SshConfigHostSuggestion>, String> {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let data =
-            fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        let data = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
         Ok(clawpal_core::ssh::config::parse_ssh_config_hosts(&data))
     })
 }
@@ -309,7 +307,9 @@ pub async fn ssh_connect_with_passphrase(
             make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
         })?;
         if hosts.is_empty() {
-            crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
+            crate::commands::logs::log_dev(
+                "[dev][ssh_connect_with_passphrase] host registry is empty",
+            );
         }
         let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
             let mut ids = Vec::new();
@@ -418,8 +418,10 @@ pub async fn ssh_exec(
                     SshDiagnosticSuccessTrigger::RoutineOperation,
                 );
                 result
-        })
-        .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
+            })
+            .map_err(|error| {
+                make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error)
+            })
     })
 }
 
@@ -442,10 +444,10 @@ pub async fn sftp_read_file(
                     SshDiagnosticSuccessTrigger::RoutineOperation,
                 );
                 result
-        })
-        .map_err(|error| {
-            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
-        })
+            })
+            .map_err(|error| {
+                make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+            })
     })
 }
 
@@ -493,10 +495,10 @@ pub async fn sftp_list_dir(
                     SshDiagnosticSuccessTrigger::RoutineOperation,
                 );
                 result
-        })
-        .map_err(|error| {
-            make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
-        })
+            })
+            .map_err(|error| {
+                make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
+            })
     })
 }
 
@@ -593,7 +595,9 @@ pub async fn diagnose_ssh(
             | SshIntent::DoctorRemote
             | SshIntent::HealthCheck => {
                 match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
-                    Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
+                    Ok(_) => {
+                        SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded")
+                    }
                     Err(error) => from_any_error(stage, intent, error),
                 }
             }

@@ -212,14 +212,15 @@ pub async fn record_install_experience(
         Ok(RecordInstallExperienceResult {
             saved: true,
             total_count,
-    })
+        })
     })
 }
 
 #[tauri::command]
 pub fn list_registered_instances() -> Result<Vec<clawpal_core::instance::Instance>, String> {
     timed_sync!("list_registered_instances", {
-        let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        let registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
         // Best-effort self-heal: persist normalized instance ids (e.g., legacy empty SSH ids).
         let _ = registry.save();
         Ok(registry.list())
@@ -495,6 +496,6 @@ pub fn migrate_legacy_instances(
             imported_docker_instances,
             imported_open_tab_instances,
             total_instances,
-    })
+        })
     })
 }

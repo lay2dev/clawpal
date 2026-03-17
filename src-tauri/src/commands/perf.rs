@@ -215,7 +215,11 @@ pub fn record_timing(name: &str, elapsed_ms: u64) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let threshold = if name.starts_with("remote_") { 2000 } else { 100 };
+    let threshold = if name.starts_with("remote_") {
+        2000
+    } else {
+        100
+    };
     let sample = PerfSample {
         name: name.to_string(),
         elapsed_ms,
@@ -242,7 +246,10 @@ pub fn get_perf_report() -> Result<Value, String> {
 
     let mut by_name: HashMap<String, Vec<u64>> = HashMap::new();
     for s in reg.iter() {
-        by_name.entry(s.name.clone()).or_default().push(s.elapsed_ms);
+        by_name
+            .entry(s.name.clone())
+            .or_default()
+            .push(s.elapsed_ms);
     }
 
     let mut report = serde_json::Map::new();
@@ -251,16 +258,22 @@ pub fn get_perf_report() -> Result<Value, String> {
         let count = times.len();
         let sum: u64 = times.iter().sum();
         let p50 = times.get(count / 2).copied().unwrap_or(0);
-        let p95 = times.get((count as f64 * 0.95) as usize).copied().unwrap_or(0);
+        let p95 = times
+            .get((count as f64 * 0.95) as usize)
+            .copied()
+            .unwrap_or(0);
         let max = times.last().copied().unwrap_or(0);
 
-        report.insert(name, json!({
-            "count": count,
-            "p50_ms": p50,
-            "p95_ms": p95,
-            "max_ms": max,
-            "avg_ms": if count > 0 { sum / count as u64 } else { 0 },
-        }));
+        report.insert(
+            name,
+            json!({
+                "count": count,
+                "p50_ms": p50,
+                "p95_ms": p95,
+                "max_ms": max,
+                "avg_ms": if count > 0 { sum / count as u64 } else { 0 },
+            }),
+        );
     }
 
     Ok(Value::Object(report))

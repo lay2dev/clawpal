@@ -29,8 +29,15 @@ pub async fn remote_write_raw_config(
             .sftp_read(&host_id, &config_path)
             .await
             .unwrap_or_default();
-        remote_write_config_with_snapshot(&pool, &host_id, &config_path, &current, &next, "raw-edit")
-            .await?;
+        remote_write_config_with_snapshot(
+            &pool,
+            &host_id,
+            &config_path,
+            &current,
+            &next,
+            "raw-edit",
+        )
+        .await?;
         Ok(true)
     })
 }
@@ -66,7 +73,7 @@ pub async fn remote_apply_config_patch(
             backup_path: None,
             warnings: Vec::new(),
             errors: Vec::new(),
-    })
+        })
     })
 }
 
@@ -143,7 +150,7 @@ pub async fn remote_preview_rollback(
             can_rollback: true,
             impact_level: "medium".into(),
             warnings: vec!["Rollback will replace current configuration".into()],
-    })
+        })
     })
 }
 
@@ -178,7 +185,7 @@ pub async fn remote_rollback(
             backup_path: None,
             warnings: vec!["rolled back".into()],
             errors: Vec::new(),
-    })
+        })
     })
 }
 
@@ -224,7 +231,7 @@ pub fn apply_config_patch(
             backup_path: Some(snapshot.config_path),
             warnings,
             errors: Vec::new(),
-    })
+        })
     })
 }
 
@@ -245,9 +252,9 @@ pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> 
                 source: item.source,
                 can_rollback: item.can_rollback,
                 rollback_of: item.rollback_of,
-        })
-        .collect();
-    Ok(HistoryPage { items })
+            })
+            .collect();
+        Ok(HistoryPage { items })
     })
 }
 
@@ -280,7 +287,7 @@ pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
             can_rollback: true,
             impact_level: "medium".into(),
             warnings: vec!["Rollback will replace current configuration".into()],
-    })
+        })
     })
 }
 
@@ -318,6 +325,6 @@ pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
             backup_path: None,
             warnings: vec!["rolled back".into()],
             errors: Vec::new(),
-    })
+        })
     })
 }

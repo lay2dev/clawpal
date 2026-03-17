@@ -296,9 +296,9 @@ pub async fn get_instance_config_snapshot() -> Result<InstanceConfigSnapshot, St
         tauri::async_runtime::spawn_blocking(|| {
             let cfg = read_openclaw_config(&resolve_paths())?;
             Ok(extract_instance_config_snapshot(&cfg))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+        })
+        .await
+        .map_err(|error| error.to_string())?
     })
 }
 
@@ -325,7 +325,7 @@ pub async fn get_instance_runtime_snapshot(
             fallback_models: status.fallback_models.clone(),
             status,
             agents,
-    })
+        })
     })
 }
 
@@ -345,9 +345,9 @@ pub async fn get_channels_config_snapshot() -> Result<ChannelsConfigSnapshot, St
         tauri::async_runtime::spawn_blocking(|| {
             let cfg = read_openclaw_config(&resolve_paths())?;
             extract_channels_config_snapshot(&cfg)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+        })
+        .await
+        .map_err(|error| error.to_string())?
     })
 }
 
@@ -379,7 +379,7 @@ pub async fn get_channels_runtime_snapshot(
             channels,
             bindings,
             agents,
-    })
+        })
     })
 }
 
@@ -436,7 +436,7 @@ pub async fn remote_get_cron_runtime_snapshot(
         Ok(CronRuntimeSnapshot {
             jobs,
             watchdog: parse_remote_watchdog_value(watchdog),
-    })
+        })
     })
 }
 

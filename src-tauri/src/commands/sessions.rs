@@ -77,10 +77,10 @@ pub async fn remote_analyze_sessions(
                         model: session.model,
                         category: session.category,
                         kind: session.kind,
-                })
-                .collect(),
-        })
-        .collect())
+                    })
+                    .collect(),
+            })
+            .collect())
     })
 }
 
@@ -167,8 +167,8 @@ pub async fn remote_list_session_files(
                 agent: entry.agent,
                 kind: entry.kind,
                 size_bytes: entry.size_bytes,
-        })
-        .collect())
+            })
+            .collect())
     })
 }
 
@@ -278,9 +278,9 @@ pub async fn delete_sessions_by_ids(
     timed_async!("delete_sessions_by_ids", {
         tauri::async_runtime::spawn_blocking(move || {
             delete_sessions_by_ids_sync(&agent_id, &session_ids)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
     })
 }
 

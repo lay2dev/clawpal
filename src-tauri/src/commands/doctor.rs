@@ -796,8 +796,15 @@ pub async fn remote_fix_issues(
         let applied = clawpal_core::doctor::apply_issue_fixes(&mut cfg, &ids)?;
 
         if !applied.is_empty() {
-            remote_write_config_with_snapshot(&pool, &host_id, &config_path, &raw, &cfg, "doctor-fix")
-                .await?;
+            remote_write_config_with_snapshot(
+                &pool,
+                &host_id,
+                &config_path,
+                &raw,
+                &cfg,
+                "doctor-fix",
+            )
+            .await?;
         }
 
         let remaining: Vec<String> = ids.into_iter().filter(|id| !applied.contains(id)).collect();
@@ -805,7 +812,7 @@ pub async fn remote_fix_issues(
             ok: true,
             applied,
             remaining_issues: remaining,
-    })
+        })
     })
 }
 
@@ -817,7 +824,11 @@ pub async fn remote_get_system_status(
     timed_async!("remote_get_system_status", {
         // Tier 1: fast, essential — health check + config + real agent list.
         let (config_res, agents_res, pgrep_res) = tokio::join!(
-            run_openclaw_remote_with_autofix(&pool, &host_id, &["config", "get", "agents", "--json"]),
+            run_openclaw_remote_with_autofix(
+                &pool,
+                &host_id,
+                &["config", "get", "agents", "--json"]
+            ),
             run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]),
             pool.exec(&host_id, "pgrep -f '[o]penclaw-gateway' >/dev/null 2>&1"),
         );
@@ -852,7 +863,8 @@ pub async fn remote_get_system_status(
 
         let (global_default_model, fallback_models) = match config_res {
             Ok(ref output) if output.exit_code == 0 => {
-                let cfg: Value = crate::cli_runner::parse_json_output(output).unwrap_or(Value::Null);
+                let cfg: Value =
+                    crate::cli_runner::parse_json_output(output).unwrap_or(Value::Null);
                 let model = cfg
                     .pointer("/defaults/model")
                     .and_then(|v| read_model_value(v))
@@ -868,29 +880,29 @@ pub async fn remote_get_system_status(
                             .filter_map(Value::as_str)
                             .map(String::from)
                             .collect()
-                })
-                .unwrap_or_default();
-            (model, fallbacks)
-        }
-        _ => (None, Vec::new()),
-    };
+                    })
+                    .unwrap_or_default();
+                (model, fallbacks)
+            }
+            _ => (None, Vec::new()),
+        };
 
-    // Avoid false negatives from transient SSH exec failures:
-    // if health probe fails but config fetch in the same cycle succeeded,
-    // keep health as true instead of flipping to unhealthy.
-    let healthy = match pgrep_res {
-        Ok(r) => r.exit_code == 0,
-        Err(_) if config_ok => true,
-        Err(_) => false,
-    };
+        // Avoid false negatives from transient SSH exec failures:
+        // if health probe fails but config fetch in the same cycle succeeded,
+        // keep health as true instead of flipping to unhealthy.
+        let healthy = match pgrep_res {
+            Ok(r) => r.exit_code == 0,
+            Err(_) if config_ok => true,
+            Err(_) => false,
+        };
 
-    Ok(StatusLight {
-        healthy,
-        active_agents,
-        global_default_model,
-        fallback_models,
-        ssh_diagnostic,
-    })
+        Ok(StatusLight {
+            healthy,
+            active_agents,
+            global_default_model,
+            fallback_models,
+            ssh_diagnostic,
+        })
     })
 }
 
@@ -997,7 +1009,7 @@ pub async fn remote_get_status_extra(
         Ok(StatusExtra {
             openclaw_version,
             duplicate_installs,
-    })
+        })
     })
 }
 
@@ -1030,19 +1042,19 @@ pub async fn get_status_light() -> Result<StatusLight, String> {
                         .filter_map(Value::as_str)
                         .map(String::from)
                         .collect()
-            })
-            .unwrap_or_default();
+                })
+                .unwrap_or_default();
 
-        Ok(StatusLight {
-            healthy: local_health.healthy,
-            active_agents,
-            global_default_model,
-            fallback_models,
-            ssh_diagnostic: None,
+            Ok(StatusLight {
+                healthy: local_health.healthy,
+                active_agents,
+                global_default_model,
+                fallback_models,
+                ssh_diagnostic: None,
+            })
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        .await
+        .map_err(|e| e.to_string())?
     })
 }
 
@@ -1063,10 +1075,10 @@ pub async fn get_status_extra() -> Result<StatusExtra, String> {
             Ok(StatusExtra {
                 openclaw_version,
                 duplicate_installs: Vec::new(),
+            })
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        .await
+        .map_err(|e| e.to_string())?
     })
 }
 
@@ -1114,7 +1126,7 @@ pub fn get_system_status() -> Result<SystemStatus, String> {
             memory,
             sessions,
             openclaw_update,
-    })
+        })
     })
 }
 
@@ -1151,6 +1163,6 @@ pub fn fix_issues(ids: Vec<String>) -> Result<FixResult, String> {
             ok: true,
             applied,
             remaining_issues: remaining,
-    })
+        })
     })
 }

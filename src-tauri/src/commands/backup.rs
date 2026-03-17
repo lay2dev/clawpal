@@ -41,7 +41,7 @@ pub async fn remote_backup_before_upgrade(
             path: String::new(),
             created_at: format_timestamp_from_unix(now_secs),
             size_bytes,
-    })
+        })
     })
 }
 
@@ -109,11 +109,11 @@ pub async fn remote_list_backups(
                     created_at: name.clone(), // Name is the timestamp
                     size_bytes,
                 }
-        })
-        .collect();
+            })
+            .collect();
 
-    backups.sort_by(|a, b| b.name.cmp(&a.name));
-    Ok(backups)
+        backups.sort_by(|a, b| b.name.cmp(&a.name));
+        Ok(backups)
     })
 }
 
@@ -186,7 +186,10 @@ pub async fn remote_run_openclaw_upgrade(
             .map(|r| r.stdout.trim().to_string())
             .unwrap_or_default();
         let _upgrade_info = clawpal_core::backup::parse_upgrade_result(&combined);
-        if !version_before.is_empty() && !version_after.is_empty() && version_before == version_after {
+        if !version_before.is_empty()
+            && !version_after.is_empty()
+            && version_before == version_after
+        {
             return Err(format!("{combined}\n\nWarning: version unchanged after upgrade ({version_before}). Check PATH or npm prefix."));
         }
 
@@ -210,18 +213,18 @@ pub async fn remote_check_openclaw_update(
         let paths = resolve_paths();
         let cache = tokio::task::spawn_blocking(move || {
             resolve_openclaw_latest_release_cached(&paths, false).ok()
-    })
-    .await
-    .unwrap_or(None);
-    let latest_version = cache.and_then(|entry| entry.latest_version);
-    let upgrade = latest_version
-        .as_ref()
-        .is_some_and(|latest| compare_semver(&installed_version, Some(latest.as_str())));
-    Ok(serde_json::json!({
-        "upgradeAvailable": upgrade,
-        "latestVersion": latest_version,
-        "installedVersion": installed_version,
-    }))
+        })
+        .await
+        .unwrap_or(None);
+        let latest_version = cache.and_then(|entry| entry.latest_version);
+        let upgrade = latest_version
+            .as_ref()
+            .is_some_and(|latest| compare_semver(&installed_version, Some(latest.as_str())));
+        Ok(serde_json::json!({
+            "upgradeAvailable": upgrade,
+            "latestVersion": latest_version,
+            "installedVersion": installed_version,
+        }))
     })
 }
 
@@ -230,7 +233,8 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
     timed_sync!("backup_before_upgrade", {
         let paths = resolve_paths();
         let backups_dir = paths.clawpal_dir.join("backups");
-        fs::create_dir_all(&backups_dir).map_err(|e| format!("Failed to create backups dir: {e}"))?;
+        fs::create_dir_all(&backups_dir)
+            .map_err(|e| format!("Failed to create backups dir: {e}"))?;
 
         let now_secs = unix_timestamp_secs();
         let now_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs as i64, 0);
@@ -245,7 +249,8 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
         // Copy config file
         if paths.config_path.exists() {
             let dest = backup_dir.join("openclaw.json");
-            fs::copy(&paths.config_path, &dest).map_err(|e| format!("Failed to copy config: {e}"))?;
+            fs::copy(&paths.config_path, &dest)
+                .map_err(|e| format!("Failed to copy config: {e}"))?;
             total_bytes += fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         }
 
@@ -261,7 +266,7 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
             path: backup_dir.to_string_lossy().to_string(),
             created_at: format_timestamp_from_unix(now_secs),
             size_bytes: total_bytes,
-    })
+        })
     })
 }
 
@@ -288,17 +293,17 @@ pub fn list_backups() -> Result<Vec<BackupInfo>, String> {
                 .map(|t| {
                     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                     format_timestamp_from_unix(secs)
-            })
-            .unwrap_or_else(|_| name.clone());
-        backups.push(BackupInfo {
-            name,
-            path: path.to_string_lossy().to_string(),
-            created_at,
-            size_bytes: size,
-        });
-    }
-    backups.sort_by(|a, b| b.name.cmp(&a.name));
-    Ok(backups)
+                })
+                .unwrap_or_else(|_| name.clone());
+            backups.push(BackupInfo {
+                name,
+                path: path.to_string_lossy().to_string(),
+                created_at,
+                size_bytes: size,
+            });
+        }
+        backups.sort_by(|a, b| b.name.cmp(&a.name));
+        Ok(backups)
     })
 }
 
