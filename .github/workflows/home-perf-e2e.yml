@@ -35,7 +35,6 @@ jobs:
       - name: Start container
         run: |
           docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
-          # Wait for SSH to be ready
           for i in $(seq 1 15); do
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
             sleep 1
@@ -49,7 +48,6 @@ jobs:
       - name: Start Vite dev server
         run: |
           bun run dev &
-          # Wait for server to be ready
           for i in $(seq 1 20); do
             curl -s http://localhost:1420 > /dev/null 2>&1 && break
             sleep 1
@@ -61,13 +59,22 @@ jobs:
           PERF_MOCK_LATENCY_MS: "50"
           PERF_SETTLED_GATE_MS: "5000"
 
+      - name: Ensure report exists
+        if: always()
+        run: |
+          if [ ! -f tests/e2e/perf/report.md ]; then
+            echo '## 🏠 Home Page Render Probes' > tests/e2e/perf/report.md
+            echo '' >> tests/e2e/perf/report.md
+            echo '⚠️ E2E run failed before probe collection. Check workflow logs.' >> tests/e2e/perf/report.md
+          fi
+
       - name: Post / update PR performance report
         if: always() && github.event_name == 'pull_request'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: marocchino/sticky-pull-request-comment@v2
         with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body-path: tests/e2e/perf/report.md
-          comment-tag: home-perf-e2e
+          header: home-perf-e2e
+          path: tests/e2e/perf/report.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup
         if: always()

@@ -21,40 +21,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # Seed OpenClaw configuration
 RUN mkdir -p /root/.openclaw/agents/main/agent
 
-RUN cat > /root/.openclaw/openclaw.json << 'OCEOF'
-{
-  "gateway": {
-    "port": 18789,
-    "token": "perf-test-token"
-  },
-  "defaults": {
-    "model": "anthropic/claude-sonnet-4-20250514"
-  },
-  "models": {
-    "anthropic/claude-sonnet-4-20250514": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-20250514"
-    },
-    "openai/gpt-4o": {
-      "provider": "openai",
-      "model": "gpt-4o"
-    }
-  },
-  "agents": {
-    "list": [
-      { "id": "main", "model": "anthropic/claude-sonnet-4-20250514" },
-      { "id": "worker-1", "model": "openai/gpt-4o" }
-    ]
-  }
-}
-OCEOF
-
-RUN cat > /root/.openclaw/agents/main/agent/auth-profiles.json << 'AUTHEOF'
-{
-  "anthropic": { "apiKey": "test-key-anthropic" },
-  "openai": { "apiKey": "test-key-openai" }
-}
-AUTHEOF
+COPY tests/e2e/perf/seed/openclaw.json /root/.openclaw/openclaw.json
+COPY tests/e2e/perf/seed/auth-profiles.json /root/.openclaw/agents/main/agent/auth-profiles.json
 
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]
