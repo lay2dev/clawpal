@@ -308,10 +308,18 @@ jobs:
         run: docker rm -f oc-remote-perf 2>/dev/null || true
 
       # ── Gate 5: Home page render probes ──
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package.json') }}
+
       - name: Install Playwright
         run: |
           bun add -d @playwright/test
           npx playwright install chromium --with-deps
+        timeout-minutes: 5
 
       - name: Install sshpass
         run: sudo apt-get install -y sshpass
