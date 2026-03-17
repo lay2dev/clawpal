@@ -11,6 +11,7 @@ const PERSISTED_READ_METHODS = new Set([
   "getCronConfigSnapshot",
   "getCronRuntimeSnapshot",
   "getRescueBotStatus",
+  "listModelProfiles",
 ]);
 
 type PersistedReadCacheEntry<T> = {

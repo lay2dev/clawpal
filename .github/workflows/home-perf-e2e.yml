@@ -1,0 +1,74 @@
+name: Home Perf E2E
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: home-perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  home-perf:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Install sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Build Docker OpenClaw container
+        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
+
+      - name: Start container
+        run: |
+          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          # Wait for SSH to be ready
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+
+      - name: Extract fixtures from container
+        run: node tests/e2e/perf/extract-fixtures.mjs
+        env:
+          CLAWPAL_PERF_SSH_PORT: "2299"
+
+      - name: Start Vite dev server
+        run: |
+          bun run dev &
+          # Wait for server to be ready
+          for i in $(seq 1 20); do
+            curl -s http://localhost:1420 > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Run render probe E2E
+        run: npx playwright test --config tests/e2e/perf/playwright.config.mjs
+        env:
+          PERF_MOCK_LATENCY_MS: "50"
+          PERF_SETTLED_GATE_MS: "5000"
+
+      - name: Post / update PR performance report
+        if: always() && github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: tests/e2e/perf/report.md
+          comment-tag: home-perf-e2e
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f oc-perf 2>/dev/null || true

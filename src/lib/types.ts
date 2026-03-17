@@ -78,7 +78,7 @@ export interface ApplyResult {
 }
 
 export interface SystemStatus {
-  healthy: boolean;
+  healthy: boolean | null;
   configPath: string;
   openclawDir: string;
   clawpalDir: string;
@@ -300,7 +300,7 @@ export interface AgentOverview {
 }
 
 export interface InstanceStatus {
-  healthy: boolean;
+  healthy: boolean | null;
   activeAgents: number;
   globalDefaultModel?: string;
   fallbackModels?: string[];

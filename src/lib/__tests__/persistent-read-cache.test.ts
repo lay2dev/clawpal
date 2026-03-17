@@ -72,4 +72,15 @@ describe("persistent read cache", () => {
     expect(storage.size).toBe(0);
     expect(readPersistedReadCache("ssh:lay2-dev", "listAgents", [])).toBeUndefined();
   });
+
+  test("persists listModelProfiles", () => {
+    expect(shouldPersistReadMethod("listModelProfiles")).toBe(true);
+
+    const profiles = [
+      { id: "p1", provider: "anthropic", model: "claude-sonnet-4-20250514", enabled: true },
+      { id: "p2", provider: "openai", model: "gpt-4o", enabled: false },
+    ];
+    writePersistedReadCache("local", "listModelProfiles", [], profiles);
+    expect(readPersistedReadCache("local", "listModelProfiles", [])).toEqual(profiles);
+  });
 });
