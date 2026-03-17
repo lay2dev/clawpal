@@ -33,21 +33,14 @@ fn process_metrics_rss_within_bounds() {
         "RSS too low: {:.1} MB — likely measurement error",
         rss_mb
     );
-    assert!(
-        rss_mb < 80.0,
-        "RSS exceeds 80 MB target: {:.1} MB",
-        rss_mb
-    );
+    assert!(rss_mb < 80.0, "RSS exceeds 80 MB target: {:.1} MB", rss_mb);
 }
 
 #[test]
 fn process_metrics_platform_is_set() {
     init_perf_clock();
     let metrics = get_process_metrics().expect("should return metrics");
-    assert!(
-        !metrics.platform.is_empty(),
-        "platform should be set"
-    );
+    assert!(!metrics.platform.is_empty(), "platform should be set");
     // Should be one of the supported platforms
     assert!(
         ["linux", "macos", "windows"].contains(&metrics.platform.as_str()),
@@ -115,11 +108,7 @@ fn uptime_ms_increases_over_time() {
     let t1 = uptime_ms();
     thread::sleep(Duration::from_millis(20));
     let t2 = uptime_ms();
-    assert!(
-        t2 > t1,
-        "uptime should increase: {} vs {}",
-        t1, t2
-    );
+    assert!(t2 > t1, "uptime should increase: {} vs {}", t1, t2);
     let delta = t2 - t1;
     assert!(
         delta >= 10, // allow some scheduling variance
