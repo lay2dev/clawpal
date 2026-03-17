@@ -75,10 +75,17 @@ const preloadRouteModules = () =>
   ]);
 
 const PING_URL = "https://api.clawpal.zhixian.io/ping";
-const LEGACY_DOCKER_INSTANCES_KEY = "clawpal_docker_instances";
-const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
-const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
-const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
+import {
+  LEGACY_DOCKER_INSTANCES_KEY,
+  DEFAULT_DOCKER_OPENCLAW_HOME,
+  DEFAULT_DOCKER_CLAWPAL_DATA_DIR,
+  DEFAULT_DOCKER_INSTANCE_ID,
+  sanitizeDockerPathSuffix,
+  deriveDockerPaths,
+  deriveDockerLabel,
+  hashInstanceToken,
+  normalizeDockerInstance,
+} from "./lib/docker-instance-helpers";
 
 type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "context" | "orchestrator";
 const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "context", "history"];
@@ -98,59 +105,6 @@ function logDevException(label: string, detail: unknown): void {
 function logDevIgnoredError(context: string, detail: unknown): void {
   if (!import.meta.env.DEV) return;
   console.warn(`[dev ignored error] ${context}`, detail);
-}
-
-function sanitizeDockerPathSuffix(raw: string): string {
-  const lowered = raw.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  const trimmed = lowered.replace(/^[-_]+|[-_]+$/g, "");
-  return trimmed || "docker-local";
-}
-
-function deriveDockerPaths(instanceId: string): { openclawHome: string; clawpalDataDir: string } {
-  if (instanceId === DEFAULT_DOCKER_INSTANCE_ID) {
-    return {
-      openclawHome: DEFAULT_DOCKER_OPENCLAW_HOME,
-      clawpalDataDir: DEFAULT_DOCKER_CLAWPAL_DATA_DIR,
-    };
-  }
-  const suffixRaw = instanceId.startsWith("docker:") ? instanceId.slice(7) : instanceId;
-  const suffix = suffixRaw === "local"
-    ? "docker-local"
-    : suffixRaw.startsWith("docker-")
-      ? sanitizeDockerPathSuffix(suffixRaw)
-      : `docker-${sanitizeDockerPathSuffix(suffixRaw)}`;
-  const openclawHome = `~/.clawpal/${suffix}`;
-  return {
-    openclawHome,
-    clawpalDataDir: `${openclawHome}/data`,
-  };
-}
-
-function deriveDockerLabel(instanceId: string): string {
-  if (instanceId === DEFAULT_DOCKER_INSTANCE_ID) return "docker-local";
-  const suffix = instanceId.startsWith("docker:") ? instanceId.slice(7) : instanceId;
-  const match = suffix.match(/^local-(\d+)$/);
-  if (match) return `docker-local-${match[1]}`;
-  return suffix.startsWith("docker-") ? suffix : `docker-${suffix}`;
-}
-
-function hashInstanceToken(raw: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash ^= raw.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function normalizeDockerInstance(instance: DockerInstance): DockerInstance {
-  const fallback = deriveDockerPaths(instance.id);
-  return {
-    ...instance,
-    label: instance.label?.trim() || deriveDockerLabel(instance.id),
-    openclawHome: instance.openclawHome || fallback.openclawHome,
-    clawpalDataDir: instance.clawpalDataDir || fallback.clawpalDataDir,
-  };
 }
 
 export function App() {
