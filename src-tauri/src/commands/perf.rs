@@ -200,3 +200,92 @@ mod tests {
         assert!(t2 > t1, "uptime should increase: {} vs {}", t1, t2);
     }
 }
+
+// ── Global performance registry ──
+
+use std::sync::Arc;
+
+/// Thread-safe registry of command timing samples.
+static PERF_REGISTRY: LazyLock<Arc<Mutex<Vec<PerfSample>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Vec::with_capacity(1024))));
+
+/// Record a timing sample into the global registry.
+pub fn record_timing(name: &str, elapsed_ms: u64) {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let threshold = if name.starts_with("remote_") { 2000 } else { 100 };
+    let sample = PerfSample {
+        name: name.to_string(),
+        elapsed_ms,
+        timestamp: ts,
+        exceeded_threshold: elapsed_ms > threshold,
+    };
+    if let Ok(mut reg) = PERF_REGISTRY.lock() {
+        reg.push(sample);
+    }
+}
+
+/// Get all recorded timing samples and clear the registry.
+#[tauri::command]
+pub fn get_perf_timings() -> Result<Vec<PerfSample>, String> {
+    let mut reg = PERF_REGISTRY.lock().map_err(|e| e.to_string())?;
+    let samples = reg.drain(..).collect();
+    Ok(samples)
+}
+
+/// Get a summary report of all recorded timings grouped by command name.
+#[tauri::command]
+pub fn get_perf_report() -> Result<Value, String> {
+    let reg = PERF_REGISTRY.lock().map_err(|e| e.to_string())?;
+
+    let mut by_name: HashMap<String, Vec<u64>> = HashMap::new();
+    for s in reg.iter() {
+        by_name.entry(s.name.clone()).or_default().push(s.elapsed_ms);
+    }
+
+    let mut report = serde_json::Map::new();
+    for (name, mut times) in by_name {
+        times.sort();
+        let count = times.len();
+        let sum: u64 = times.iter().sum();
+        let p50 = times.get(count / 2).copied().unwrap_or(0);
+        let p95 = times.get((count as f64 * 0.95) as usize).copied().unwrap_or(0);
+        let max = times.last().copied().unwrap_or(0);
+
+        report.insert(name, json!({
+            "count": count,
+            "p50_ms": p50,
+            "p95_ms": p95,
+            "max_ms": max,
+            "avg_ms": if count > 0 { sum / count as u64 } else { 0 },
+        }));
+    }
+
+    Ok(Value::Object(report))
+}
+
+/// Macro for wrapping synchronous command bodies with timing.
+#[macro_export]
+macro_rules! timed_sync {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = $body;
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        $crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
+
+/// Macro for wrapping async command bodies with timing.
+#[macro_export]
+macro_rules! timed_async {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = $body;
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        $crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
