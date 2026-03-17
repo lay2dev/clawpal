@@ -1,6 +1,6 @@
 import type { RescueBotRuntimeState } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import doctorImage from "@/assets/doctor.png";
+import doctorImage from "@/assets/doctor.webp";
 
 interface RescueAsciiHeaderProps {
   state: RescueBotRuntimeState;
