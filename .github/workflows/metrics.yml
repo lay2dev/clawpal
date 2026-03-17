@@ -99,8 +99,22 @@ jobs:
             PASS="true"
           fi
 
+          # Measure initial-load chunks (exclude lazy page/component chunks)
+          INIT_GZIP=0
+          for f in dist/assets/*.js; do
+            BN=$(basename "$f")
+            case "$BN" in
+              index-*|vendor-react-*|vendor-ui-*|vendor-i18n-*|vendor-icons-*)
+                GZ_INIT=$(gzip -c "$f" | wc -c)
+                INIT_GZIP=$((INIT_GZIP + GZ_INIT))
+                ;;
+            esac
+          done
+          INIT_KB=$((INIT_GZIP / 1024))
+
           echo "raw_kb=${BUNDLE_KB}" >> "$GITHUB_OUTPUT"
           echo "gzip_kb=${GZIP_KB}" >> "$GITHUB_OUTPUT"
+          echo "init_gzip_kb=${INIT_KB}" >> "$GITHUB_OUTPUT"
           echo "limit_kb=${LIMIT_KB}" >> "$GITHUB_OUTPUT"
           echo "pass=${PASS}" >> "$GITHUB_OUTPUT"
 
@@ -412,6 +426,7 @@ jobs:
           |--------|-------|-------|--------|
           | JS bundle (raw) | ${{ steps.bundle_size.outputs.raw_kb }} KB | — | — |
           | JS bundle (gzip) | ${{ steps.bundle_size.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle_size.outputs.limit_kb }} KB | ${BUNDLE_ICON} |
+          | JS initial load (gzip) | ${{ steps.bundle_size.outputs.init_gzip_kb }} KB | — | ℹ️ |
 
           ### Perf Metrics E2E  $( [ "${{ steps.perf_tests.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
