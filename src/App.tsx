@@ -86,10 +86,10 @@ import {
   hashInstanceToken,
   normalizeDockerInstance,
 } from "./lib/docker-instance-helpers";
+import { logDevException, logDevIgnoredError } from "./lib/dev-logging";
+import { Route, INSTANCE_ROUTES, OPEN_TABS_STORAGE_KEY } from "./lib/routes";
 
-type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "context" | "orchestrator";
-const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "context", "history"];
-const OPEN_TABS_STORAGE_KEY = "clawpal_open_tabs";
+
 const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
 interface ProfileSyncStatus {
   phase: "idle" | "syncing" | "success" | "error";
@@ -97,15 +97,7 @@ interface ProfileSyncStatus {
   instanceId: string | null;
 }
 
-function logDevException(label: string, detail: unknown): void {
-  if (!import.meta.env.DEV) return;
-  console.error(`[dev exception] ${label}`, detail);
-}
 
-function logDevIgnoredError(context: string, detail: unknown): void {
-  if (!import.meta.env.DEV) return;
-  console.warn(`[dev ignored error] ${context}`, detail);
-}
 
 export function App() {
   const { t } = useTranslation();
