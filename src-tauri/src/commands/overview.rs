@@ -186,7 +186,8 @@ async fn remote_instance_runtime_snapshot_impl(
     // but extract_default_model_and_fallbacks expects the full config with /agents prefix.
     // Wrap the subtree so JSON pointers like /agents/defaults/model resolve correctly.
     let config_wrapped = serde_json::json!({ "agents": config_json });
-    let (global_default_model, fallback_models) = extract_default_model_and_fallbacks(&config_wrapped);
+    let (global_default_model, fallback_models) =
+        extract_default_model_and_fallbacks(&config_wrapped);
 
     let ssh_diagnostic = if config_output.exit_code != 0 {
         Some(from_any_error(
