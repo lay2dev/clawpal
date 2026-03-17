@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { StartPage } from "./pages/StartPage";
 import logoUrl from "./assets/logo.png";
-import { InstanceTabBar } from "./components/InstanceTabBar";
+const InstanceTabBar = lazy(() => import("./components/InstanceTabBar").then((m) => ({ default: m.InstanceTabBar })));
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
 import { buildCacheKey, invalidateGlobalReadCache, prewarmRemoteInstanceReadCache, subscribeToCacheKey } from "./lib/use-api";
@@ -40,7 +40,7 @@ import { Label } from "@/components/ui/label";
 import { cn, formatBytes } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstance, InstallSession, PrecheckIssue, RegisteredInstance, SshHost, SshTransferStats } from "./lib/types";
-import { SshFormWidget } from "./components/SshFormWidget";
+const SshFormWidget = lazy(() => import("./components/SshFormWidget").then((m) => ({ default: m.SshFormWidget })));
 import { closeWorkspaceTab } from "@/lib/tabWorkspace";
 import {
   SSH_PASSPHRASE_RETRY_HINT,
