@@ -251,7 +251,6 @@ jobs:
       - name: Generate metrics comment
         id: metrics_body
         run: |
-          COMMIT_DETAILS=$(cat /tmp/commit_details.txt)
           LARGE_FILE_DETAILS=$(cat /tmp/large_file_details.txt)
 
           GATE_FAIL=0
@@ -279,11 +278,13 @@ jobs:
 
           **Status**: ${OVERALL}
 
-          ### Commit Size (≤ ${{ steps.commit_size.outputs.max_lines }} lines)  ${COMMIT_ICON}
+          ### Commit Size  ${COMMIT_ICON}
 
-          | Commit | Lines Changed | Limit | Status | Subject |
-          |--------|--------------|-------|--------|---------|
-          ${COMMIT_DETAILS}
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | Commits checked | ${{ steps.commit_size.outputs.total }} | — | — |
+          | All within limit | ${{ steps.commit_size.outputs.passed }}/${{ steps.commit_size.outputs.total }} | ≤ ${{ steps.commit_size.outputs.max_lines }} lines | ${COMMIT_ICON} |
+          | Largest commit | ${{ steps.commit_size.outputs.max_seen }} lines | ≤ ${{ steps.commit_size.outputs.max_lines }} | $( [ "${{ steps.commit_size.outputs.max_seen }}" -le "${{ steps.commit_size.outputs.max_lines }}" ] && echo "✅" || echo "❌" ) |
 
           ### Bundle Size  ${BUNDLE_ICON}
 
