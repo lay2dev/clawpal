@@ -1,0 +1,191 @@
+name: Metrics Gate
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: metrics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # ── Gate 1: Commit size ≤ 500 lines ──
+      - name: Check commit sizes
+        id: commit_size
+        run: |
+          MAX_LINES=500
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+          FAIL=0
+          DETAILS=""
+
+          for COMMIT in $(git rev-list $BASE..$HEAD); do
+            SHORT=$(git rev-parse --short $COMMIT)
+            SUBJECT=$(git log --format=%s -1 $COMMIT)
+            STAT=$(git diff --shortstat ${COMMIT}^..${COMMIT} 2>/dev/null || echo "0")
+            ADDS=$(echo "$STAT" | grep -oP '\d+ insertion' | grep -oP '\d+' || echo 0)
+            DELS=$(echo "$STAT" | grep -oP '\d+ deletion' | grep -oP '\d+' || echo 0)
+            TOTAL=$(( ${ADDS:-0} + ${DELS:-0} ))
+
+            if [ "$TOTAL" -gt "$MAX_LINES" ]; then
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ❌ | ${SUBJECT} |\n"
+              FAIL=1
+            else
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ✅ | ${SUBJECT} |\n"
+            fi
+          done
+
+          echo "fail=${FAIL}" >> "$GITHUB_OUTPUT"
+          printf "%b" "$DETAILS" > /tmp/commit_details.txt
+          echo "max_lines=${MAX_LINES}" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 2: Frontend bundle size ≤ 512 KB (gzip) ──
+      - name: Check bundle size
+        id: bundle_size
+        run: |
+          bun run build
+          BUNDLE_BYTES=$(find dist/assets -name '*.js' -exec cat {} + | wc -c)
+          BUNDLE_KB=$(( BUNDLE_BYTES / 1024 ))
+
+          GZIP_BYTES=0
+          for f in dist/assets/*.js; do
+            GZ=$(gzip -c "$f" | wc -c)
+            GZIP_BYTES=$(( GZIP_BYTES + GZ ))
+          done
+          GZIP_KB=$(( GZIP_BYTES / 1024 ))
+
+          LIMIT_KB=512
+          if [ "$GZIP_KB" -gt "$LIMIT_KB" ]; then
+            PASS="false"
+          else
+            PASS="true"
+          fi
+
+          echo "raw_kb=${BUNDLE_KB}" >> "$GITHUB_OUTPUT"
+          echo "gzip_kb=${GZIP_KB}" >> "$GITHUB_OUTPUT"
+          echo "limit_kb=${LIMIT_KB}" >> "$GITHUB_OUTPUT"
+          echo "pass=${PASS}" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 3: Large file check (informational) ──
+      - name: Check large files
+        id: large_files
+        run: |
+          MOD_LINES=$(wc -l < src-tauri/src/commands/mod.rs 2>/dev/null || echo 0)
+          APP_LINES=$(wc -l < src/App.tsx 2>/dev/null || echo 0)
+
+          DETAILS="| \`commands/mod.rs\` | ${MOD_LINES} | ≤ 2000 |"
+          if [ "$MOD_LINES" -gt 2000 ]; then
+            DETAILS="${DETAILS} ⚠️ |"
+          else
+            DETAILS="${DETAILS} ✅ |"
+          fi
+
+          DETAILS="${DETAILS}\n| \`App.tsx\` | ${APP_LINES} | ≤ 500 |"
+          if [ "$APP_LINES" -gt 500 ]; then
+            DETAILS="${DETAILS} ⚠️ |"
+          else
+            DETAILS="${DETAILS} ✅ |"
+          fi
+
+          LARGE_COUNT=$(find src/ src-tauri/src/ \( -name '*.ts' -o -name '*.tsx' -o -name '*.rs' \) -exec wc -l {} + 2>/dev/null | \
+            grep -v total | awk '$1 > 500 {count++} END {print count+0}')
+
+          printf "%b" "$DETAILS" > /tmp/large_file_details.txt
+          echo "mod_lines=${MOD_LINES}" >> "$GITHUB_OUTPUT"
+          echo "app_lines=${APP_LINES}" >> "$GITHUB_OUTPUT"
+          echo "large_count=${LARGE_COUNT}" >> "$GITHUB_OUTPUT"
+
+      # ── Post / update PR comment ──
+      - name: Generate metrics comment
+        id: metrics_body
+        run: |
+          COMMIT_DETAILS=$(cat /tmp/commit_details.txt)
+          LARGE_FILE_DETAILS=$(cat /tmp/large_file_details.txt)
+
+          GATE_FAIL=0
+          OVERALL="✅ All gates passed"
+
+          if [ "${{ steps.commit_size.outputs.fail }}" = "1" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.bundle_size.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+
+          BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+          COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
+
+          cat > /tmp/metrics_comment.md << COMMENTEOF
+          <!-- pr-metrics-bot -->
+          ## 📏 Metrics Gate Report
+
+          **Status**: ${OVERALL}
+
+          ### Commit Size (≤ ${{ steps.commit_size.outputs.max_lines }} lines)  ${COMMIT_ICON}
+
+          | Commit | Lines Changed | Limit | Status | Subject |
+          |--------|--------------|-------|--------|---------|
+          ${COMMIT_DETAILS}
+
+          ### Bundle Size  ${BUNDLE_ICON}
+
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | JS bundle (raw) | ${{ steps.bundle_size.outputs.raw_kb }} KB | — | — |
+          | JS bundle (gzip) | ${{ steps.bundle_size.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle_size.outputs.limit_kb }} KB | ${BUNDLE_ICON} |
+
+          ### Code Readability (informational)
+
+          | File | Lines | Target | Status |
+          |------|-------|--------|--------|
+          ${LARGE_FILE_DETAILS}
+          | Files > 500 lines | ${{ steps.large_files.outputs.large_count }} | trend ↓ | ℹ️ |
+
+          ---
+          > 📊 Metrics defined in [\`docs/architecture/metrics.md\`](../blob/${{ github.head_ref }}/docs/architecture/metrics.md)
+          COMMENTEOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/metrics_comment.md
+
+          echo "gate_fail=${GATE_FAIL}" >> "$GITHUB_OUTPUT"
+
+      - name: Find existing metrics comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- pr-metrics-bot -->'
+
+      - name: Create or update metrics comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/metrics_comment.md
+          edit-mode: replace
+
+      - name: Fail if gates not met
+        if: steps.metrics_body.outputs.gate_fail == '1'
+        run: |
+          echo "::error::Metrics gate failed — check the PR comment for details."
+          exit 1
