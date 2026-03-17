@@ -160,3 +160,43 @@ fn perf_sample_serializes_correctly() {
     assert!(json.contains("\"elapsedMs\":42")); // camelCase
     assert!(json.contains("\"exceededThreshold\":false"));
 }
+
+// ── Metrics reporter: outputs structured data for CI comment ──
+
+#[test]
+fn z_report_metrics_for_ci() {
+    init_perf_clock();
+
+    // Process metrics
+    let metrics = get_process_metrics().expect("should return metrics");
+    let rss_mb = metrics.rss_bytes as f64 / (1024.0 * 1024.0);
+    let vms_mb = metrics.vms_bytes as f64 / (1024.0 * 1024.0);
+
+    // Command timing: measure a batch of get_process_metrics calls
+    let iterations = 50;
+    let mut times: Vec<u64> = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let (_, elapsed) = trace_command("get_process_metrics", || {
+            let _ = get_process_metrics();
+        });
+        times.push(elapsed);
+    }
+    times.sort();
+    let p50 = times[times.len() / 2];
+    let p95 = times[(times.len() as f64 * 0.95) as usize];
+    let max = *times.last().unwrap_or(&0);
+
+    // Output structured lines for CI to parse
+    // Format: METRIC:<name>=<value>
+    println!();
+    println!("METRIC:rss_mb={:.1}", rss_mb);
+    println!("METRIC:vms_mb={:.1}", vms_mb);
+    println!("METRIC:pid={}", metrics.pid);
+    println!("METRIC:platform={}", metrics.platform);
+    println!("METRIC:uptime_secs={:.2}", metrics.uptime_secs);
+    println!("METRIC:cmd_p50_ms={}", p50);
+    println!("METRIC:cmd_p95_ms={}", p95);
+    println!("METRIC:cmd_max_ms={}", max);
+    println!("METRIC:rss_limit_mb=80");
+    println!("METRIC:cmd_p95_limit_ms=100");
+}

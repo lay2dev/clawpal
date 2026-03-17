@@ -124,12 +124,23 @@ jobs:
           PASSED=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo 0)
           FAILED=$(echo "$OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+' || echo 0)
 
-          # Extract RSS from test output if available
-          RSS_LINE=$(echo "$OUTPUT" | grep -oP 'RSS.*?[0-9.]+ MB' | head -1 || echo "")
+          # Extract structured metrics from METRIC: lines
+          RSS_MB=$(echo "$OUTPUT" | grep -oP 'METRIC:rss_mb=\K[0-9.]+' || echo "N/A")
+          VMS_MB=$(echo "$OUTPUT" | grep -oP 'METRIC:vms_mb=\K[0-9.]+' || echo "N/A")
+          CMD_P50=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_p50_ms=\K[0-9]+' || echo "N/A")
+          CMD_P95=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_p95_ms=\K[0-9]+' || echo "N/A")
+          CMD_MAX=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_max_ms=\K[0-9]+' || echo "N/A")
+          UPTIME=$(echo "$OUTPUT" | grep -oP 'METRIC:uptime_secs=\K[0-9.]+' || echo "N/A")
 
           echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          echo "rss_mb=${RSS_MB}" >> "$GITHUB_OUTPUT"
+          echo "vms_mb=${VMS_MB}" >> "$GITHUB_OUTPUT"
+          echo "cmd_p50=${CMD_P50}" >> "$GITHUB_OUTPUT"
+          echo "cmd_p95=${CMD_P95}" >> "$GITHUB_OUTPUT"
+          echo "cmd_max=${CMD_MAX}" >> "$GITHUB_OUTPUT"
+          echo "uptime=${UPTIME}" >> "$GITHUB_OUTPUT"
 
           if [ "$EXIT_CODE" -ne 0 ]; then
             echo "pass=false" >> "$GITHUB_OUTPUT"
@@ -210,10 +221,14 @@ jobs:
 
           ### Perf Metrics E2E  $( [ "${{ steps.perf_tests.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
-          | Metric | Value | Status |
-          |--------|-------|--------|
-          | Tests passed | ${{ steps.perf_tests.outputs.passed }} | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
-          | Tests failed | ${{ steps.perf_tests.outputs.failed }} | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | Tests | ${{ steps.perf_tests.outputs.passed }} passed, ${{ steps.perf_tests.outputs.failed }} failed | 0 failures | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | RSS (test process) | ${{ steps.perf_tests.outputs.rss_mb }} MB | ≤ 80 MB | $( echo "${{ steps.perf_tests.outputs.rss_mb }}" | awk '{print ($1 <= 80) ? "✅" : "❌"}' ) |
+          | VMS (test process) | ${{ steps.perf_tests.outputs.vms_mb }} MB | — | ℹ️ |
+          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50 }} ms | — | ℹ️ |
+          | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95 }} ms | ≤ 100 ms | $( echo "${{ steps.perf_tests.outputs.cmd_p95 }}" | awk '{print ($1 <= 100) ? "✅" : "❌"}' ) |
+          | Command max latency | ${{ steps.perf_tests.outputs.cmd_max }} ms | — | ℹ️ |
 
           ### Code Readability (informational)
 
