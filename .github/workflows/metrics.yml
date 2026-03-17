@@ -324,10 +324,7 @@ jobs:
       - name: Install sshpass
         run: sudo apt-get install -y sshpass
 
-      - name: Build Docker OpenClaw container
-        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
-
-      - name: Start container
+      - name: Start container (reuses image from remote perf step)
         run: |
           docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
           for i in $(seq 1 15); do
