@@ -9,13 +9,12 @@
 
 ## 1. 工程健康度
 
-### 1.1 PR 质量
+### 1.1 Commit / PR 质量
 
 | 指标 | 基线值 (2026-03-17) | 目标 | 量化方式 | CI Gate |
 |------|---------------------|------|----------|---------|
+| 单 commit 变更行数 | 未追踪 | ≤ 500 行 | `git diff --stat` | ✅ |
 | PR 中位生命周期 | 1.0h | ≤ 4h | GitHub API | — |
-| PR 平均变更行数 | 993 行 | ≤ 500 行 | GitHub API | — |
-| PR > 1000 行占比 | 23% | ≤ 5% | GitHub API | — |
 
 ### 1.2 CI 稳定性
 
@@ -176,8 +175,36 @@ where
 
 ### 阶段 1: 立即可加（本 PR 后续 commit）
 
-1. **前端 bundle 大小 gate** — `ci.yml` frontend job 增加 `du` 检查
-2. **覆盖率不得下降 gate** — 已有 `coverage.yml`，确认 delta ≥ 0 时 fail
+1. **单 commit 变更行数 gate** — PR 中每个 commit 不超过 500 行（additions + deletions）
+2. **前端 bundle 大小 gate** — `ci.yml` frontend job 增加 `du` 检查
+3. **覆盖率不得下降 gate** — 已有 `coverage.yml`，确认 delta ≥ 0 时 fail
+
+**Commit 大小检查脚本**（加入 `ci.yml`）:
+```yaml
+- name: Check commit sizes
+  run: |
+    MAX_LINES=500
+    BASE="${{ github.event.pull_request.base.sha }}"
+    HEAD="${{ github.sha }}"
+    FAIL=0
+    for COMMIT in $(git rev-list $BASE..$HEAD); do
+      SHORT=$(git rev-parse --short $COMMIT)
+      SUBJECT=$(git log --format=%s -1 $COMMIT)
+      STAT=$(git diff --shortstat ${COMMIT}^..${COMMIT} 2>/dev/null || echo "0")
+      ADDS=$(echo "$STAT" | grep -oP '\d+ insertion' | grep -oP '\d+' || echo 0)
+      DELS=$(echo "$STAT" | grep -oP '\d+ deletion' | grep -oP '\d+' || echo 0)
+      TOTAL=$((${ADDS:-0} + ${DELS:-0}))
+      echo "$SHORT ($TOTAL lines): $SUBJECT"
+      if [ "$TOTAL" -gt "$MAX_LINES" ]; then
+        echo "::error::Commit $SHORT exceeds $MAX_LINES line limit ($TOTAL lines): $SUBJECT"
+        FAIL=1
+      fi
+    done
+    if [ "$FAIL" -eq 1 ]; then
+      echo "::error::One or more commits exceed the $MAX_LINES line limit. Split into smaller commits."
+      exit 1
+    fi
+```
 
 ### 阶段 2: 埋点后可加
 
