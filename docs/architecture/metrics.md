@@ -227,3 +227,39 @@ where
 - CI 成功率是否稳定在 90% 以上
 - 包体积是否异常增长
 - 新增 command 是否有对应的 contract test
+
+## Optimization Log
+
+### JS Bundle Size
+
+**Baseline**: 910 KB raw / 285 KB gzip (2026-03-17)
+
+**Optimization 1: Vendor chunk splitting** (vite.config.ts)
+- Split large vendor dependencies into separate chunks:
+  - `vendor-react`: react, react-dom (~140KB raw)
+  - `vendor-i18n`: i18next ecosystem (~80KB raw)
+  - `vendor-ui`: radix-ui, cmdk, CVA, clsx, tailwind-merge (~200KB raw)
+  - `vendor-icons`: lucide-react (~150KB raw)
+  - `vendor-diff`: react-diff-viewer-continued (lazy, ~100KB raw)
+- Expected impact: Better tree-shaking, smaller initial load, parallel chunk loading
+- Note: Total gzip may increase slightly due to less cross-chunk compression,
+  but initial load waterfall improves significantly
+
+### Remote SSH Command Latency
+
+**Baseline**: `openclaw status` 1981ms, `openclaw cron list` 1935ms (2026-03-17)
+
+The ~2s latency is dominated by OpenClaw CLI cold start (Node.js process spawn + module load).
+This is inherent to the CLI architecture and cannot be optimized in ClawPal.
+
+Potential future optimization: persistent SSH connection + daemon mode.
+
+### Home Page Models Probe
+
+**Baseline**: 106ms with 50ms mock latency (2026-03-17)
+
+The models probe measures time from mount to `modelProfiles` state population.
+With localStorage cache seeding (readPersistedReadCache), real-app first render is near-instant.
+The 106ms in E2E is the 50ms mock latency + React re-render cycle.
+
+Optimization: Not actionable — the real bottleneck (CLI call) is already cached client-side.
