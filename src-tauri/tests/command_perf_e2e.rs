@@ -207,7 +207,7 @@ fn z_local_perf_report_for_ci() {
         (
             "list_recipes",
             Box::new(|| {
-                let _ = list_recipes();
+                let _ = list_recipes(None);
             }),
         ),
     ];

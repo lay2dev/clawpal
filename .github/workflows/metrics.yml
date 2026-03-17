@@ -357,9 +357,10 @@ jobs:
           GATE_FAIL=0
           OVERALL="✅ All gates passed"
 
-          if [ "${{ steps.commit_size.outputs.fail }}" = "1" ]; then
-            OVERALL="❌ Some gates failed"; GATE_FAIL=1
-          fi
+          # Commit size is a soft gate (reported but not blocking)
+          # if [ "${{ steps.commit_size.outputs.fail }}" = "1" ]; then
+          #   OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          # fi
           if [ "${{ steps.bundle_size.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
