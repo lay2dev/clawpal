@@ -5,6 +5,7 @@ pub async fn remote_backup_before_upgrade(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<BackupInfo, String> {
+    timed_async!("remote_backup_before_upgrade", {
     let now_secs = unix_timestamp_secs();
     let now_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(now_secs as i64, 0);
     let name = now_dt
@@ -41,6 +42,7 @@ pub async fn remote_backup_before_upgrade(
         created_at: format_timestamp_from_unix(now_secs),
         size_bytes,
     })
+    })
 }
 
 #[tauri::command]
@@ -48,6 +50,7 @@ pub async fn remote_list_backups(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<BackupInfo>, String> {
+    timed_async!("remote_list_backups", {
     // Migrate remote data from legacy path ~/.openclaw/.clawpal → ~/.clawpal
     let _ = pool
         .exec_login(
@@ -111,6 +114,7 @@ pub async fn remote_list_backups(
 
     backups.sort_by(|a, b| b.name.cmp(&a.name));
     Ok(backups)
+    })
 }
 
 #[tauri::command]
@@ -119,6 +123,7 @@ pub async fn remote_restore_from_backup(
     host_id: String,
     backup_name: String,
 ) -> Result<String, String> {
+    timed_async!("remote_restore_from_backup", {
     let escaped_name = shell_escape(&backup_name);
     let cmd = format!(
         concat!(
@@ -139,6 +144,7 @@ pub async fn remote_restore_from_backup(
     }
 
     Ok(format!("Restored from backup '{}'", backup_name))
+    })
 }
 
 #[tauri::command]
@@ -146,6 +152,7 @@ pub async fn remote_run_openclaw_upgrade(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<String, String> {
+    timed_async!("remote_run_openclaw_upgrade", {
     // Use the official install script with --no-prompt for non-interactive SSH.
     // The script handles npm prefix/permissions, bin links, and PATH fixups
     // that plain `npm install -g` misses (e.g. stale /usr/bin/openclaw symlinks).
@@ -184,6 +191,7 @@ pub async fn remote_run_openclaw_upgrade(
     }
 
     Ok(combined)
+    })
 }
 
 #[tauri::command]
@@ -191,6 +199,7 @@ pub async fn remote_check_openclaw_update(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
+    timed_async!("remote_check_openclaw_update", {
     // Get installed version and extract clean semver — don't fail if binary not found
     let installed_version = match pool.exec_login(&host_id, "openclaw --version").await {
         Ok(r) => extract_version_from_text(r.stdout.trim())
@@ -213,10 +222,12 @@ pub async fn remote_check_openclaw_update(
         "latestVersion": latest_version,
         "installedVersion": installed_version,
     }))
+    })
 }
 
 #[tauri::command]
 pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
+    timed_sync!("backup_before_upgrade", {
     let paths = resolve_paths();
     let backups_dir = paths.clawpal_dir.join("backups");
     fs::create_dir_all(&backups_dir).map_err(|e| format!("Failed to create backups dir: {e}"))?;
@@ -251,10 +262,12 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
         created_at: format_timestamp_from_unix(now_secs),
         size_bytes: total_bytes,
     })
+    })
 }
 
 #[tauri::command]
 pub fn list_backups() -> Result<Vec<BackupInfo>, String> {
+    timed_sync!("list_backups", {
     let paths = resolve_paths();
     let backups_dir = paths.clawpal_dir.join("backups");
     if !backups_dir.exists() {
@@ -286,10 +299,12 @@ pub fn list_backups() -> Result<Vec<BackupInfo>, String> {
     }
     backups.sort_by(|a, b| b.name.cmp(&a.name));
     Ok(backups)
+    })
 }
 
 #[tauri::command]
 pub fn restore_from_backup(backup_name: String) -> Result<String, String> {
+    timed_sync!("restore_from_backup", {
     let paths = resolve_paths();
     let backup_dir = paths.clawpal_dir.join("backups").join(&backup_name);
     if !backup_dir.exists() {
@@ -311,10 +326,12 @@ pub fn restore_from_backup(backup_name: String) -> Result<String, String> {
     restore_dir_recursive(&backup_dir, &paths.base_dir, &skip_dirs)?;
 
     Ok(format!("Restored from backup '{}'", backup_name))
+    })
 }
 
 #[tauri::command]
 pub fn delete_backup(backup_name: String) -> Result<bool, String> {
+    timed_sync!("delete_backup", {
     let paths = resolve_paths();
     let backup_dir = paths.clawpal_dir.join("backups").join(&backup_name);
     if !backup_dir.exists() {
@@ -322,6 +339,7 @@ pub fn delete_backup(backup_name: String) -> Result<bool, String> {
     }
     fs::remove_dir_all(&backup_dir).map_err(|e| format!("Failed to delete backup: {e}"))?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -330,6 +348,7 @@ pub async fn remote_delete_backup(
     host_id: String,
     backup_name: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_delete_backup", {
     let escaped_name = shell_escape(&backup_name);
     let cmd = format!(
         "BDIR=\"$HOME/.clawpal/backups/\"{name}; [ -d \"$BDIR\" ] && rm -rf \"$BDIR\" && echo 'deleted' || echo 'not_found'",
@@ -338,10 +357,13 @@ pub async fn remote_delete_backup(
 
     let result = pool.exec_login(&host_id, &cmd).await?;
     Ok(result.stdout.trim() == "deleted")
+    })
 }
 
 #[tauri::command]
 pub fn check_openclaw_update() -> Result<OpenclawUpdateCheck, String> {
+    timed_sync!("check_openclaw_update", {
     let paths = resolve_paths();
     check_openclaw_update_cached(&paths, true)
+    })
 }

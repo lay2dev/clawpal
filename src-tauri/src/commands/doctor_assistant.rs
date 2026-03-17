@@ -4292,12 +4292,14 @@ fn build_temp_gateway_record(
 pub async fn diagnose_doctor_assistant(
     app: AppHandle,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    timed_async!("diagnose_doctor_assistant", {
     let run_id = Uuid::new_v4().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         diagnose_doctor_assistant_local_impl(&app, &run_id, DOCTOR_ASSISTANT_TARGET_PROFILE)
     })
     .await
     .map_err(|error| error.to_string())?
+    })
 }
 
 #[tauri::command]
@@ -4306,6 +4308,7 @@ pub async fn remote_diagnose_doctor_assistant(
     host_id: String,
     app: AppHandle,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    timed_async!("remote_diagnose_doctor_assistant", {
     let run_id = Uuid::new_v4().to_string();
     diagnose_doctor_assistant_remote_impl(
         &pool,
@@ -4315,6 +4318,7 @@ pub async fn remote_diagnose_doctor_assistant(
         DOCTOR_ASSISTANT_TARGET_PROFILE,
     )
     .await
+    })
 }
 
 #[tauri::command]
@@ -4323,6 +4327,7 @@ pub async fn repair_doctor_assistant(
     temp_provider_profile_id: Option<String>,
     app: AppHandle,
 ) -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("repair_doctor_assistant", {
     let run_id = Uuid::new_v4().to_string();
     tauri::async_runtime::spawn_blocking(move || -> Result<RescuePrimaryRepairResult, String> {
         let paths = resolve_paths();
@@ -4654,6 +4659,7 @@ pub async fn repair_doctor_assistant(
     })
     .await
     .map_err(|error| error.to_string())?
+    })
 }
 
 #[tauri::command]
@@ -4664,6 +4670,7 @@ pub async fn remote_repair_doctor_assistant(
     temp_provider_profile_id: Option<String>,
     app: AppHandle,
 ) -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("remote_repair_doctor_assistant", {
     let run_id = Uuid::new_v4().to_string();
     let paths = resolve_paths();
     let before = match current_diagnosis {
@@ -5113,6 +5120,7 @@ pub async fn remote_repair_doctor_assistant(
         before,
         after,
     ))
+    })
 }
 
 fn resolve_main_port_from_diagnosis(diagnosis: &RescuePrimaryDiagnosisResult) -> u16 {

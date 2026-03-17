@@ -762,6 +762,7 @@ pub async fn remote_run_doctor(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
+    timed_async!("remote_run_doctor", {
     let result = pool
         .exec_login(
             &host_id,
@@ -779,6 +780,7 @@ pub async fn remote_run_doctor(
         "issues": [],
         "rawOutput": result.stdout,
     }))
+    })
 }
 
 #[tauri::command]
@@ -787,6 +789,7 @@ pub async fn remote_fix_issues(
     host_id: String,
     ids: Vec<String>,
 ) -> Result<FixResult, String> {
+    timed_async!("remote_fix_issues", {
     let (config_path, raw, _cfg) =
         remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
     let mut cfg = clawpal_core::doctor::parse_json5_document_or_default(&raw);
@@ -803,6 +806,7 @@ pub async fn remote_fix_issues(
         applied,
         remaining_issues: remaining,
     })
+    })
 }
 
 #[tauri::command]
@@ -810,6 +814,7 @@ pub async fn remote_get_system_status(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<StatusLight, String> {
+    timed_async!("remote_get_system_status", {
     // Tier 1: fast, essential — health check + config + real agent list.
     let (config_res, agents_res, pgrep_res) = tokio::join!(
         run_openclaw_remote_with_autofix(&pool, &host_id, &["config", "get", "agents", "--json"]),
@@ -886,6 +891,7 @@ pub async fn remote_get_system_status(
         fallback_models,
         ssh_diagnostic,
     })
+    })
 }
 
 #[tauri::command]
@@ -895,6 +901,7 @@ pub async fn probe_ssh_connection_profile(
     request_id: String,
     app: AppHandle,
 ) -> Result<SshConnectionProfile, String> {
+    timed_async!("probe_ssh_connection_profile", {
     let emitter = ProbeEmitter {
         app,
         host_id: host_id.clone(),
@@ -916,6 +923,7 @@ pub async fn probe_ssh_connection_profile(
             Err(message)
         }
     }
+    })
 }
 
 #[tauri::command]
@@ -923,12 +931,14 @@ pub async fn remote_get_ssh_connection_profile(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<SshConnectionProfile, String> {
+    timed_async!("remote_get_ssh_connection_profile", {
     timeout(
         Duration::from_secs(SSH_PROBE_TOTAL_TIMEOUT_SECS),
         probe_ssh_connection_profile_impl(&pool, &host_id, None),
     )
     .await
     .map_err(|_| "ssh probe timed out".to_string())?
+    })
 }
 
 #[tauri::command]
@@ -936,6 +946,7 @@ pub async fn remote_get_status_extra(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<StatusExtra, String> {
+    timed_async!("remote_get_status_extra", {
     let detect_duplicates_script = concat!(
         "seen=''; for p in $(which -a openclaw 2>/dev/null) ",
         "\"$HOME/.npm-global/bin/openclaw\" \"/usr/local/bin/openclaw\" \"/opt/homebrew/bin/openclaw\"; do ",
@@ -987,10 +998,12 @@ pub async fn remote_get_status_extra(
         openclaw_version,
         duplicate_installs,
     })
+    })
 }
 
 #[tauri::command]
 pub async fn get_status_light() -> Result<StatusLight, String> {
+    timed_async!("get_status_light", {
     tauri::async_runtime::spawn_blocking(|| {
         let paths = resolve_paths();
         let cfg = read_openclaw_config(&paths)?;
@@ -1030,10 +1043,12 @@ pub async fn get_status_light() -> Result<StatusLight, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub async fn get_status_extra() -> Result<StatusExtra, String> {
+    timed_async!("get_status_extra", {
     tauri::async_runtime::spawn_blocking(|| {
         let openclaw_version = {
             let mut cache = OPENCLAW_VERSION_CACHE.lock().unwrap();
@@ -1052,10 +1067,12 @@ pub async fn get_status_extra() -> Result<StatusExtra, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub fn get_system_status() -> Result<SystemStatus, String> {
+    timed_sync!("get_system_status", {
     let paths = resolve_paths();
     ensure_dirs(&paths)?;
     let cfg = read_openclaw_config(&paths)?;
@@ -1098,16 +1115,20 @@ pub fn get_system_status() -> Result<SystemStatus, String> {
         sessions,
         openclaw_update,
     })
+    })
 }
 
 #[tauri::command]
 pub fn run_doctor_command() -> Result<DoctorReport, String> {
+    timed_sync!("run_doctor_command", {
     let paths = resolve_paths();
     Ok(run_doctor(&paths))
+    })
 }
 
 #[tauri::command]
 pub fn fix_issues(ids: Vec<String>) -> Result<FixResult, String> {
+    timed_sync!("fix_issues", {
     let paths = resolve_paths();
     let issues = run_doctor(&paths);
     let mut fixable = Vec::new();
@@ -1130,5 +1151,6 @@ pub fn fix_issues(ids: Vec<String>) -> Result<FixResult, String> {
         ok: true,
         applied,
         remaining_issues: remaining,
+    })
     })
 }

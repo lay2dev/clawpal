@@ -12,11 +12,14 @@ pub(crate) fn read_hosts_from_registry() -> Result<Vec<SshHostConfig>, String> {
 
 #[tauri::command]
 pub fn list_ssh_hosts() -> Result<Vec<SshHostConfig>, String> {
+    timed_sync!("list_ssh_hosts", {
     read_hosts_from_registry()
+    })
 }
 
 #[tauri::command]
 pub fn list_ssh_config_hosts() -> Result<Vec<SshConfigHostSuggestion>, String> {
+    timed_sync!("list_ssh_config_hosts", {
     let Some(path) = ssh_config_path() else {
         return Ok(Vec::new());
     };
@@ -26,16 +29,21 @@ pub fn list_ssh_config_hosts() -> Result<Vec<SshConfigHostSuggestion>, String> {
     let data =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     Ok(clawpal_core::ssh::config::parse_ssh_config_hosts(&data))
+    })
 }
 
 #[tauri::command]
 pub fn upsert_ssh_host(host: SshHostConfig) -> Result<SshHostConfig, String> {
+    timed_sync!("upsert_ssh_host", {
     clawpal_core::ssh::registry::upsert_ssh_host(host)
+    })
 }
 
 #[tauri::command]
 pub fn delete_ssh_host(host_id: String) -> Result<bool, String> {
+    timed_sync!("delete_ssh_host", {
     clawpal_core::ssh::registry::delete_ssh_host(&host_id)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +202,7 @@ pub async fn ssh_connect(
     host_id: String,
     app: AppHandle,
 ) -> Result<bool, String> {
+    timed_async!("ssh_connect", {
     crate::commands::logs::log_dev(format!("[dev][ssh_connect] begin host_id={host_id}"));
     // If already connected and handle is alive, reuse
     if pool.is_connected(&host_id).await {
@@ -269,6 +278,7 @@ pub async fn ssh_connect(
         SshDiagnosticSuccessTrigger::ConnectEstablished,
     );
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -278,6 +288,7 @@ pub async fn ssh_connect_with_passphrase(
     passphrase: String,
     app: AppHandle,
 ) -> Result<bool, String> {
+    timed_async!("ssh_connect_with_passphrase", {
     crate::commands::logs::log_dev(format!(
         "[dev][ssh_connect_with_passphrase] begin host_id={host_id}"
     ));
@@ -346,6 +357,7 @@ pub async fn ssh_connect_with_passphrase(
         SshDiagnosticSuccessTrigger::ConnectEstablished,
     );
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -353,8 +365,10 @@ pub async fn ssh_disconnect(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<bool, String> {
+    timed_async!("ssh_disconnect", {
     pool.disconnect(&host_id).await?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -362,11 +376,13 @@ pub async fn ssh_status(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<String, String> {
+    timed_async!("ssh_status", {
     if pool.is_connected(&host_id).await {
         Ok("connected".to_string())
     } else {
         Ok("disconnected".to_string())
     }
+    })
 }
 
 #[tauri::command]
@@ -374,7 +390,9 @@ pub async fn get_ssh_transfer_stats(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<SshTransferStats, String> {
+    timed_async!("get_ssh_transfer_stats", {
     Ok(pool.get_transfer_stats(&host_id).await)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +406,7 @@ pub async fn ssh_exec(
     command: String,
     app: AppHandle,
 ) -> Result<SshExecResult, String> {
+    timed_async!("ssh_exec", {
     pool.exec(&host_id, &command)
         .await
         .map(|result| {
@@ -401,6 +420,7 @@ pub async fn ssh_exec(
             result
         })
         .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
+    })
 }
 
 #[tauri::command]
@@ -410,6 +430,7 @@ pub async fn sftp_read_file(
     path: String,
     app: AppHandle,
 ) -> Result<String, String> {
+    timed_async!("sftp_read_file", {
     pool.sftp_read(&host_id, &path)
         .await
         .map(|result| {
@@ -425,6 +446,7 @@ pub async fn sftp_read_file(
         .map_err(|error| {
             make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
         })
+    })
 }
 
 #[tauri::command]
@@ -435,6 +457,7 @@ pub async fn sftp_write_file(
     content: String,
     app: AppHandle,
 ) -> Result<bool, String> {
+    timed_async!("sftp_write_file", {
     pool.sftp_write(&host_id, &path, &content)
         .await
         .map_err(|error| {
@@ -448,6 +471,7 @@ pub async fn sftp_write_file(
         SshDiagnosticSuccessTrigger::RoutineOperation,
     );
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -457,6 +481,7 @@ pub async fn sftp_list_dir(
     path: String,
     app: AppHandle,
 ) -> Result<Vec<SftpEntry>, String> {
+    timed_async!("sftp_list_dir", {
     pool.sftp_list(&host_id, &path)
         .await
         .map(|result| {
@@ -472,6 +497,7 @@ pub async fn sftp_list_dir(
         .map_err(|error| {
             make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
         })
+    })
 }
 
 #[tauri::command]
@@ -481,6 +507,7 @@ pub async fn sftp_remove_file(
     path: String,
     app: AppHandle,
 ) -> Result<bool, String> {
+    timed_async!("sftp_remove_file", {
     pool.sftp_remove(&host_id, &path).await.map_err(|error| {
         make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
     })?;
@@ -492,6 +519,7 @@ pub async fn sftp_remove_file(
         SshDiagnosticSuccessTrigger::RoutineOperation,
     );
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -501,6 +529,7 @@ pub async fn diagnose_ssh(
     intent: String,
     app: AppHandle,
 ) -> Result<SshDiagnosticReport, String> {
+    timed_async!("diagnose_ssh", {
     let intent = intent.parse::<SshIntent>().map_err(|_| {
         make_ssh_command_error(
             &app,
@@ -582,4 +611,5 @@ pub async fn diagnose_ssh(
     };
     emit_ssh_diagnostic(&app, &report);
     Ok(report)
+    })
 }

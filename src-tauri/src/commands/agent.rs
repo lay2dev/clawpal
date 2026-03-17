@@ -8,6 +8,7 @@ pub async fn remote_setup_agent_identity(
     name: String,
     emoji: Option<String>,
 ) -> Result<bool, String> {
+    timed_async!("remote_setup_agent_identity", {
     let agent_id = agent_id.trim().to_string();
     let name = name.trim().to_string();
     if agent_id.is_empty() {
@@ -49,6 +50,7 @@ pub async fn remote_setup_agent_identity(
     pool.sftp_write(&host_id, &identity_path, &content).await?;
 
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -59,6 +61,7 @@ pub async fn remote_chat_via_openclaw(
     message: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
+    timed_async!("remote_chat_via_openclaw", {
     let escaped_msg = message.replace('\'', "'\\''");
     let escaped_agent = agent_id.replace('\'', "'\\''");
     let mut cmd = format!(
@@ -87,6 +90,7 @@ pub async fn remote_chat_via_openclaw(
         "No JSON in remote openclaw output: {}",
         result.stdout
     ))
+    })
 }
 
 #[tauri::command]
@@ -95,6 +99,7 @@ pub fn create_agent(
     model_value: Option<String>,
     independent: Option<bool>,
 ) -> Result<AgentOverview, String> {
+    timed_sync!("create_agent", {
     let agent_id = agent_id.trim().to_string();
     if agent_id.is_empty() {
         return Err("Agent ID is required".into());
@@ -170,10 +175,12 @@ pub fn create_agent(
         online: false,
         workspace,
     })
+    })
 }
 
 #[tauri::command]
 pub fn delete_agent(agent_id: String) -> Result<bool, String> {
+    timed_sync!("delete_agent", {
     let agent_id = agent_id.trim().to_string();
     if agent_id.is_empty() {
         return Err("Agent ID is required".into());
@@ -212,6 +219,7 @@ pub fn delete_agent(agent_id: String) -> Result<bool, String> {
 
     write_config_with_snapshot(&paths, &current, &cfg, "delete-agent")?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -220,6 +228,7 @@ pub fn setup_agent_identity(
     name: String,
     emoji: Option<String>,
 ) -> Result<bool, String> {
+    timed_sync!("setup_agent_identity", {
     let agent_id = agent_id.trim().to_string();
     let name = name.trim().to_string();
     if agent_id.is_empty() {
@@ -252,6 +261,7 @@ pub fn setup_agent_identity(
         .map_err(|e| format!("Failed to write IDENTITY.md: {}", e))?;
 
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -260,6 +270,7 @@ pub async fn chat_via_openclaw(
     message: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
+    timed_async!("chat_via_openclaw", {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = resolve_paths();
         if let Err(err) = sync_main_auth_for_active_config(&paths) {
@@ -288,4 +299,5 @@ pub async fn chat_via_openclaw(
     })
     .await
     .map_err(|e| format!("Task join failed: {}", e))?
+    })
 }

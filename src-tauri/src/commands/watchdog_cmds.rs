@@ -7,6 +7,7 @@ use crate::models::resolve_paths;
 
 #[tauri::command]
 pub async fn get_watchdog_status() -> Result<Value, String> {
+    timed_async!("get_watchdog_status", {
     tauri::async_runtime::spawn_blocking(|| {
         let paths = resolve_paths();
         let wd_dir = paths.clawpal_dir.join("watchdog");
@@ -55,10 +56,12 @@ pub async fn get_watchdog_status() -> Result<Value, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub fn deploy_watchdog(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    timed_sync!("deploy_watchdog", {
     let paths = resolve_paths();
     let wd_dir = paths.clawpal_dir.join("watchdog");
     std::fs::create_dir_all(&wd_dir).map_err(|e| e.to_string())?;
@@ -77,10 +80,12 @@ pub fn deploy_watchdog(app_handle: tauri::AppHandle) -> Result<bool, String> {
     std::fs::write(wd_dir.join("watchdog.js"), content).map_err(|e| e.to_string())?;
     crate::logging::log_info("Watchdog deployed");
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn start_watchdog() -> Result<bool, String> {
+    timed_sync!("start_watchdog", {
     let paths = resolve_paths();
     let wd_dir = paths.clawpal_dir.join("watchdog");
     let script = wd_dir.join("watchdog.js");
@@ -125,10 +130,12 @@ pub fn start_watchdog() -> Result<bool, String> {
     // PID file is written by watchdog.js itself via acquirePidFile()
     crate::logging::log_info("Watchdog started");
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn stop_watchdog() -> Result<bool, String> {
+    timed_sync!("stop_watchdog", {
     let paths = resolve_paths();
     let pid_path = paths.clawpal_dir.join("watchdog").join("watchdog.pid");
 
@@ -146,10 +153,12 @@ pub fn stop_watchdog() -> Result<bool, String> {
     let _ = std::fs::remove_file(&pid_path);
     crate::logging::log_info("Watchdog stopped");
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn uninstall_watchdog() -> Result<bool, String> {
+    timed_sync!("uninstall_watchdog", {
     let paths = resolve_paths();
     let wd_dir = paths.clawpal_dir.join("watchdog");
 
@@ -170,4 +179,5 @@ pub fn uninstall_watchdog() -> Result<bool, String> {
     }
     crate::logging::log_info("Watchdog uninstalled");
     Ok(true)
+    })
 }

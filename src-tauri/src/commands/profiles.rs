@@ -415,8 +415,10 @@ pub async fn remote_list_model_profiles(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ModelProfile>, String> {
+    timed_async!("remote_list_model_profiles", {
     let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     Ok(profiles)
+    })
 }
 
 #[tauri::command]
@@ -425,6 +427,7 @@ pub async fn remote_upsert_model_profile(
     host_id: String,
     profile: ModelProfile,
 ) -> Result<ModelProfile, String> {
+    timed_async!("remote_upsert_model_profile", {
     let content = pool
         .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
         .await
@@ -437,6 +440,7 @@ pub async fn remote_upsert_model_profile(
     pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
         .await?;
     Ok(saved)
+    })
 }
 
 #[tauri::command]
@@ -445,6 +449,7 @@ pub async fn remote_delete_model_profile(
     host_id: String,
     profile_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_delete_model_profile", {
     let content = pool
         .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
         .await
@@ -458,6 +463,7 @@ pub async fn remote_delete_model_profile(
     pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
         .await?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -465,6 +471,7 @@ pub async fn remote_resolve_api_keys(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ResolvedApiKey>, String> {
+    timed_async!("remote_resolve_api_keys", {
     let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles)
         .await
@@ -497,6 +504,7 @@ pub async fn remote_resolve_api_keys(
         ));
     }
     Ok(out)
+    })
 }
 
 #[tauri::command]
@@ -505,6 +513,7 @@ pub async fn remote_test_model_profile(
     host_id: String,
     profile_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_test_model_profile", {
     let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     let profile = profiles
         .into_iter()
@@ -532,6 +541,7 @@ pub async fn remote_test_model_profile(
     .map_err(|e| format!("Task join failed: {e}"))??;
 
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -539,8 +549,10 @@ pub async fn remote_extract_model_profiles_from_config(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<ExtractModelProfilesResult, String> {
+    timed_async!("remote_extract_model_profiles_from_config", {
     let (_, result) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     Ok(result)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +572,7 @@ pub async fn remote_sync_profiles_to_local_auth(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<RemoteAuthSyncResult, String> {
+    timed_async!("remote_sync_profiles_to_local_auth", {
     let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     if remote_profiles.is_empty() {
         return Ok(RemoteAuthSyncResult {
@@ -655,6 +668,7 @@ pub async fn remote_sync_profiles_to_local_auth(
         resolved_keys,
         unresolved_keys,
         failed_key_resolves,
+    })
     })
 }
 
@@ -973,6 +987,7 @@ pub async fn push_related_secrets_to_remote(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<RelatedSecretPushResult, String> {
+    timed_async!("push_related_secrets_to_remote", {
     let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
     let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
@@ -1062,12 +1077,14 @@ pub async fn push_related_secrets_to_remote(
         skipped_providers: skipped,
         failed_providers: failed,
     })
+    })
 }
 
 #[tauri::command]
 pub fn push_model_profiles_to_local_openclaw(
     profile_ids: Vec<String>,
 ) -> Result<ProfilePushResult, String> {
+    timed_sync!("push_model_profiles_to_local_openclaw", {
     let paths = resolve_paths();
     let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
     if prepared.is_empty() {
@@ -1134,6 +1151,7 @@ pub fn push_model_profiles_to_local_openclaw(
         written_auth_entries,
         blocked_profiles,
     })
+    })
 }
 
 #[tauri::command]
@@ -1142,6 +1160,7 @@ pub async fn push_model_profiles_to_remote_openclaw(
     host_id: String,
     profile_ids: Vec<String>,
 ) -> Result<ProfilePushResult, String> {
+    timed_async!("push_model_profiles_to_remote_openclaw", {
     let paths = resolve_paths();
     let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
     if prepared.is_empty() {
@@ -1226,6 +1245,7 @@ pub async fn push_model_profiles_to_remote_openclaw(
         written_model_entries,
         written_auth_entries,
         blocked_profiles,
+    })
     })
 }
 
@@ -1581,6 +1601,7 @@ mod tests {
 
 #[tauri::command]
 pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
+    timed_sync!("get_cached_model_catalog", {
     let paths = resolve_paths();
     let cache_path = model_catalog_cache_path(&paths);
     let current_version = resolve_openclaw_version();
@@ -1591,22 +1612,28 @@ pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
         return Ok(catalog);
     }
     Ok(Vec::new())
+    })
 }
 
 #[tauri::command]
 pub fn refresh_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
+    timed_sync!("refresh_model_catalog", {
     let paths = resolve_paths();
     load_model_catalog(&paths)
+    })
 }
 
 #[tauri::command]
 pub fn list_model_profiles() -> Result<Vec<ModelProfile>, String> {
+    timed_sync!("list_model_profiles", {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
     clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult, String> {
+    timed_sync!("extract_model_profiles_from_config", {
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
     let profiles = load_model_profiles(&paths);
@@ -1617,10 +1644,12 @@ pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult
     }
 
     Ok(result)
+    })
 }
 
 #[tauri::command]
 pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, String> {
+    timed_sync!("upsert_model_profile", {
     let paths = resolve_paths();
     let path = model_profiles_path(&paths);
     let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
@@ -1634,16 +1663,20 @@ pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, Strin
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(saved)
+    })
 }
 
 #[tauri::command]
 pub fn delete_model_profile(profile_id: String) -> Result<bool, String> {
+    timed_sync!("delete_model_profile", {
     let openclaw = clawpal_core::openclaw::OpenclawCli::new();
     clawpal_core::profile::delete_profile(&openclaw, &profile_id).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion, String> {
+    timed_sync!("resolve_provider_auth", {
     let provider_trimmed = provider.trim();
     if provider_trimmed.is_empty() {
         return Ok(ProviderAuthSuggestion {
@@ -1718,10 +1751,12 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
         has_key: false,
         source: String::new(),
     })
+    })
 }
 
 #[tauri::command]
 pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
+    timed_sync!("resolve_api_keys", {
     let paths = resolve_paths();
     let profiles = load_model_profiles(&paths);
     let global_base = local_global_openclaw_base_dir();
@@ -1747,10 +1782,12 @@ pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
         ));
     }
     Ok(out)
+    })
 }
 
 #[tauri::command]
 pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
+    timed_async!("test_model_profile", {
     let paths = resolve_paths();
     let profiles = load_model_profiles(&paths);
     let profile = profiles
@@ -1792,6 +1829,7 @@ pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
     .map_err(|e| format!("Task join failed: {e}"))??;
 
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -1799,6 +1837,7 @@ pub async fn remote_refresh_model_catalog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ModelCatalogProvider>, String> {
+    timed_async!("remote_refresh_model_catalog", {
     let paths = resolve_paths();
     let cache_path = remote_model_catalog_cache_path(&paths, &host_id);
     let remote_version = match pool.exec_login(&host_id, "openclaw --version").await {
@@ -1836,4 +1875,5 @@ pub async fn remote_refresh_model_catalog(
         }
     }
     Err("Failed to load remote model catalog from openclaw CLI".into())
+    })
 }

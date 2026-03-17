@@ -70,6 +70,7 @@ pub async fn remote_read_app_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
+    timed_async!("remote_read_app_log", {
     let n = clamp_lines(lines);
     let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "app");
     log_debug(&format!(
@@ -82,6 +83,7 @@ pub async fn remote_read_app_log(
         error
     })?;
     Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -90,6 +92,7 @@ pub async fn remote_read_error_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
+    timed_async!("remote_read_error_log", {
     let n = clamp_lines(lines);
     let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "error");
     log_debug(&format!(
@@ -102,6 +105,7 @@ pub async fn remote_read_error_log(
         error
     })?;
     Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -110,6 +114,7 @@ pub async fn remote_read_helper_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
+    timed_async!("remote_read_helper_log", {
     let n = clamp_lines(lines);
     let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "helper");
     log_debug(&format!(
@@ -122,6 +127,7 @@ pub async fn remote_read_helper_log(
         error
     })?;
     Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -130,6 +136,7 @@ pub async fn remote_read_gateway_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
+    timed_async!("remote_read_gateway_log", {
     let n = clamp_lines(lines);
     let cmd = remote_gateway_log_command(n);
     log_debug(&format!(
@@ -142,6 +149,7 @@ pub async fn remote_read_gateway_log(
         error
     })?;
     Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -150,6 +158,7 @@ pub async fn remote_read_gateway_error_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
+    timed_async!("remote_read_gateway_error_log", {
     let n = clamp_lines(lines);
     let cmd = clawpal_core::doctor::remote_gateway_error_log_tail_script(n);
     log_debug(&format!(
@@ -162,4 +171,5 @@ pub async fn remote_read_gateway_error_log(
         error
     })?;
     Ok(result.stdout)
+    })
 }

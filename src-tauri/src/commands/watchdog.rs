@@ -5,6 +5,7 @@ pub async fn remote_get_watchdog_status(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
+    timed_async!("remote_get_watchdog_status", {
     let status_raw = pool
         .exec(
             &host_id,
@@ -29,6 +30,7 @@ pub async fn remote_get_watchdog_status(
         clawpal_core::watchdog::parse_watchdog_status(&status_raw, &alive_output).extra;
     status.insert("deployed".into(), Value::Bool(deployed));
     Ok(Value::Object(status))
+    })
 }
 
 #[tauri::command]
@@ -37,6 +39,7 @@ pub async fn remote_deploy_watchdog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_deploy_watchdog", {
     let resource_path = app_handle
         .path()
         .resolve(
@@ -51,6 +54,7 @@ pub async fn remote_deploy_watchdog(
     pool.sftp_write(&host_id, "~/.clawpal/watchdog/watchdog.js", &content)
         .await?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -58,6 +62,7 @@ pub async fn remote_start_watchdog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_start_watchdog", {
     let pid_raw = pool
         .sftp_read(&host_id, "~/.clawpal/watchdog/watchdog.pid")
         .await;
@@ -77,6 +82,7 @@ pub async fn remote_start_watchdog(
     pool.exec(&host_id, cmd).await?;
     // watchdog.js writes its own PID file to ~/.clawpal/watchdog/
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -84,6 +90,7 @@ pub async fn remote_stop_watchdog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_stop_watchdog", {
     let pid_raw = pool
         .sftp_read(&host_id, "~/.clawpal/watchdog/watchdog.pid")
         .await;
@@ -96,6 +103,7 @@ pub async fn remote_stop_watchdog(
         .exec(&host_id, "rm -f ~/.clawpal/watchdog/watchdog.pid")
         .await;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -103,6 +111,7 @@ pub async fn remote_uninstall_watchdog(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_uninstall_watchdog", {
     // Stop first
     let pid_raw = pool
         .sftp_read(&host_id, "~/.clawpal/watchdog/watchdog.pid")
@@ -115,4 +124,5 @@ pub async fn remote_uninstall_watchdog(
     // Remove entire directory
     let _ = pool.exec(&host_id, "rm -rf ~/.clawpal/watchdog").await;
     Ok(true)
+    })
 }

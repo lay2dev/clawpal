@@ -5,11 +5,13 @@ pub async fn remote_list_cron_jobs(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
+    timed_async!("remote_list_cron_jobs", {
     let raw = pool.sftp_read(&host_id, "~/.openclaw/cron/jobs.json").await;
     match raw {
         Ok(text) => Ok(parse_cron_jobs(&text)),
         Err(_) => Ok(Value::Array(vec![])),
     }
+    })
 }
 
 #[tauri::command]
@@ -19,6 +21,7 @@ pub async fn remote_get_cron_runs(
     job_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<Value>, String> {
+    timed_async!("remote_get_cron_runs", {
     let path = format!("~/.openclaw/cron/runs/{}.jsonl", job_id);
     let raw = pool.sftp_read(&host_id, &path).await;
     match raw {
@@ -30,6 +33,7 @@ pub async fn remote_get_cron_runs(
         }
         Err(_) => Ok(vec![]),
     }
+    })
 }
 
 #[tauri::command]
@@ -38,6 +42,7 @@ pub async fn remote_trigger_cron_job(
     host_id: String,
     job_id: String,
 ) -> Result<String, String> {
+    timed_async!("remote_trigger_cron_job", {
     let result = pool
         .exec_login(
             &host_id,
@@ -49,6 +54,7 @@ pub async fn remote_trigger_cron_job(
     } else {
         Err(format!("{}\n{}", result.stdout, result.stderr))
     }
+    })
 }
 
 #[tauri::command]
@@ -57,6 +63,7 @@ pub async fn remote_delete_cron_job(
     host_id: String,
     job_id: String,
 ) -> Result<String, String> {
+    timed_async!("remote_delete_cron_job", {
     let result = pool
         .exec_login(
             &host_id,
@@ -68,10 +75,12 @@ pub async fn remote_delete_cron_job(
     } else {
         Err(format!("{}\n{}", result.stdout, result.stderr))
     }
+    })
 }
 
 #[tauri::command]
 pub fn list_cron_jobs() -> Result<Value, String> {
+    timed_sync!("list_cron_jobs", {
     let paths = resolve_paths();
     let jobs_path = paths.base_dir.join("cron").join("jobs.json");
     if !jobs_path.exists() {
@@ -79,10 +88,12 @@ pub fn list_cron_jobs() -> Result<Value, String> {
     }
     let text = std::fs::read_to_string(&jobs_path).map_err(|e| e.to_string())?;
     Ok(parse_cron_jobs(&text))
+    })
 }
 
 #[tauri::command]
 pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>, String> {
+    timed_sync!("get_cron_runs", {
     let paths = resolve_paths();
     let runs_path = paths
         .base_dir
@@ -97,10 +108,12 @@ pub fn get_cron_runs(job_id: String, limit: Option<usize>) -> Result<Vec<Value>,
     let limit = limit.unwrap_or(10);
     runs.truncate(limit);
     Ok(runs)
+    })
 }
 
 #[tauri::command]
 pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
+    timed_async!("trigger_cron_job", {
     tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
         cmd.args(["cron", "run", &job_id]);
@@ -123,10 +136,12 @@ pub async fn trigger_cron_job(job_id: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("Task failed: {e}"))?
+    })
 }
 
 #[tauri::command]
 pub fn delete_cron_job(job_id: String) -> Result<String, String> {
+    timed_sync!("delete_cron_job", {
     let mut cmd = std::process::Command::new(clawpal_core::openclaw::resolve_openclaw_bin());
     cmd.args(["cron", "remove", &job_id]);
     if let Some(path) = crate::cli_runner::get_active_openclaw_home_override() {
@@ -142,4 +157,5 @@ pub fn delete_cron_job(job_id: String) -> Result<String, String> {
     } else {
         Err(format!("{stdout}\n{stderr}"))
     }
+    })
 }

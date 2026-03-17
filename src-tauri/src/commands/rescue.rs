@@ -23,6 +23,7 @@ pub async fn remote_manage_rescue_bot(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
+    timed_async!("remote_manage_rescue_bot", {
     let action_label = action.clone();
     let profile_label = profile.clone().unwrap_or_else(|| "rescue".into());
     remote_log_helper_event(
@@ -177,6 +178,7 @@ pub async fn remote_manage_rescue_bot(
     .await;
 
     Ok(result)
+    })
 }
 
 #[tauri::command]
@@ -186,7 +188,9 @@ pub async fn remote_get_rescue_bot_status(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
+    timed_async!("remote_get_rescue_bot_status", {
     remote_manage_rescue_bot(pool, host_id, "status".to_string(), profile, rescue_port).await
+    })
 }
 
 #[tauri::command]
@@ -196,6 +200,7 @@ pub async fn remote_diagnose_primary_via_rescue(
     target_profile: Option<String>,
     rescue_profile: Option<String>,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    timed_async!("remote_diagnose_primary_via_rescue", {
     let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     remote_log_helper_event(
@@ -237,6 +242,7 @@ pub async fn remote_diagnose_primary_via_rescue(
         }
     }
     result
+    })
 }
 
 #[tauri::command]
@@ -247,6 +253,7 @@ pub async fn remote_repair_primary_via_rescue(
     rescue_profile: Option<String>,
     issue_ids: Option<Vec<String>>,
 ) -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("remote_repair_primary_via_rescue", {
     let target_profile = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_profile = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     let requested_issue_count = issue_ids.as_ref().map_or(0, Vec::len);
@@ -296,6 +303,7 @@ pub async fn remote_repair_primary_via_rescue(
         }
     }
     result
+    })
 }
 
 #[tauri::command]
@@ -304,6 +312,7 @@ pub async fn manage_rescue_bot(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
+    timed_async!("manage_rescue_bot", {
     let action_label = action.clone();
     let profile_label = profile.clone().unwrap_or_else(|| "rescue".into());
     crate::logging::log_helper(&format!(
@@ -449,6 +458,7 @@ pub async fn manage_rescue_bot(
     }
 
     result
+    })
 }
 
 #[tauri::command]
@@ -456,7 +466,9 @@ pub async fn get_rescue_bot_status(
     profile: Option<String>,
     rescue_port: Option<u16>,
 ) -> Result<RescueBotManageResult, String> {
+    timed_async!("get_rescue_bot_status", {
     manage_rescue_bot("status".to_string(), profile, rescue_port).await
+    })
 }
 
 #[tauri::command]
@@ -464,6 +476,7 @@ pub async fn diagnose_primary_via_rescue(
     target_profile: Option<String>,
     rescue_profile: Option<String>,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
+    timed_async!("diagnose_primary_via_rescue", {
     let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     crate::logging::log_helper(&format!(
@@ -493,6 +506,7 @@ pub async fn diagnose_primary_via_rescue(
     }
 
     result
+    })
 }
 
 #[tauri::command]
@@ -501,6 +515,7 @@ pub async fn repair_primary_via_rescue(
     rescue_profile: Option<String>,
     issue_ids: Option<Vec<String>>,
 ) -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("repair_primary_via_rescue", {
     let target_label = normalize_profile_name(target_profile.as_deref(), "primary");
     let rescue_label = normalize_profile_name(rescue_profile.as_deref(), "rescue");
     let requested_issue_count = issue_ids.as_ref().map_or(0, Vec::len);
@@ -536,4 +551,5 @@ pub async fn repair_primary_via_rescue(
     }
 
     result
+    })
 }

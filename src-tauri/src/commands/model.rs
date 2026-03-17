@@ -9,6 +9,7 @@ pub fn update_channel_config(
     allowlist: Vec<String>,
     model: Option<String>,
 ) -> Result<bool, String> {
+    timed_sync!("update_channel_config", {
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
@@ -30,11 +31,13 @@ pub fn update_channel_config(
     set_nested_value(&mut cfg, &format!("{path}.model"), model.map(Value::String))?;
     write_config_with_snapshot(&paths, &current, &cfg, "update-channel")?;
     Ok(true)
+    })
 }
 
 /// List current channel→agent bindings from config.
 #[tauri::command]
 pub fn delete_channel_node(path: String) -> Result<bool, String> {
+    timed_sync!("delete_channel_node", {
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
@@ -48,10 +51,12 @@ pub fn delete_channel_node(path: String) -> Result<bool, String> {
     }
     write_config_with_snapshot(&paths, &current, &cfg, "delete-channel")?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn set_global_model(model_value: Option<String>) -> Result<bool, String> {
+    timed_sync!("set_global_model", {
     let paths = resolve_paths();
     let mut cfg = read_openclaw_config(&paths)?;
     let current = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
@@ -84,10 +89,12 @@ pub fn set_global_model(model_value: Option<String>) -> Result<bool, String> {
         .and_then(read_model_value);
     maybe_sync_main_auth_for_model_value(&paths, model_to_sync)?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn set_agent_model(agent_id: String, model_value: Option<String>) -> Result<bool, String> {
+    timed_sync!("set_agent_model", {
     if agent_id.trim().is_empty() {
         return Err("agent id is required".into());
     }
@@ -100,10 +107,12 @@ pub fn set_agent_model(agent_id: String, model_value: Option<String>) -> Result<
     set_agent_model_value(&mut cfg, &agent_id, value)?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-agent-model")?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn set_channel_model(path: String, model_value: Option<String>) -> Result<bool, String> {
+    timed_sync!("set_channel_model", {
     if path.trim().is_empty() {
         return Err("channel path is required".into());
     }
@@ -116,12 +125,15 @@ pub fn set_channel_model(path: String, model_value: Option<String>) -> Result<bo
     set_nested_value(&mut cfg, &format!("{path}.model"), value.map(Value::String))?;
     write_config_with_snapshot(&paths, &current, &cfg, "set-channel-model")?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn list_model_bindings() -> Result<Vec<ModelBinding>, String> {
+    timed_sync!("list_model_bindings", {
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
     let profiles = load_model_profiles(&paths);
     Ok(collect_model_bindings(&cfg, &profiles))
+    })
 }

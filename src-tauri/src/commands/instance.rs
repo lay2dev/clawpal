@@ -2,18 +2,23 @@ use super::*;
 
 #[tauri::command]
 pub fn set_active_openclaw_home(path: Option<String>) -> Result<bool, String> {
+    timed_sync!("set_active_openclaw_home", {
     crate::cli_runner::set_active_openclaw_home_override(path)?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn set_active_clawpal_data_dir(path: Option<String>) -> Result<bool, String> {
+    timed_sync!("set_active_clawpal_data_dir", {
     crate::cli_runner::set_active_clawpal_data_override(path)?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
 pub fn local_openclaw_config_exists(openclaw_home: String) -> Result<bool, String> {
+    timed_sync!("local_openclaw_config_exists", {
     let home = openclaw_home.trim();
     if home.is_empty() {
         return Ok(false);
@@ -23,15 +28,19 @@ pub fn local_openclaw_config_exists(openclaw_home: String) -> Result<bool, Strin
         .join(".openclaw")
         .join("openclaw.json");
     Ok(config_path.exists())
+    })
 }
 
 #[tauri::command]
 pub fn local_openclaw_cli_available() -> Result<bool, String> {
+    timed_sync!("local_openclaw_cli_available", {
     Ok(run_openclaw_raw(&["--version"]).is_ok())
+    })
 }
 
 #[tauri::command]
 pub fn delete_local_instance_home(openclaw_home: String) -> Result<bool, String> {
+    timed_sync!("delete_local_instance_home", {
     let home = openclaw_home.trim();
     if home.is_empty() {
         return Err("openclaw_home is required".to_string());
@@ -66,6 +75,7 @@ pub fn delete_local_instance_home(openclaw_home: String) -> Result<bool, String>
         )
     })?;
     Ok(true)
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -137,7 +147,9 @@ pub async fn ensure_access_profile(
     instance_id: String,
     transport: String,
 ) -> Result<EnsureAccessResult, String> {
+    timed_async!("ensure_access_profile", {
     ensure_access_profile_impl(instance_id, transport).await
+    })
 }
 
 pub async fn ensure_access_profile_for_test(
@@ -165,6 +177,7 @@ pub async fn record_install_experience(
     goal: String,
     store: State<'_, InstallSessionStore>,
 ) -> Result<RecordInstallExperienceResult, String> {
+    timed_async!("record_install_experience", {
     let id = session_id.trim();
     if id.is_empty() {
         return Err("session_id is required".to_string());
@@ -200,18 +213,22 @@ pub async fn record_install_experience(
         saved: true,
         total_count,
     })
+    })
 }
 
 #[tauri::command]
 pub fn list_registered_instances() -> Result<Vec<clawpal_core::instance::Instance>, String> {
+    timed_sync!("list_registered_instances", {
     let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
     // Best-effort self-heal: persist normalized instance ids (e.g., legacy empty SSH ids).
     let _ = registry.save();
     Ok(registry.list())
+    })
 }
 
 #[tauri::command]
 pub fn delete_registered_instance(instance_id: String) -> Result<bool, String> {
+    timed_sync!("delete_registered_instance", {
     let id = instance_id.trim();
     if id.is_empty() || id == "local" {
         return Ok(false);
@@ -223,6 +240,7 @@ pub fn delete_registered_instance(instance_id: String) -> Result<bool, String> {
         registry.save().map_err(|e| e.to_string())?;
     }
     Ok(removed)
+    })
 }
 
 #[tauri::command]
@@ -231,9 +249,11 @@ pub async fn connect_docker_instance(
     label: Option<String>,
     instance_id: Option<String>,
 ) -> Result<clawpal_core::instance::Instance, String> {
+    timed_async!("connect_docker_instance", {
     clawpal_core::connect::connect_docker(&home, label.as_deref(), instance_id.as_deref())
         .await
         .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -242,15 +262,18 @@ pub async fn connect_local_instance(
     label: Option<String>,
     instance_id: Option<String>,
 ) -> Result<clawpal_core::instance::Instance, String> {
+    timed_async!("connect_local_instance", {
     clawpal_core::connect::connect_local(&home, label.as_deref(), instance_id.as_deref())
         .await
         .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
 pub async fn connect_ssh_instance(
     host_id: String,
 ) -> Result<clawpal_core::instance::Instance, String> {
+    timed_async!("connect_ssh_instance", {
     let hosts = read_hosts_from_registry()?;
     let host = hosts
         .into_iter()
@@ -272,6 +295,7 @@ pub async fn connect_ssh_instance(
     registry.add(instance.clone()).map_err(|e| e.to_string())?;
     registry.save().map_err(|e| e.to_string())?;
     Ok(instance)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +387,7 @@ pub fn migrate_legacy_instances(
     legacy_docker_instances: Vec<LegacyDockerInstance>,
     legacy_open_tab_ids: Vec<String>,
 ) -> Result<LegacyMigrationResult, String> {
+    timed_sync!("migrate_legacy_instances", {
     let paths = resolve_paths();
     let mut registry =
         clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
@@ -470,5 +495,6 @@ pub fn migrate_legacy_instances(
         imported_docker_instances,
         imported_open_tab_instances,
         total_instances,
+    })
     })
 }

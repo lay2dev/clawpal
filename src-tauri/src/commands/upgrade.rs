@@ -4,6 +4,7 @@ use std::process::Command;
 
 #[tauri::command]
 pub async fn run_openclaw_upgrade() -> Result<String, String> {
+    timed_async!("run_openclaw_upgrade", {
     let output = Command::new("bash")
         .args(["-c", "curl -fsSL https://openclaw.ai/install.sh | bash"])
         .output()
@@ -21,4 +22,5 @@ pub async fn run_openclaw_upgrade() -> Result<String, String> {
     } else {
         Err(combined)
     }
+    })
 }

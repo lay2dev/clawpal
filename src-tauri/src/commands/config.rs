@@ -5,10 +5,12 @@ pub async fn remote_read_raw_config(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<String, String> {
+    timed_async!("remote_read_raw_config", {
     // openclaw config get requires a path — there's no way to dump the full config via CLI.
     // Use sftp_read directly since this function's purpose is returning the entire raw config.
     let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
     pool.sftp_read(&host_id, &config_path).await
+    })
 }
 
 #[tauri::command]
@@ -17,6 +19,7 @@ pub async fn remote_write_raw_config(
     host_id: String,
     content: String,
 ) -> Result<bool, String> {
+    timed_async!("remote_write_raw_config", {
     // Validate it's valid config JSON using core module
     let next = clawpal_core::config::validate_config_json(&content)
         .map_err(|e| format!("Invalid JSON: {e}"))?;
@@ -29,6 +32,7 @@ pub async fn remote_write_raw_config(
     remote_write_config_with_snapshot(&pool, &host_id, &config_path, &current, &next, "raw-edit")
         .await?;
     Ok(true)
+    })
 }
 
 #[tauri::command]
@@ -38,6 +42,7 @@ pub async fn remote_apply_config_patch(
     patch_template: String,
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
+    timed_async!("remote_apply_config_patch", {
     let (config_path, current_text, current) =
         remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
@@ -62,6 +67,7 @@ pub async fn remote_apply_config_patch(
         warnings: Vec::new(),
         errors: Vec::new(),
     })
+    })
 }
 
 #[tauri::command]
@@ -69,6 +75,7 @@ pub async fn remote_list_history(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Value, String> {
+    timed_async!("remote_list_history", {
     // Ensure dir exists
     pool.exec(&host_id, "mkdir -p ~/.clawpal/snapshots").await?;
     let entries = pool.sftp_list(&host_id, "~/.clawpal/snapshots").await?;
@@ -104,6 +111,7 @@ pub async fn remote_list_history(
         tb.cmp(ta)
     });
     Ok(serde_json::json!({ "items": items }))
+    })
 }
 
 #[tauri::command]
@@ -112,6 +120,7 @@ pub async fn remote_preview_rollback(
     host_id: String,
     snapshot_id: String,
 ) -> Result<PreviewResult, String> {
+    timed_async!("remote_preview_rollback", {
     let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
     let snapshot_text = pool.sftp_read(&host_id, &snapshot_path).await?;
     let target = clawpal_core::config::validate_config_json(&snapshot_text)
@@ -135,6 +144,7 @@ pub async fn remote_preview_rollback(
         impact_level: "medium".into(),
         warnings: vec!["Rollback will replace current configuration".into()],
     })
+    })
 }
 
 #[tauri::command]
@@ -143,6 +153,7 @@ pub async fn remote_rollback(
     host_id: String,
     snapshot_id: String,
 ) -> Result<ApplyResult, String> {
+    timed_async!("remote_rollback", {
     let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
     let target_text = pool.sftp_read(&host_id, &snapshot_path).await?;
     let target = clawpal_core::config::validate_config_json(&target_text)
@@ -168,13 +179,16 @@ pub async fn remote_rollback(
         warnings: vec!["rolled back".into()],
         errors: Vec::new(),
     })
+    })
 }
 
 #[tauri::command]
 pub fn read_raw_config() -> Result<String, String> {
+    timed_sync!("read_raw_config", {
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -182,6 +196,7 @@ pub fn apply_config_patch(
     patch_template: String,
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
+    timed_sync!("apply_config_patch", {
     let paths = resolve_paths();
     ensure_dirs(&paths)?;
     let current = read_openclaw_config(&paths)?;
@@ -210,10 +225,12 @@ pub fn apply_config_patch(
         warnings,
         errors: Vec::new(),
     })
+    })
 }
 
 #[tauri::command]
 pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> {
+    timed_sync!("list_history", {
     let paths = resolve_paths();
     let index = list_snapshots(&paths.metadata_path)?;
     let items = index
@@ -231,10 +248,12 @@ pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> 
         })
         .collect();
     Ok(HistoryPage { items })
+    })
 }
 
 #[tauri::command]
 pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
+    timed_sync!("preview_rollback", {
     let paths = resolve_paths();
     let index = list_snapshots(&paths.metadata_path)?;
     let target = index
@@ -262,10 +281,12 @@ pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
         impact_level: "medium".into(),
         warnings: vec!["Rollback will replace current configuration".into()],
     })
+    })
 }
 
 #[tauri::command]
 pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
+    timed_sync!("rollback", {
     let paths = resolve_paths();
     ensure_dirs(&paths)?;
     let index = list_snapshots(&paths.metadata_path)?;
@@ -297,5 +318,6 @@ pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
         backup_path: None,
         warnings: vec!["rolled back".into()],
         errors: Vec::new(),
+    })
     })
 }

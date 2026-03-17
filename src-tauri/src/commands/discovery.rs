@@ -5,6 +5,7 @@ pub async fn remote_list_discord_guild_channels(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<DiscordGuildChannel>, String> {
+    timed_async!("remote_list_discord_guild_channels", {
     let output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
@@ -281,6 +282,7 @@ pub async fn remote_list_discord_guild_channels(
     }
 
     Ok(entries)
+    })
 }
 
 #[tauri::command]
@@ -288,6 +290,7 @@ pub async fn remote_list_bindings(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<Value>, String> {
+    timed_async!("remote_list_bindings", {
     let output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
@@ -303,6 +306,7 @@ pub async fn remote_list_bindings(
     }
     let json = crate::cli_runner::parse_json_output(&output)?;
     clawpal_core::discovery::parse_bindings(&json.to_string())
+    })
 }
 
 #[tauri::command]
@@ -310,6 +314,7 @@ pub async fn remote_list_channels_minimal(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<ChannelNode>, String> {
+    timed_async!("remote_list_channels_minimal", {
     let output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
@@ -331,6 +336,7 @@ pub async fn remote_list_channels_minimal(
     // Wrap in top-level object with "channels" key so collect_channel_nodes works
     let cfg = serde_json::json!({ "channels": channels_val });
     Ok(collect_channel_nodes(&cfg))
+    })
 }
 
 #[tauri::command]
@@ -338,6 +344,7 @@ pub async fn remote_list_agents_overview(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
+    timed_async!("remote_list_agents_overview", {
     let output =
         run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
     if output.exit_code != 0 {
@@ -364,10 +371,12 @@ pub async fn remote_list_agents_overview(
         Err(_) => std::collections::HashSet::new(), // fallback: all offline
     };
     parse_agents_cli_output(&json, Some(&online_set))
+    })
 }
 
 #[tauri::command]
 pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
+    timed_async!("list_channels", {
     tauri::async_runtime::spawn_blocking(|| {
         let paths = resolve_paths();
         let cfg = read_openclaw_config(&paths)?;
@@ -377,12 +386,14 @@ pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub async fn list_channels_minimal(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<ChannelNode>, String> {
+    timed_async!("list_channels_minimal", {
     let cache_key = local_cli_cache_key("channels-minimal");
     let ttl = Some(std::time::Duration::from_secs(30));
     if let Some(cached) = cache.get(&cache_key, ttl) {
@@ -417,10 +428,12 @@ pub async fn list_channels_minimal(
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
+    timed_sync!("list_discord_guild_channels", {
     let paths = resolve_paths();
     let cache_file = paths.clawpal_dir.join("discord-guild-channels.json");
     if cache_file.exists() {
@@ -429,10 +442,12 @@ pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String>
         return Ok(entries);
     }
     Ok(Vec::new())
+    })
 }
 
 #[tauri::command]
 pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
+    timed_async!("refresh_discord_guild_channels", {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = resolve_paths();
         ensure_dirs(&paths)?;
@@ -799,12 +814,14 @@ pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub async fn list_bindings(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<Value>, String> {
+    timed_async!("list_bindings", {
     let cache_key = local_cli_cache_key("bindings");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
@@ -829,12 +846,14 @@ pub async fn list_bindings(
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub async fn list_agents_overview(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<AgentOverview>, String> {
+    timed_async!("list_agents_overview", {
     let cache_key = local_cli_cache_key("agents-list");
     if let Some(cached) = cache.get(&cache_key, None) {
         return serde_json::from_str(&cached).map_err(|e| e.to_string());
@@ -852,4 +871,5 @@ pub async fn list_agents_overview(
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }

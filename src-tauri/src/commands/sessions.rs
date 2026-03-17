@@ -5,6 +5,7 @@ pub async fn remote_analyze_sessions(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<AgentSessionAnalysis>, String> {
+    timed_async!("remote_analyze_sessions", {
     // Run a shell script via SSH that scans session files and outputs JSON.
     // This is MUCH faster than doing per-file SFTP reads.
     let script = r#"
@@ -80,6 +81,7 @@ echo "]"
                 .collect(),
         })
         .collect())
+    })
 }
 
 #[tauri::command]
@@ -89,6 +91,7 @@ pub async fn remote_delete_sessions_by_ids(
     agent_id: String,
     session_ids: Vec<String>,
 ) -> Result<usize, String> {
+    timed_async!("remote_delete_sessions_by_ids", {
     if agent_id.trim().is_empty() || agent_id.contains("..") || agent_id.contains('/') {
         return Err("invalid agent id".into());
     }
@@ -122,6 +125,7 @@ pub async fn remote_delete_sessions_by_ids(
     }
 
     Ok(deleted)
+    })
 }
 
 #[tauri::command]
@@ -129,6 +133,7 @@ pub async fn remote_list_session_files(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<Vec<SessionFile>, String> {
+    timed_async!("remote_list_session_files", {
     let script = r#"
 setopt nonomatch 2>/dev/null; shopt -s nullglob 2>/dev/null
 cd ~/.openclaw/agents 2>/dev/null || { echo "[]"; exit 0; }
@@ -164,6 +169,7 @@ echo "]"
             size_bytes: entry.size_bytes,
         })
         .collect())
+    })
 }
 
 #[tauri::command]
@@ -173,6 +179,7 @@ pub async fn remote_preview_session(
     agent_id: String,
     session_id: String,
 ) -> Result<Vec<Value>, String> {
+    timed_async!("remote_preview_session", {
     if agent_id.contains("..")
         || agent_id.contains('/')
         || session_id.contains("..")
@@ -207,6 +214,7 @@ pub async fn remote_preview_session(
         .into_iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect())
+    })
 }
 
 #[tauri::command]
@@ -214,6 +222,7 @@ pub async fn remote_clear_all_sessions(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
 ) -> Result<usize, String> {
+    timed_async!("remote_clear_all_sessions", {
     let script = r#"
 setopt nonomatch 2>/dev/null; shopt -s nullglob 2>/dev/null
 count=0
@@ -233,25 +242,32 @@ echo "$count"
     let result = pool.exec(&host_id, script).await?;
     let count: usize = result.stdout.trim().parse().unwrap_or(0);
     Ok(count)
+    })
 }
 
 #[tauri::command]
 pub fn list_session_files() -> Result<Vec<SessionFile>, String> {
+    timed_sync!("list_session_files", {
     let paths = resolve_paths();
     list_session_files_detailed(&paths.base_dir)
+    })
 }
 
 #[tauri::command]
 pub fn clear_all_sessions() -> Result<usize, String> {
+    timed_sync!("clear_all_sessions", {
     let paths = resolve_paths();
     clear_agent_and_global_sessions(&paths.base_dir.join("agents"), None)
+    })
 }
 
 #[tauri::command]
 pub async fn analyze_sessions() -> Result<Vec<AgentSessionAnalysis>, String> {
+    timed_async!("analyze_sessions", {
     tauri::async_runtime::spawn_blocking(|| analyze_sessions_sync())
         .await
         .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
@@ -259,16 +275,20 @@ pub async fn delete_sessions_by_ids(
     agent_id: String,
     session_ids: Vec<String>,
 ) -> Result<usize, String> {
+    timed_async!("delete_sessions_by_ids", {
     tauri::async_runtime::spawn_blocking(move || {
         delete_sessions_by_ids_sync(&agent_id, &session_ids)
     })
     .await
     .map_err(|e| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub async fn preview_session(agent_id: String, session_id: String) -> Result<Vec<Value>, String> {
+    timed_async!("preview_session", {
     tauri::async_runtime::spawn_blocking(move || preview_session_sync(&agent_id, &session_id))
         .await
         .map_err(|e| e.to_string())?
+    })
 }
