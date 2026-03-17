@@ -177,6 +177,76 @@ jobs:
           echo "app_lines=${APP_LINES}" >> "$GITHUB_OUTPUT"
           echo "large_count=${LARGE_COUNT}" >> "$GITHUB_OUTPUT"
 
+      # ── Gate 5: Home page render probes ──
+      - name: Install Playwright
+        run: |
+          bun add -d @playwright/test
+          npx playwright install chromium --with-deps
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Build Docker OpenClaw container
+        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
+
+      - name: Start container
+        run: |
+          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+
+      - name: Extract fixtures from container
+        run: node tests/e2e/perf/extract-fixtures.mjs
+        env:
+          CLAWPAL_PERF_SSH_PORT: "2299"
+
+      - name: Start Vite dev server
+        run: |
+          bun run dev &
+          for i in $(seq 1 20); do
+            curl -s http://localhost:1420 > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Run render probe E2E
+        id: home_perf
+        run: |
+          set +e
+          npx playwright test --config tests/e2e/perf/playwright.config.mjs 2>&1
+          EXIT_CODE=$?
+
+          # Parse report.md for probe values
+          if [ -f tests/e2e/perf/report.md ]; then
+            STATUS_MS=$(grep -oP '\| status \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            VERSION_MS=$(grep -oP '\| version \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            AGENTS_MS=$(grep -oP '\| agents \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            MODELS_MS=$(grep -oP '\| models \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            SETTLED_MS=$(grep -oP '\| settled \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+          else
+            STATUS_MS="N/A"; VERSION_MS="N/A"; AGENTS_MS="N/A"; MODELS_MS="N/A"; SETTLED_MS="N/A"
+          fi
+
+          echo "status_ms=${STATUS_MS}" >> "$GITHUB_OUTPUT"
+          echo "version_ms=${VERSION_MS}" >> "$GITHUB_OUTPUT"
+          echo "agents_ms=${AGENTS_MS}" >> "$GITHUB_OUTPUT"
+          echo "models_ms=${MODELS_MS}" >> "$GITHUB_OUTPUT"
+          echo "settled_ms=${SETTLED_MS}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PERF_MOCK_LATENCY_MS: "50"
+          PERF_SETTLED_GATE_MS: "5000"
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f oc-perf 2>/dev/null || true
+
       # ── Post / update PR comment ──
       - name: Generate metrics comment
         id: metrics_body
@@ -194,6 +264,9 @@ jobs:
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           if [ "${{ steps.perf_tests.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.home_perf.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
 
@@ -229,6 +302,16 @@ jobs:
           | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50 }} ms | — | ℹ️ |
           | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95 }} ms | ≤ 100 ms | $( echo "${{ steps.perf_tests.outputs.cmd_p95 }}" | awk '{print ($1 <= 100) ? "✅" : "❌"}' ) |
           | Command max latency | ${{ steps.perf_tests.outputs.cmd_max }} ms | — | ℹ️ |
+
+          ### Home Page Render Probes  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Probe | Value | Limit | Status |
+          |-------|-------|-------|--------|
+          | status | ${{ steps.home_perf.outputs.status_ms }} ms | — | ℹ️ |
+          | version | ${{ steps.home_perf.outputs.version_ms }} ms | — | ℹ️ |
+          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | — | ℹ️ |
+          | models | ${{ steps.home_perf.outputs.models_ms }} ms | — | ℹ️ |
+          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | < 5000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 < 5000) ? "✅" : "❌"}' ) |
 
           ### Code Readability (informational)
 
