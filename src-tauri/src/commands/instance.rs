@@ -3,78 +3,78 @@ use super::*;
 #[tauri::command]
 pub fn set_active_openclaw_home(path: Option<String>) -> Result<bool, String> {
     timed_sync!("set_active_openclaw_home", {
-    crate::cli_runner::set_active_openclaw_home_override(path)?;
-    Ok(true)
+        crate::cli_runner::set_active_openclaw_home_override(path)?;
+        Ok(true)
     })
 }
 
 #[tauri::command]
 pub fn set_active_clawpal_data_dir(path: Option<String>) -> Result<bool, String> {
     timed_sync!("set_active_clawpal_data_dir", {
-    crate::cli_runner::set_active_clawpal_data_override(path)?;
-    Ok(true)
+        crate::cli_runner::set_active_clawpal_data_override(path)?;
+        Ok(true)
     })
 }
 
 #[tauri::command]
 pub fn local_openclaw_config_exists(openclaw_home: String) -> Result<bool, String> {
     timed_sync!("local_openclaw_config_exists", {
-    let home = openclaw_home.trim();
-    if home.is_empty() {
-        return Ok(false);
-    }
-    let expanded = shellexpand::tilde(home).to_string();
-    let config_path = PathBuf::from(expanded)
-        .join(".openclaw")
-        .join("openclaw.json");
-    Ok(config_path.exists())
+        let home = openclaw_home.trim();
+        if home.is_empty() {
+            return Ok(false);
+        }
+        let expanded = shellexpand::tilde(home).to_string();
+        let config_path = PathBuf::from(expanded)
+            .join(".openclaw")
+            .join("openclaw.json");
+        Ok(config_path.exists())
     })
 }
 
 #[tauri::command]
 pub fn local_openclaw_cli_available() -> Result<bool, String> {
     timed_sync!("local_openclaw_cli_available", {
-    Ok(run_openclaw_raw(&["--version"]).is_ok())
+        Ok(run_openclaw_raw(&["--version"]).is_ok())
     })
 }
 
 #[tauri::command]
 pub fn delete_local_instance_home(openclaw_home: String) -> Result<bool, String> {
     timed_sync!("delete_local_instance_home", {
-    let home = openclaw_home.trim();
-    if home.is_empty() {
-        return Err("openclaw_home is required".to_string());
-    }
-    let expanded = shellexpand::tilde(home).to_string();
-    let target = PathBuf::from(expanded);
-    if !target.exists() {
-        return Ok(true);
-    }
+        let home = openclaw_home.trim();
+        if home.is_empty() {
+            return Err("openclaw_home is required".to_string());
+        }
+        let expanded = shellexpand::tilde(home).to_string();
+        let target = PathBuf::from(expanded);
+        if !target.exists() {
+            return Ok(true);
+        }
 
-    let canonical_target = target
-        .canonicalize()
-        .map_err(|e| format!("failed to resolve target path: {e}"))?;
-    let user_home =
-        dirs::home_dir().ok_or_else(|| "failed to resolve HOME directory".to_string())?;
-    let allowed_root = user_home.join(".clawpal");
-    let canonical_allowed_root = allowed_root
-        .canonicalize()
-        .map_err(|e| format!("failed to resolve ~/.clawpal path: {e}"))?;
+        let canonical_target = target
+            .canonicalize()
+            .map_err(|e| format!("failed to resolve target path: {e}"))?;
+        let user_home =
+            dirs::home_dir().ok_or_else(|| "failed to resolve HOME directory".to_string())?;
+        let allowed_root = user_home.join(".clawpal");
+        let canonical_allowed_root = allowed_root
+            .canonicalize()
+            .map_err(|e| format!("failed to resolve ~/.clawpal path: {e}"))?;
 
-    if !canonical_target.starts_with(&canonical_allowed_root) {
-        return Err("refuse to delete path outside ~/.clawpal".to_string());
-    }
-    if canonical_target == canonical_allowed_root {
-        return Err("refuse to delete ~/.clawpal root".to_string());
-    }
+        if !canonical_target.starts_with(&canonical_allowed_root) {
+            return Err("refuse to delete path outside ~/.clawpal".to_string());
+        }
+        if canonical_target == canonical_allowed_root {
+            return Err("refuse to delete ~/.clawpal root".to_string());
+        }
 
-    fs::remove_dir_all(&canonical_target).map_err(|e| {
-        format!(
-            "failed to delete '{}': {e}",
-            canonical_target.to_string_lossy()
-        )
-    })?;
-    Ok(true)
+        fs::remove_dir_all(&canonical_target).map_err(|e| {
+            format!(
+                "failed to delete '{}': {e}",
+                canonical_target.to_string_lossy()
+            )
+        })?;
+        Ok(true)
     })
 }
 
@@ -148,7 +148,7 @@ pub async fn ensure_access_profile(
     transport: String,
 ) -> Result<EnsureAccessResult, String> {
     timed_async!("ensure_access_profile", {
-    ensure_access_profile_impl(instance_id, transport).await
+        ensure_access_profile_impl(instance_id, transport).await
     })
 }
 
@@ -178,40 +178,40 @@ pub async fn record_install_experience(
     store: State<'_, InstallSessionStore>,
 ) -> Result<RecordInstallExperienceResult, String> {
     timed_async!("record_install_experience", {
-    let id = session_id.trim();
-    if id.is_empty() {
-        return Err("session_id is required".to_string());
-    }
-    let session = store
-        .get(id)?
-        .ok_or_else(|| format!("install session not found: {id}"))?;
-    if !matches!(session.state, InstallState::Ready) {
-        return Err(format!(
-            "install session is not ready: {}",
-            session.state.as_str()
-        ));
-    }
+        let id = session_id.trim();
+        if id.is_empty() {
+            return Err("session_id is required".to_string());
+        }
+        let session = store
+            .get(id)?
+            .ok_or_else(|| format!("install session not found: {id}"))?;
+        if !matches!(session.state, InstallState::Ready) {
+            return Err(format!(
+                "install session is not ready: {}",
+                session.state.as_str()
+            ));
+        }
 
-    let transport = session.method.as_str().to_string();
-    let paths = resolve_paths();
-    let discovery_store = AccessDiscoveryStore::new(paths.clawpal_dir.join("access-discovery"));
-    let profile = discovery_store.load_profile(&instance_id)?;
-    let successful_chain = profile.map(|p| p.working_chain).unwrap_or_default();
-    let commands = value_array_as_strings(session.artifacts.get("executed_commands"));
+        let transport = session.method.as_str().to_string();
+        let paths = resolve_paths();
+        let discovery_store = AccessDiscoveryStore::new(paths.clawpal_dir.join("access-discovery"));
+        let profile = discovery_store.load_profile(&instance_id)?;
+        let successful_chain = profile.map(|p| p.working_chain).unwrap_or_default();
+        let commands = value_array_as_strings(session.artifacts.get("executed_commands"));
 
-    let experience = ExecutionExperience {
-        instance_id: instance_id.clone(),
-        goal,
-        transport,
-        method: session.method.as_str().to_string(),
-        commands,
-        successful_chain,
-        recorded_at: unix_timestamp_secs(),
-    };
-    let total_count = discovery_store.save_experience(experience)?;
-    Ok(RecordInstallExperienceResult {
-        saved: true,
-        total_count,
+        let experience = ExecutionExperience {
+            instance_id: instance_id.clone(),
+            goal,
+            transport,
+            method: session.method.as_str().to_string(),
+            commands,
+            successful_chain,
+            recorded_at: unix_timestamp_secs(),
+        };
+        let total_count = discovery_store.save_experience(experience)?;
+        Ok(RecordInstallExperienceResult {
+            saved: true,
+            total_count,
     })
     })
 }
@@ -219,27 +219,27 @@ pub async fn record_install_experience(
 #[tauri::command]
 pub fn list_registered_instances() -> Result<Vec<clawpal_core::instance::Instance>, String> {
     timed_sync!("list_registered_instances", {
-    let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    // Best-effort self-heal: persist normalized instance ids (e.g., legacy empty SSH ids).
-    let _ = registry.save();
-    Ok(registry.list())
+        let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        // Best-effort self-heal: persist normalized instance ids (e.g., legacy empty SSH ids).
+        let _ = registry.save();
+        Ok(registry.list())
     })
 }
 
 #[tauri::command]
 pub fn delete_registered_instance(instance_id: String) -> Result<bool, String> {
     timed_sync!("delete_registered_instance", {
-    let id = instance_id.trim();
-    if id.is_empty() || id == "local" {
-        return Ok(false);
-    }
-    let mut registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    let removed = registry.remove(id).is_some();
-    if removed {
-        registry.save().map_err(|e| e.to_string())?;
-    }
-    Ok(removed)
+        let id = instance_id.trim();
+        if id.is_empty() || id == "local" {
+            return Ok(false);
+        }
+        let mut registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        let removed = registry.remove(id).is_some();
+        if removed {
+            registry.save().map_err(|e| e.to_string())?;
+        }
+        Ok(removed)
     })
 }
 
@@ -250,9 +250,9 @@ pub async fn connect_docker_instance(
     instance_id: Option<String>,
 ) -> Result<clawpal_core::instance::Instance, String> {
     timed_async!("connect_docker_instance", {
-    clawpal_core::connect::connect_docker(&home, label.as_deref(), instance_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+        clawpal_core::connect::connect_docker(&home, label.as_deref(), instance_id.as_deref())
+            .await
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -263,9 +263,9 @@ pub async fn connect_local_instance(
     instance_id: Option<String>,
 ) -> Result<clawpal_core::instance::Instance, String> {
     timed_async!("connect_local_instance", {
-    clawpal_core::connect::connect_local(&home, label.as_deref(), instance_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+        clawpal_core::connect::connect_local(&home, label.as_deref(), instance_id.as_deref())
+            .await
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -274,27 +274,27 @@ pub async fn connect_ssh_instance(
     host_id: String,
 ) -> Result<clawpal_core::instance::Instance, String> {
     timed_async!("connect_ssh_instance", {
-    let hosts = read_hosts_from_registry()?;
-    let host = hosts
-        .into_iter()
-        .find(|h| h.id == host_id)
-        .ok_or_else(|| format!("No SSH host config with id: {host_id}"))?;
-    // Register the SSH host as an instance in the instance registry
-    // (skip the actual SSH connectivity probe — the caller already connected)
-    let instance = clawpal_core::instance::Instance {
-        id: host.id.clone(),
-        instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
-        label: host.label.clone(),
-        openclaw_home: None,
-        clawpal_data_dir: None,
-        ssh_host_config: Some(host),
-    };
-    let mut registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
-    let _ = registry.remove(&instance.id);
-    registry.add(instance.clone()).map_err(|e| e.to_string())?;
-    registry.save().map_err(|e| e.to_string())?;
-    Ok(instance)
+        let hosts = read_hosts_from_registry()?;
+        let host = hosts
+            .into_iter()
+            .find(|h| h.id == host_id)
+            .ok_or_else(|| format!("No SSH host config with id: {host_id}"))?;
+        // Register the SSH host as an instance in the instance registry
+        // (skip the actual SSH connectivity probe — the caller already connected)
+        let instance = clawpal_core::instance::Instance {
+            id: host.id.clone(),
+            instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
+            label: host.label.clone(),
+            openclaw_home: None,
+            clawpal_data_dir: None,
+            ssh_host_config: Some(host),
+        };
+        let mut registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        let _ = registry.remove(&instance.id);
+        registry.add(instance.clone()).map_err(|e| e.to_string())?;
+        registry.save().map_err(|e| e.to_string())?;
+        Ok(instance)
     })
 }
 
@@ -388,113 +388,113 @@ pub fn migrate_legacy_instances(
     legacy_open_tab_ids: Vec<String>,
 ) -> Result<LegacyMigrationResult, String> {
     timed_sync!("migrate_legacy_instances", {
-    let paths = resolve_paths();
-    let mut registry =
-        clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
+        let paths = resolve_paths();
+        let mut registry =
+            clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
 
-    // Ensure local instance exists for old users.
-    if registry.get("local").is_none() {
-        upsert_registry_instance(
-            &mut registry,
-            clawpal_core::instance::Instance {
-                id: "local".to_string(),
-                instance_type: clawpal_core::instance::InstanceType::Local,
-                label: "Local".to_string(),
-                openclaw_home: None,
-                clawpal_data_dir: None,
-                ssh_host_config: None,
-            },
-        )?;
-    }
-
-    let imported_ssh_hosts = migrate_legacy_ssh_file(&paths, &mut registry)?;
-
-    let mut imported_docker_instances = 0usize;
-    for docker in legacy_docker_instances {
-        let id = docker.id.trim();
-        if id.is_empty() {
-            continue;
-        }
-        let label = if docker.label.trim().is_empty() {
-            fallback_label_from_instance_id(id)
-        } else {
-            docker.label.clone()
-        };
-        upsert_registry_instance(
-            &mut registry,
-            clawpal_core::instance::Instance {
-                id: id.to_string(),
-                instance_type: clawpal_core::instance::InstanceType::Docker,
-                label,
-                openclaw_home: docker.openclaw_home.clone(),
-                clawpal_data_dir: docker.clawpal_data_dir.clone(),
-                ssh_host_config: None,
-            },
-        )?;
-        imported_docker_instances += 1;
-    }
-
-    let mut imported_open_tab_instances = 0usize;
-    for tab_id in legacy_open_tab_ids {
-        let id = tab_id.trim();
-        if id.is_empty() {
-            continue;
-        }
-        if registry.get(id).is_some() {
-            continue;
-        }
-        if id == "local" {
-            continue;
-        }
-        if id.starts_with("docker:") {
+        // Ensure local instance exists for old users.
+        if registry.get("local").is_none() {
             upsert_registry_instance(
                 &mut registry,
                 clawpal_core::instance::Instance {
-                    id: id.to_string(),
-                    instance_type: clawpal_core::instance::InstanceType::Docker,
-                    label: fallback_label_from_instance_id(id),
+                    id: "local".to_string(),
+                    instance_type: clawpal_core::instance::InstanceType::Local,
+                    label: "Local".to_string(),
                     openclaw_home: None,
                     clawpal_data_dir: None,
                     ssh_host_config: None,
                 },
             )?;
-            imported_open_tab_instances += 1;
-            continue;
         }
-        if id.starts_with("ssh:") {
-            let host_alias = id.strip_prefix("ssh:").unwrap_or("").to_string();
+
+        let imported_ssh_hosts = migrate_legacy_ssh_file(&paths, &mut registry)?;
+
+        let mut imported_docker_instances = 0usize;
+        for docker in legacy_docker_instances {
+            let id = docker.id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            let label = if docker.label.trim().is_empty() {
+                fallback_label_from_instance_id(id)
+            } else {
+                docker.label.clone()
+            };
             upsert_registry_instance(
                 &mut registry,
                 clawpal_core::instance::Instance {
                     id: id.to_string(),
-                    instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
-                    label: fallback_label_from_instance_id(id),
-                    openclaw_home: None,
-                    clawpal_data_dir: None,
-                    ssh_host_config: Some(clawpal_core::instance::SshHostConfig {
-                        id: id.to_string(),
-                        label: fallback_label_from_instance_id(id),
-                        host: host_alias,
-                        port: 22,
-                        username: String::new(),
-                        auth_method: "ssh_config".to_string(),
-                        key_path: None,
-                        password: None,
-                        passphrase: None,
-                    }),
+                    instance_type: clawpal_core::instance::InstanceType::Docker,
+                    label,
+                    openclaw_home: docker.openclaw_home.clone(),
+                    clawpal_data_dir: docker.clawpal_data_dir.clone(),
+                    ssh_host_config: None,
                 },
             )?;
-            imported_open_tab_instances += 1;
+            imported_docker_instances += 1;
         }
-    }
 
-    registry.save().map_err(|e| e.to_string())?;
-    let total_instances = registry.list().len();
-    Ok(LegacyMigrationResult {
-        imported_ssh_hosts,
-        imported_docker_instances,
-        imported_open_tab_instances,
-        total_instances,
+        let mut imported_open_tab_instances = 0usize;
+        for tab_id in legacy_open_tab_ids {
+            let id = tab_id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            if registry.get(id).is_some() {
+                continue;
+            }
+            if id == "local" {
+                continue;
+            }
+            if id.starts_with("docker:") {
+                upsert_registry_instance(
+                    &mut registry,
+                    clawpal_core::instance::Instance {
+                        id: id.to_string(),
+                        instance_type: clawpal_core::instance::InstanceType::Docker,
+                        label: fallback_label_from_instance_id(id),
+                        openclaw_home: None,
+                        clawpal_data_dir: None,
+                        ssh_host_config: None,
+                    },
+                )?;
+                imported_open_tab_instances += 1;
+                continue;
+            }
+            if id.starts_with("ssh:") {
+                let host_alias = id.strip_prefix("ssh:").unwrap_or("").to_string();
+                upsert_registry_instance(
+                    &mut registry,
+                    clawpal_core::instance::Instance {
+                        id: id.to_string(),
+                        instance_type: clawpal_core::instance::InstanceType::RemoteSsh,
+                        label: fallback_label_from_instance_id(id),
+                        openclaw_home: None,
+                        clawpal_data_dir: None,
+                        ssh_host_config: Some(clawpal_core::instance::SshHostConfig {
+                            id: id.to_string(),
+                            label: fallback_label_from_instance_id(id),
+                            host: host_alias,
+                            port: 22,
+                            username: String::new(),
+                            auth_method: "ssh_config".to_string(),
+                            key_path: None,
+                            password: None,
+                            passphrase: None,
+                        }),
+                    },
+                )?;
+                imported_open_tab_instances += 1;
+            }
+        }
+
+        registry.save().map_err(|e| e.to_string())?;
+        let total_instances = registry.list().len();
+        Ok(LegacyMigrationResult {
+            imported_ssh_hosts,
+            imported_docker_instances,
+            imported_open_tab_instances,
+            total_instances,
     })
     })
 }

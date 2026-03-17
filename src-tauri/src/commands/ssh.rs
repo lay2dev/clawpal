@@ -13,36 +13,36 @@ pub(crate) fn read_hosts_from_registry() -> Result<Vec<SshHostConfig>, String> {
 #[tauri::command]
 pub fn list_ssh_hosts() -> Result<Vec<SshHostConfig>, String> {
     timed_sync!("list_ssh_hosts", {
-    read_hosts_from_registry()
+        read_hosts_from_registry()
     })
 }
 
 #[tauri::command]
 pub fn list_ssh_config_hosts() -> Result<Vec<SshConfigHostSuggestion>, String> {
     timed_sync!("list_ssh_config_hosts", {
-    let Some(path) = ssh_config_path() else {
-        return Ok(Vec::new());
-    };
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let data =
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    Ok(clawpal_core::ssh::config::parse_ssh_config_hosts(&data))
+        let Some(path) = ssh_config_path() else {
+            return Ok(Vec::new());
+        };
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let data =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        Ok(clawpal_core::ssh::config::parse_ssh_config_hosts(&data))
     })
 }
 
 #[tauri::command]
 pub fn upsert_ssh_host(host: SshHostConfig) -> Result<SshHostConfig, String> {
     timed_sync!("upsert_ssh_host", {
-    clawpal_core::ssh::registry::upsert_ssh_host(host)
+        clawpal_core::ssh::registry::upsert_ssh_host(host)
     })
 }
 
 #[tauri::command]
 pub fn delete_ssh_host(host_id: String) -> Result<bool, String> {
     timed_sync!("delete_ssh_host", {
-    clawpal_core::ssh::registry::delete_ssh_host(&host_id)
+        clawpal_core::ssh::registry::delete_ssh_host(&host_id)
     })
 }
 
@@ -203,81 +203,81 @@ pub async fn ssh_connect(
     app: AppHandle,
 ) -> Result<bool, String> {
     timed_async!("ssh_connect", {
-    crate::commands::logs::log_dev(format!("[dev][ssh_connect] begin host_id={host_id}"));
-    // If already connected and handle is alive, reuse
-    if pool.is_connected(&host_id).await {
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect] reuse existing connection host_id={host_id}"
-        ));
+        crate::commands::logs::log_dev(format!("[dev][ssh_connect] begin host_id={host_id}"));
+        // If already connected and handle is alive, reuse
+        if pool.is_connected(&host_id).await {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect] reuse existing connection host_id={host_id}"
+            ));
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SessionOpen,
+                SshIntent::Connect,
+                "SSH session already connected",
+                SshDiagnosticSuccessTrigger::ConnectReuse,
+            );
+            return Ok(true);
+        }
+        let hosts = read_hosts_from_registry().map_err(|error| {
+            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+        })?;
+        if hosts.is_empty() {
+            crate::commands::logs::log_dev("[dev][ssh_connect] host registry is empty");
+        }
+        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+            let mut ids = Vec::new();
+            for h in read_hosts_from_registry().unwrap_or_default() {
+                ids.push(h.id);
+            }
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
+            ));
+            make_ssh_command_error(
+                &app,
+                SshStage::ResolveHostConfig,
+                SshIntent::Connect,
+                format!("No SSH host config with id: {host_id}"),
+            )
+        })?;
+        // If the host has a stored passphrase, use it directly
+        let connect_result = if let Some(ref pp) = host.passphrase {
+            if !pp.is_empty() {
+                crate::commands::logs::log_dev(format!(
+                    "[dev][ssh_connect] using stored passphrase for host_id={host_id}"
+                ));
+                pool.connect_with_passphrase(&host, Some(pp.as_str())).await
+            } else {
+                pool.connect(&host).await
+            }
+        } else {
+            pool.connect(&host).await
+        };
+        if let Err(error) = connect_result {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect] failed host_id={} host={} user={} port={} auth_method={} error={}",
+                host_id, host.host, host.username, host.port, host.auth_method, error
+            ));
+            let message = format!("ssh connect failed: {error}");
+            let mut diagnostic = from_any_error(
+                SshStage::TcpReachability,
+                SshIntent::Connect,
+                message.clone(),
+            );
+            if let Some(code) = diagnostic.error_code {
+                diagnostic.stage = ssh_stage_for_error_code(code);
+            }
+            emit_ssh_diagnostic(&app, &diagnostic);
+            return Err(message);
+        }
+        crate::commands::logs::log_dev(format!("[dev][ssh_connect] success host_id={host_id}"));
         let _ = success_ssh_diagnostic(
             &app,
             SshStage::SessionOpen,
             SshIntent::Connect,
-            "SSH session already connected",
-            SshDiagnosticSuccessTrigger::ConnectReuse,
+            "SSH connection established",
+            SshDiagnosticSuccessTrigger::ConnectEstablished,
         );
-        return Ok(true);
-    }
-    let hosts = read_hosts_from_registry().map_err(|error| {
-        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
-    })?;
-    if hosts.is_empty() {
-        crate::commands::logs::log_dev("[dev][ssh_connect] host registry is empty");
-    }
-    let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
-        let mut ids = Vec::new();
-        for h in read_hosts_from_registry().unwrap_or_default() {
-            ids.push(h.id);
-        }
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect] no host found host_id={host_id} known={ids:?}"
-        ));
-        make_ssh_command_error(
-            &app,
-            SshStage::ResolveHostConfig,
-            SshIntent::Connect,
-            format!("No SSH host config with id: {host_id}"),
-        )
-    })?;
-    // If the host has a stored passphrase, use it directly
-    let connect_result = if let Some(ref pp) = host.passphrase {
-        if !pp.is_empty() {
-            crate::commands::logs::log_dev(format!(
-                "[dev][ssh_connect] using stored passphrase for host_id={host_id}"
-            ));
-            pool.connect_with_passphrase(&host, Some(pp.as_str())).await
-        } else {
-            pool.connect(&host).await
-        }
-    } else {
-        pool.connect(&host).await
-    };
-    if let Err(error) = connect_result {
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect] failed host_id={} host={} user={} port={} auth_method={} error={}",
-            host_id, host.host, host.username, host.port, host.auth_method, error
-        ));
-        let message = format!("ssh connect failed: {error}");
-        let mut diagnostic = from_any_error(
-            SshStage::TcpReachability,
-            SshIntent::Connect,
-            message.clone(),
-        );
-        if let Some(code) = diagnostic.error_code {
-            diagnostic.stage = ssh_stage_for_error_code(code);
-        }
-        emit_ssh_diagnostic(&app, &diagnostic);
-        return Err(message);
-    }
-    crate::commands::logs::log_dev(format!("[dev][ssh_connect] success host_id={host_id}"));
-    let _ = success_ssh_diagnostic(
-        &app,
-        SshStage::SessionOpen,
-        SshIntent::Connect,
-        "SSH connection established",
-        SshDiagnosticSuccessTrigger::ConnectEstablished,
-    );
-    Ok(true)
+        Ok(true)
     })
 }
 
@@ -289,74 +289,74 @@ pub async fn ssh_connect_with_passphrase(
     app: AppHandle,
 ) -> Result<bool, String> {
     timed_async!("ssh_connect_with_passphrase", {
-    crate::commands::logs::log_dev(format!(
-        "[dev][ssh_connect_with_passphrase] begin host_id={host_id}"
-    ));
-    if pool.is_connected(&host_id).await {
         crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect_with_passphrase] reuse existing connection host_id={host_id}"
+            "[dev][ssh_connect_with_passphrase] begin host_id={host_id}"
+        ));
+        if pool.is_connected(&host_id).await {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect_with_passphrase] reuse existing connection host_id={host_id}"
+            ));
+            let _ = success_ssh_diagnostic(
+                &app,
+                SshStage::SessionOpen,
+                SshIntent::Connect,
+                "SSH session already connected",
+                SshDiagnosticSuccessTrigger::ConnectReuse,
+            );
+            return Ok(true);
+        }
+        let hosts = read_hosts_from_registry().map_err(|error| {
+            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+        })?;
+        if hosts.is_empty() {
+            crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
+        }
+        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+            let mut ids = Vec::new();
+            for h in read_hosts_from_registry().unwrap_or_default() {
+                ids.push(h.id);
+            }
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
+            ));
+            make_ssh_command_error(
+                &app,
+                SshStage::ResolveHostConfig,
+                SshIntent::Connect,
+                format!("No SSH host config with id: {host_id}"),
+            )
+        })?;
+        if let Err(error) = pool
+            .connect_with_passphrase(&host, Some(passphrase.as_str()))
+            .await
+        {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_connect_with_passphrase] failed host_id={} host={} user={} port={} auth_method={} error={}",
+                host_id,
+                host.host,
+                host.username,
+                host.port,
+                host.auth_method,
+                error
+            ));
+            return Err(make_ssh_command_error(
+                &app,
+                SshStage::AuthNegotiation,
+                SshIntent::Connect,
+                format!("ssh connect failed: {error}"),
+            ));
+        }
+        crate::commands::logs::log_dev(format!(
+            "[dev][ssh_connect_with_passphrase] success host_id={host_id}"
         ));
         let _ = success_ssh_diagnostic(
             &app,
             SshStage::SessionOpen,
             SshIntent::Connect,
-            "SSH session already connected",
-            SshDiagnosticSuccessTrigger::ConnectReuse,
+            "SSH connection established",
+            SshDiagnosticSuccessTrigger::ConnectEstablished,
         );
-        return Ok(true);
-    }
-    let hosts = read_hosts_from_registry().map_err(|error| {
-        make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
-    })?;
-    if hosts.is_empty() {
-        crate::commands::logs::log_dev("[dev][ssh_connect_with_passphrase] host registry is empty");
-    }
-    let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
-        let mut ids = Vec::new();
-        for h in read_hosts_from_registry().unwrap_or_default() {
-            ids.push(h.id);
-        }
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect_with_passphrase] no host found host_id={host_id} known={ids:?}"
-        ));
-        make_ssh_command_error(
-            &app,
-            SshStage::ResolveHostConfig,
-            SshIntent::Connect,
-            format!("No SSH host config with id: {host_id}"),
-        )
-    })?;
-    if let Err(error) = pool
-        .connect_with_passphrase(&host, Some(passphrase.as_str()))
-        .await
-    {
-        crate::commands::logs::log_dev(format!(
-            "[dev][ssh_connect_with_passphrase] failed host_id={} host={} user={} port={} auth_method={} error={}",
-            host_id,
-            host.host,
-            host.username,
-            host.port,
-            host.auth_method,
-            error
-        ));
-        return Err(make_ssh_command_error(
-            &app,
-            SshStage::AuthNegotiation,
-            SshIntent::Connect,
-            format!("ssh connect failed: {error}"),
-        ));
-    }
-    crate::commands::logs::log_dev(format!(
-        "[dev][ssh_connect_with_passphrase] success host_id={host_id}"
-    ));
-    let _ = success_ssh_diagnostic(
-        &app,
-        SshStage::SessionOpen,
-        SshIntent::Connect,
-        "SSH connection established",
-        SshDiagnosticSuccessTrigger::ConnectEstablished,
-    );
-    Ok(true)
+        Ok(true)
     })
 }
 
@@ -366,8 +366,8 @@ pub async fn ssh_disconnect(
     host_id: String,
 ) -> Result<bool, String> {
     timed_async!("ssh_disconnect", {
-    pool.disconnect(&host_id).await?;
-    Ok(true)
+        pool.disconnect(&host_id).await?;
+        Ok(true)
     })
 }
 
@@ -377,11 +377,11 @@ pub async fn ssh_status(
     host_id: String,
 ) -> Result<String, String> {
     timed_async!("ssh_status", {
-    if pool.is_connected(&host_id).await {
-        Ok("connected".to_string())
-    } else {
-        Ok("disconnected".to_string())
-    }
+        if pool.is_connected(&host_id).await {
+            Ok("connected".to_string())
+        } else {
+            Ok("disconnected".to_string())
+        }
     })
 }
 
@@ -391,7 +391,7 @@ pub async fn get_ssh_transfer_stats(
     host_id: String,
 ) -> Result<SshTransferStats, String> {
     timed_async!("get_ssh_transfer_stats", {
-    Ok(pool.get_transfer_stats(&host_id).await)
+        Ok(pool.get_transfer_stats(&host_id).await)
     })
 }
 
@@ -407,17 +407,17 @@ pub async fn ssh_exec(
     app: AppHandle,
 ) -> Result<SshExecResult, String> {
     timed_async!("ssh_exec", {
-    pool.exec(&host_id, &command)
-        .await
-        .map(|result| {
-            let _ = success_ssh_diagnostic(
-                &app,
-                SshStage::RemoteExec,
-                SshIntent::Exec,
-                "Remote SSH command executed",
-                SshDiagnosticSuccessTrigger::RoutineOperation,
-            );
-            result
+        pool.exec(&host_id, &command)
+            .await
+            .map(|result| {
+                let _ = success_ssh_diagnostic(
+                    &app,
+                    SshStage::RemoteExec,
+                    SshIntent::Exec,
+                    "Remote SSH command executed",
+                    SshDiagnosticSuccessTrigger::RoutineOperation,
+                );
+                result
         })
         .map_err(|error| make_ssh_command_error(&app, SshStage::RemoteExec, SshIntent::Exec, error))
     })
@@ -431,17 +431,17 @@ pub async fn sftp_read_file(
     app: AppHandle,
 ) -> Result<String, String> {
     timed_async!("sftp_read_file", {
-    pool.sftp_read(&host_id, &path)
-        .await
-        .map(|result| {
-            let _ = success_ssh_diagnostic(
-                &app,
-                SshStage::SftpRead,
-                SshIntent::SftpRead,
-                "SFTP read succeeded",
-                SshDiagnosticSuccessTrigger::RoutineOperation,
-            );
-            result
+        pool.sftp_read(&host_id, &path)
+            .await
+            .map(|result| {
+                let _ = success_ssh_diagnostic(
+                    &app,
+                    SshStage::SftpRead,
+                    SshIntent::SftpRead,
+                    "SFTP read succeeded",
+                    SshDiagnosticSuccessTrigger::RoutineOperation,
+                );
+                result
         })
         .map_err(|error| {
             make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
@@ -458,19 +458,19 @@ pub async fn sftp_write_file(
     app: AppHandle,
 ) -> Result<bool, String> {
     timed_async!("sftp_write_file", {
-    pool.sftp_write(&host_id, &path, &content)
-        .await
-        .map_err(|error| {
-            make_ssh_command_error(&app, SshStage::SftpWrite, SshIntent::SftpWrite, error)
-        })?;
-    let _ = success_ssh_diagnostic(
-        &app,
-        SshStage::SftpWrite,
-        SshIntent::SftpWrite,
-        "SFTP write succeeded",
-        SshDiagnosticSuccessTrigger::RoutineOperation,
-    );
-    Ok(true)
+        pool.sftp_write(&host_id, &path, &content)
+            .await
+            .map_err(|error| {
+                make_ssh_command_error(&app, SshStage::SftpWrite, SshIntent::SftpWrite, error)
+            })?;
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SftpWrite,
+            SshIntent::SftpWrite,
+            "SFTP write succeeded",
+            SshDiagnosticSuccessTrigger::RoutineOperation,
+        );
+        Ok(true)
     })
 }
 
@@ -482,17 +482,17 @@ pub async fn sftp_list_dir(
     app: AppHandle,
 ) -> Result<Vec<SftpEntry>, String> {
     timed_async!("sftp_list_dir", {
-    pool.sftp_list(&host_id, &path)
-        .await
-        .map(|result| {
-            let _ = success_ssh_diagnostic(
-                &app,
-                SshStage::SftpRead,
-                SshIntent::SftpRead,
-                "SFTP list succeeded",
-                SshDiagnosticSuccessTrigger::RoutineOperation,
-            );
-            result
+        pool.sftp_list(&host_id, &path)
+            .await
+            .map(|result| {
+                let _ = success_ssh_diagnostic(
+                    &app,
+                    SshStage::SftpRead,
+                    SshIntent::SftpRead,
+                    "SFTP list succeeded",
+                    SshDiagnosticSuccessTrigger::RoutineOperation,
+                );
+                result
         })
         .map_err(|error| {
             make_ssh_command_error(&app, SshStage::SftpRead, SshIntent::SftpRead, error)
@@ -508,17 +508,17 @@ pub async fn sftp_remove_file(
     app: AppHandle,
 ) -> Result<bool, String> {
     timed_async!("sftp_remove_file", {
-    pool.sftp_remove(&host_id, &path).await.map_err(|error| {
-        make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
-    })?;
-    let _ = success_ssh_diagnostic(
-        &app,
-        SshStage::SftpRemove,
-        SshIntent::SftpRemove,
-        "SFTP remove succeeded",
-        SshDiagnosticSuccessTrigger::RoutineOperation,
-    );
-    Ok(true)
+        pool.sftp_remove(&host_id, &path).await.map_err(|error| {
+            make_ssh_command_error(&app, SshStage::SftpRemove, SshIntent::SftpRemove, error)
+        })?;
+        let _ = success_ssh_diagnostic(
+            &app,
+            SshStage::SftpRemove,
+            SshIntent::SftpRemove,
+            "SFTP remove succeeded",
+            SshDiagnosticSuccessTrigger::RoutineOperation,
+        );
+        Ok(true)
     })
 }
 
@@ -530,86 +530,86 @@ pub async fn diagnose_ssh(
     app: AppHandle,
 ) -> Result<SshDiagnosticReport, String> {
     timed_async!("diagnose_ssh", {
-    let intent = intent.parse::<SshIntent>().map_err(|_| {
-        make_ssh_command_error(
-            &app,
-            SshStage::ResolveHostConfig,
-            SshIntent::Connect,
-            format!("Invalid SSH diagnostic intent: {intent}"),
-        )
-    })?;
-
-    let stage = ssh_stage_for_intent(intent);
-    if matches!(intent, SshIntent::Connect) {
-        if pool.is_connected(&host_id).await {
-            return Ok(success_ssh_diagnostic(
-                &app,
-                stage,
-                intent,
-                "SSH connection is healthy",
-                SshDiagnosticSuccessTrigger::ExplicitProbe,
-            ));
-        }
-        let hosts = read_hosts_from_registry().map_err(|error| {
-            make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
-        })?;
-        let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+        let intent = intent.parse::<SshIntent>().map_err(|_| {
             make_ssh_command_error(
                 &app,
                 SshStage::ResolveHostConfig,
                 SshIntent::Connect,
-                format!("No SSH host config with id: {host_id}"),
+                format!("Invalid SSH diagnostic intent: {intent}"),
             )
         })?;
-        return Ok(match pool.connect(&host).await {
-            Ok(_) => success_ssh_diagnostic(
-                &app,
-                SshStage::SessionOpen,
-                SshIntent::Connect,
-                "SSH connect probe succeeded",
-                SshDiagnosticSuccessTrigger::ExplicitProbe,
-            ),
-            Err(error) => {
-                let mut report =
-                    from_any_error(SshStage::TcpReachability, SshIntent::Connect, error);
-                if let Some(code) = report.error_code {
-                    report.stage = ssh_stage_for_error_code(code);
+
+        let stage = ssh_stage_for_intent(intent);
+        if matches!(intent, SshIntent::Connect) {
+            if pool.is_connected(&host_id).await {
+                return Ok(success_ssh_diagnostic(
+                    &app,
+                    stage,
+                    intent,
+                    "SSH connection is healthy",
+                    SshDiagnosticSuccessTrigger::ExplicitProbe,
+                ));
+            }
+            let hosts = read_hosts_from_registry().map_err(|error| {
+                make_ssh_command_error(&app, SshStage::ResolveHostConfig, SshIntent::Connect, error)
+            })?;
+            let host = hosts.into_iter().find(|h| h.id == host_id).ok_or_else(|| {
+                make_ssh_command_error(
+                    &app,
+                    SshStage::ResolveHostConfig,
+                    SshIntent::Connect,
+                    format!("No SSH host config with id: {host_id}"),
+                )
+            })?;
+            return Ok(match pool.connect(&host).await {
+                Ok(_) => success_ssh_diagnostic(
+                    &app,
+                    SshStage::SessionOpen,
+                    SshIntent::Connect,
+                    "SSH connect probe succeeded",
+                    SshDiagnosticSuccessTrigger::ExplicitProbe,
+                ),
+                Err(error) => {
+                    let mut report =
+                        from_any_error(SshStage::TcpReachability, SshIntent::Connect, error);
+                    if let Some(code) = report.error_code {
+                        report.stage = ssh_stage_for_error_code(code);
+                    }
+                    emit_ssh_diagnostic(&app, &report);
+                    report
                 }
-                emit_ssh_diagnostic(&app, &report);
-                report
+            });
+        }
+
+        if !pool.is_connected(&host_id).await {
+            let report = from_any_error(stage, intent, format!("No connection for id: {host_id}"));
+            emit_ssh_diagnostic(&app, &report);
+            return Ok(report);
+        }
+
+        let report = match intent {
+            SshIntent::Exec
+            | SshIntent::InstallStep
+            | SshIntent::DoctorRemote
+            | SshIntent::HealthCheck => {
+                match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
+                    Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
+                    Err(error) => from_any_error(stage, intent, error),
+                }
             }
-        });
-    }
-
-    if !pool.is_connected(&host_id).await {
-        let report = from_any_error(stage, intent, format!("No connection for id: {host_id}"));
-        emit_ssh_diagnostic(&app, &report);
-        return Ok(report);
-    }
-
-    let report = match intent {
-        SshIntent::Exec
-        | SshIntent::InstallStep
-        | SshIntent::DoctorRemote
-        | SshIntent::HealthCheck => {
-            match pool.exec(&host_id, "echo clawpal_ssh_diagnostic").await {
-                Ok(_) => SshDiagnosticReport::success(stage, intent, "SSH exec probe succeeded"),
+            SshIntent::SftpRead => match pool.sftp_list(&host_id, "~").await {
+                Ok(_) => SshDiagnosticReport::success(stage, intent, "SFTP read probe succeeded"),
                 Err(error) => from_any_error(stage, intent, error),
+            },
+            SshIntent::SftpWrite => {
+                skipped_probe_diagnostic(stage, intent, "SFTP write probe skipped (no-op)")
             }
-        }
-        SshIntent::SftpRead => match pool.sftp_list(&host_id, "~").await {
-            Ok(_) => SshDiagnosticReport::success(stage, intent, "SFTP read probe succeeded"),
-            Err(error) => from_any_error(stage, intent, error),
-        },
-        SshIntent::SftpWrite => {
-            skipped_probe_diagnostic(stage, intent, "SFTP write probe skipped (no-op)")
-        }
-        SshIntent::SftpRemove => {
-            skipped_probe_diagnostic(stage, intent, "SFTP remove probe skipped (no-op)")
-        }
-        SshIntent::Connect => unreachable!(),
-    };
-    emit_ssh_diagnostic(&app, &report);
-    Ok(report)
+            SshIntent::SftpRemove => {
+                skipped_probe_diagnostic(stage, intent, "SFTP remove probe skipped (no-op)")
+            }
+            SshIntent::Connect => unreachable!(),
+        };
+        emit_ssh_diagnostic(&app, &report);
+        Ok(report)
     })
 }

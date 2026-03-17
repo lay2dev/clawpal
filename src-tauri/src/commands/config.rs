@@ -6,10 +6,10 @@ pub async fn remote_read_raw_config(
     host_id: String,
 ) -> Result<String, String> {
     timed_async!("remote_read_raw_config", {
-    // openclaw config get requires a path — there's no way to dump the full config via CLI.
-    // Use sftp_read directly since this function's purpose is returning the entire raw config.
-    let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
-    pool.sftp_read(&host_id, &config_path).await
+        // openclaw config get requires a path — there's no way to dump the full config via CLI.
+        // Use sftp_read directly since this function's purpose is returning the entire raw config.
+        let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
+        pool.sftp_read(&host_id, &config_path).await
     })
 }
 
@@ -20,18 +20,18 @@ pub async fn remote_write_raw_config(
     content: String,
 ) -> Result<bool, String> {
     timed_async!("remote_write_raw_config", {
-    // Validate it's valid config JSON using core module
-    let next = clawpal_core::config::validate_config_json(&content)
-        .map_err(|e| format!("Invalid JSON: {e}"))?;
-    // Read current for snapshot
-    let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
-    let current = pool
-        .sftp_read(&host_id, &config_path)
-        .await
-        .unwrap_or_default();
-    remote_write_config_with_snapshot(&pool, &host_id, &config_path, &current, &next, "raw-edit")
-        .await?;
-    Ok(true)
+        // Validate it's valid config JSON using core module
+        let next = clawpal_core::config::validate_config_json(&content)
+            .map_err(|e| format!("Invalid JSON: {e}"))?;
+        // Read current for snapshot
+        let config_path = remote_resolve_openclaw_config_path(&pool, &host_id).await?;
+        let current = pool
+            .sftp_read(&host_id, &config_path)
+            .await
+            .unwrap_or_default();
+        remote_write_config_with_snapshot(&pool, &host_id, &config_path, &current, &next, "raw-edit")
+            .await?;
+        Ok(true)
     })
 }
 
@@ -43,29 +43,29 @@ pub async fn remote_apply_config_patch(
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
     timed_async!("remote_apply_config_patch", {
-    let (config_path, current_text, current) =
-        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        let (config_path, current_text, current) =
+            remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
-    // Use core function to build candidate config
-    let (candidate, _changes) =
-        clawpal_core::config::build_candidate_config(&current, &patch_template, &params)?;
+        // Use core function to build candidate config
+        let (candidate, _changes) =
+            clawpal_core::config::build_candidate_config(&current, &patch_template, &params)?;
 
-    remote_write_config_with_snapshot(
-        &pool,
-        &host_id,
-        &config_path,
-        &current_text,
-        &candidate,
-        "config-patch",
-    )
-    .await?;
-    Ok(ApplyResult {
-        ok: true,
-        snapshot_id: None,
-        config_path,
-        backup_path: None,
-        warnings: Vec::new(),
-        errors: Vec::new(),
+        remote_write_config_with_snapshot(
+            &pool,
+            &host_id,
+            &config_path,
+            &current_text,
+            &candidate,
+            "config-patch",
+        )
+        .await?;
+        Ok(ApplyResult {
+            ok: true,
+            snapshot_id: None,
+            config_path,
+            backup_path: None,
+            warnings: Vec::new(),
+            errors: Vec::new(),
     })
     })
 }
@@ -76,41 +76,41 @@ pub async fn remote_list_history(
     host_id: String,
 ) -> Result<Value, String> {
     timed_async!("remote_list_history", {
-    // Ensure dir exists
-    pool.exec(&host_id, "mkdir -p ~/.clawpal/snapshots").await?;
-    let entries = pool.sftp_list(&host_id, "~/.clawpal/snapshots").await?;
-    let mut items: Vec<Value> = Vec::new();
-    for entry in entries {
-        if entry.name.starts_with('.') || entry.is_dir {
-            continue;
+        // Ensure dir exists
+        pool.exec(&host_id, "mkdir -p ~/.clawpal/snapshots").await?;
+        let entries = pool.sftp_list(&host_id, "~/.clawpal/snapshots").await?;
+        let mut items: Vec<Value> = Vec::new();
+        for entry in entries {
+            if entry.name.starts_with('.') || entry.is_dir {
+                continue;
+            }
+            // Parse filename: {unix_ts}-{source}-{summary}.json
+            let stem = entry.name.trim_end_matches(".json");
+            let parts: Vec<&str> = stem.splitn(3, '-').collect();
+            let ts_str = parts.first().unwrap_or(&"0");
+            let source = parts.get(1).unwrap_or(&"unknown");
+            let recipe_id = parts.get(2).map(|s| s.to_string());
+            let created_at = ts_str.parse::<i64>().unwrap_or(0);
+            // Convert Unix timestamp to ISO 8601 format for frontend compatibility
+            let created_at_iso = chrono::DateTime::from_timestamp(created_at, 0)
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_else(|| created_at.to_string());
+            let is_rollback = *source == "rollback";
+            items.push(serde_json::json!({
+                "id": entry.name,
+                "recipeId": recipe_id,
+                "createdAt": created_at_iso,
+                "source": source,
+                "canRollback": !is_rollback,
+            }));
         }
-        // Parse filename: {unix_ts}-{source}-{summary}.json
-        let stem = entry.name.trim_end_matches(".json");
-        let parts: Vec<&str> = stem.splitn(3, '-').collect();
-        let ts_str = parts.first().unwrap_or(&"0");
-        let source = parts.get(1).unwrap_or(&"unknown");
-        let recipe_id = parts.get(2).map(|s| s.to_string());
-        let created_at = ts_str.parse::<i64>().unwrap_or(0);
-        // Convert Unix timestamp to ISO 8601 format for frontend compatibility
-        let created_at_iso = chrono::DateTime::from_timestamp(created_at, 0)
-            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-            .unwrap_or_else(|| created_at.to_string());
-        let is_rollback = *source == "rollback";
-        items.push(serde_json::json!({
-            "id": entry.name,
-            "recipeId": recipe_id,
-            "createdAt": created_at_iso,
-            "source": source,
-            "canRollback": !is_rollback,
-        }));
-    }
-    // Sort newest first
-    items.sort_by(|a, b| {
-        let ta = a["createdAt"].as_str().unwrap_or("");
-        let tb = b["createdAt"].as_str().unwrap_or("");
-        tb.cmp(ta)
-    });
-    Ok(serde_json::json!({ "items": items }))
+        // Sort newest first
+        items.sort_by(|a, b| {
+            let ta = a["createdAt"].as_str().unwrap_or("");
+            let tb = b["createdAt"].as_str().unwrap_or("");
+            tb.cmp(ta)
+        });
+        Ok(serde_json::json!({ "items": items }))
     })
 }
 
@@ -121,28 +121,28 @@ pub async fn remote_preview_rollback(
     snapshot_id: String,
 ) -> Result<PreviewResult, String> {
     timed_async!("remote_preview_rollback", {
-    let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
-    let snapshot_text = pool.sftp_read(&host_id, &snapshot_path).await?;
-    let target = clawpal_core::config::validate_config_json(&snapshot_text)
-        .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
+        let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
+        let snapshot_text = pool.sftp_read(&host_id, &snapshot_path).await?;
+        let target = clawpal_core::config::validate_config_json(&snapshot_text)
+            .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
 
-    let (_config_path, _current_text, current) =
-        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        let (_config_path, _current_text, current) =
+            remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
-    let before = clawpal_core::config::format_config_diff(&current, &current);
-    let after = clawpal_core::config::format_config_diff(&target, &target);
-    let diff = clawpal_core::config::format_config_diff(&current, &target);
+        let before = clawpal_core::config::format_config_diff(&current, &current);
+        let after = clawpal_core::config::format_config_diff(&target, &target);
+        let diff = clawpal_core::config::format_config_diff(&current, &target);
 
-    Ok(PreviewResult {
-        recipe_id: "rollback".into(),
-        diff,
-        config_before: before,
-        config_after: after,
-        changes: Vec::new(), // Core module doesn't expose change paths directly
-        overwrites_existing: true,
-        can_rollback: true,
-        impact_level: "medium".into(),
-        warnings: vec!["Rollback will replace current configuration".into()],
+        Ok(PreviewResult {
+            recipe_id: "rollback".into(),
+            diff,
+            config_before: before,
+            config_after: after,
+            changes: Vec::new(), // Core module doesn't expose change paths directly
+            overwrites_existing: true,
+            can_rollback: true,
+            impact_level: "medium".into(),
+            warnings: vec!["Rollback will replace current configuration".into()],
     })
     })
 }
@@ -154,30 +154,30 @@ pub async fn remote_rollback(
     snapshot_id: String,
 ) -> Result<ApplyResult, String> {
     timed_async!("remote_rollback", {
-    let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
-    let target_text = pool.sftp_read(&host_id, &snapshot_path).await?;
-    let target = clawpal_core::config::validate_config_json(&target_text)
-        .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
+        let snapshot_path = format!("~/.clawpal/snapshots/{snapshot_id}");
+        let target_text = pool.sftp_read(&host_id, &snapshot_path).await?;
+        let target = clawpal_core::config::validate_config_json(&target_text)
+            .map_err(|e| format!("Failed to parse snapshot: {e}"))?;
 
-    let (config_path, current_text, _current) =
-        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    remote_write_config_with_snapshot(
-        &pool,
-        &host_id,
-        &config_path,
-        &current_text,
-        &target,
-        "rollback",
-    )
-    .await?;
+        let (config_path, current_text, _current) =
+            remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        remote_write_config_with_snapshot(
+            &pool,
+            &host_id,
+            &config_path,
+            &current_text,
+            &target,
+            "rollback",
+        )
+        .await?;
 
-    Ok(ApplyResult {
-        ok: true,
-        snapshot_id: Some(snapshot_id),
-        config_path,
-        backup_path: None,
-        warnings: vec!["rolled back".into()],
-        errors: Vec::new(),
+        Ok(ApplyResult {
+            ok: true,
+            snapshot_id: Some(snapshot_id),
+            config_path,
+            backup_path: None,
+            warnings: vec!["rolled back".into()],
+            errors: Vec::new(),
     })
     })
 }
@@ -185,9 +185,9 @@ pub async fn remote_rollback(
 #[tauri::command]
 pub fn read_raw_config() -> Result<String, String> {
     timed_sync!("read_raw_config", {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
     })
 }
 
@@ -197,33 +197,33 @@ pub fn apply_config_patch(
     params: Map<String, Value>,
 ) -> Result<ApplyResult, String> {
     timed_sync!("apply_config_patch", {
-    let paths = resolve_paths();
-    ensure_dirs(&paths)?;
-    let current = read_openclaw_config(&paths)?;
-    let current_text = serde_json::to_string_pretty(&current).map_err(|e| e.to_string())?;
-    let snapshot = add_snapshot(
-        &paths.history_dir,
-        &paths.metadata_path,
-        Some("config-patch".into()),
-        "apply",
-        true,
-        &current_text,
-        None,
-    )?;
-    let (candidate, _changes) =
-        build_candidate_config_from_template(&current, &patch_template, &params)?;
-    write_json(&paths.config_path, &candidate)?;
-    let mut warnings = Vec::new();
-    if let Err(err) = sync_main_auth_for_config(&paths, &candidate) {
-        warnings.push(format!("main auth sync skipped: {err}"));
-    }
-    Ok(ApplyResult {
-        ok: true,
-        snapshot_id: Some(snapshot.id),
-        config_path: paths.config_path.to_string_lossy().to_string(),
-        backup_path: Some(snapshot.config_path),
-        warnings,
-        errors: Vec::new(),
+        let paths = resolve_paths();
+        ensure_dirs(&paths)?;
+        let current = read_openclaw_config(&paths)?;
+        let current_text = serde_json::to_string_pretty(&current).map_err(|e| e.to_string())?;
+        let snapshot = add_snapshot(
+            &paths.history_dir,
+            &paths.metadata_path,
+            Some("config-patch".into()),
+            "apply",
+            true,
+            &current_text,
+            None,
+        )?;
+        let (candidate, _changes) =
+            build_candidate_config_from_template(&current, &patch_template, &params)?;
+        write_json(&paths.config_path, &candidate)?;
+        let mut warnings = Vec::new();
+        if let Err(err) = sync_main_auth_for_config(&paths, &candidate) {
+            warnings.push(format!("main auth sync skipped: {err}"));
+        }
+        Ok(ApplyResult {
+            ok: true,
+            snapshot_id: Some(snapshot.id),
+            config_path: paths.config_path.to_string_lossy().to_string(),
+            backup_path: Some(snapshot.config_path),
+            warnings,
+            errors: Vec::new(),
     })
     })
 }
@@ -231,20 +231,20 @@ pub fn apply_config_patch(
 #[tauri::command]
 pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> {
     timed_sync!("list_history", {
-    let paths = resolve_paths();
-    let index = list_snapshots(&paths.metadata_path)?;
-    let items = index
-        .items
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(|item| HistoryItem {
-            id: item.id,
-            recipe_id: item.recipe_id,
-            created_at: item.created_at,
-            source: item.source,
-            can_rollback: item.can_rollback,
-            rollback_of: item.rollback_of,
+        let paths = resolve_paths();
+        let index = list_snapshots(&paths.metadata_path)?;
+        let items = index
+            .items
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|item| HistoryItem {
+                id: item.id,
+                recipe_id: item.recipe_id,
+                created_at: item.created_at,
+                source: item.source,
+                can_rollback: item.can_rollback,
+                rollback_of: item.rollback_of,
         })
         .collect();
     Ok(HistoryPage { items })
@@ -254,32 +254,32 @@ pub fn list_history(limit: usize, offset: usize) -> Result<HistoryPage, String> 
 #[tauri::command]
 pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
     timed_sync!("preview_rollback", {
-    let paths = resolve_paths();
-    let index = list_snapshots(&paths.metadata_path)?;
-    let target = index
-        .items
-        .into_iter()
-        .find(|s| s.id == snapshot_id)
-        .ok_or_else(|| "snapshot not found".to_string())?;
-    if !target.can_rollback {
-        return Err("snapshot is not rollbackable".to_string());
-    }
+        let paths = resolve_paths();
+        let index = list_snapshots(&paths.metadata_path)?;
+        let target = index
+            .items
+            .into_iter()
+            .find(|s| s.id == snapshot_id)
+            .ok_or_else(|| "snapshot not found".to_string())?;
+        if !target.can_rollback {
+            return Err("snapshot is not rollbackable".to_string());
+        }
 
-    let current = read_openclaw_config(&paths)?;
-    let target_text = read_snapshot(&target.config_path)?;
-    let target_json = clawpal_core::doctor::parse_json5_document_or_default(&target_text);
-    let before_text = serde_json::to_string_pretty(&current).unwrap_or_else(|_| "{}".into());
-    let after_text = serde_json::to_string_pretty(&target_json).unwrap_or_else(|_| "{}".into());
-    Ok(PreviewResult {
-        recipe_id: "rollback".into(),
-        diff: format_diff(&current, &target_json),
-        config_before: before_text,
-        config_after: after_text,
-        changes: collect_change_paths(&current, &target_json),
-        overwrites_existing: true,
-        can_rollback: true,
-        impact_level: "medium".into(),
-        warnings: vec!["Rollback will replace current configuration".into()],
+        let current = read_openclaw_config(&paths)?;
+        let target_text = read_snapshot(&target.config_path)?;
+        let target_json = clawpal_core::doctor::parse_json5_document_or_default(&target_text);
+        let before_text = serde_json::to_string_pretty(&current).unwrap_or_else(|_| "{}".into());
+        let after_text = serde_json::to_string_pretty(&target_json).unwrap_or_else(|_| "{}".into());
+        Ok(PreviewResult {
+            recipe_id: "rollback".into(),
+            diff: format_diff(&current, &target_json),
+            config_before: before_text,
+            config_after: after_text,
+            changes: collect_change_paths(&current, &target_json),
+            overwrites_existing: true,
+            can_rollback: true,
+            impact_level: "medium".into(),
+            warnings: vec!["Rollback will replace current configuration".into()],
     })
     })
 }
@@ -287,37 +287,37 @@ pub fn preview_rollback(snapshot_id: String) -> Result<PreviewResult, String> {
 #[tauri::command]
 pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
     timed_sync!("rollback", {
-    let paths = resolve_paths();
-    ensure_dirs(&paths)?;
-    let index = list_snapshots(&paths.metadata_path)?;
-    let target = index
-        .items
-        .into_iter()
-        .find(|s| s.id == snapshot_id)
-        .ok_or_else(|| "snapshot not found".to_string())?;
-    if !target.can_rollback {
-        return Err("snapshot is not rollbackable".to_string());
-    }
-    let target_text = read_snapshot(&target.config_path)?;
-    let backup = read_openclaw_config(&paths)?;
-    let backup_text = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
-    let _ = add_snapshot(
-        &paths.history_dir,
-        &paths.metadata_path,
-        target.recipe_id.clone(),
-        "rollback",
-        true,
-        &backup_text,
-        Some(target.id.clone()),
-    )?;
-    write_text(&paths.config_path, &target_text)?;
-    Ok(ApplyResult {
-        ok: true,
-        snapshot_id: Some(target.id),
-        config_path: paths.config_path.to_string_lossy().to_string(),
-        backup_path: None,
-        warnings: vec!["rolled back".into()],
-        errors: Vec::new(),
+        let paths = resolve_paths();
+        ensure_dirs(&paths)?;
+        let index = list_snapshots(&paths.metadata_path)?;
+        let target = index
+            .items
+            .into_iter()
+            .find(|s| s.id == snapshot_id)
+            .ok_or_else(|| "snapshot not found".to_string())?;
+        if !target.can_rollback {
+            return Err("snapshot is not rollbackable".to_string());
+        }
+        let target_text = read_snapshot(&target.config_path)?;
+        let backup = read_openclaw_config(&paths)?;
+        let backup_text = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
+        let _ = add_snapshot(
+            &paths.history_dir,
+            &paths.metadata_path,
+            target.recipe_id.clone(),
+            "rollback",
+            true,
+            &backup_text,
+            Some(target.id.clone()),
+        )?;
+        write_text(&paths.config_path, &target_text)?;
+        Ok(ApplyResult {
+            ok: true,
+            snapshot_id: Some(target.id),
+            config_path: paths.config_path.to_string_lossy().to_string(),
+            backup_path: None,
+            warnings: vec!["rolled back".into()],
+            errors: Vec::new(),
     })
     })
 }

@@ -6,62 +6,62 @@ pub async fn remote_list_discord_guild_channels(
     host_id: String,
 ) -> Result<Vec<DiscordGuildChannel>, String> {
     timed_async!("remote_list_discord_guild_channels", {
-    let output = crate::cli_runner::run_openclaw_remote(
-        &pool,
-        &host_id,
-        &["config", "get", "channels.discord", "--json"],
-    )
-    .await?;
-    let discord_section = if output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
-    let bindings_output = crate::cli_runner::run_openclaw_remote(
-        &pool,
-        &host_id,
-        &["config", "get", "bindings", "--json"],
-    )
-    .await?;
-    let bindings_section = if bindings_output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&bindings_output)
-            .unwrap_or_else(|_| Value::Array(Vec::new()))
-    } else {
-        Value::Array(Vec::new())
-    };
-    // Wrap to match existing code expectations (rest of function uses cfg.get("channels").and_then(|c| c.get("discord")))
-    let cfg = serde_json::json!({
-        "channels": { "discord": discord_section },
-        "bindings": bindings_section
-    });
-
-    let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
-    let configured_single_guild_id = discord_cfg
-        .and_then(|d| d.get("guilds"))
-        .and_then(Value::as_object)
-        .and_then(|guilds| {
-            if guilds.len() == 1 {
-                guilds.keys().next().cloned()
-            } else {
-                None
-            }
+        let output = crate::cli_runner::run_openclaw_remote(
+            &pool,
+            &host_id,
+            &["config", "get", "channels.discord", "--json"],
+        )
+        .await?;
+        let discord_section = if output.exit_code == 0 {
+            crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let bindings_output = crate::cli_runner::run_openclaw_remote(
+            &pool,
+            &host_id,
+            &["config", "get", "bindings", "--json"],
+        )
+        .await?;
+        let bindings_section = if bindings_output.exit_code == 0 {
+            crate::cli_runner::parse_json_output(&bindings_output)
+                .unwrap_or_else(|_| Value::Array(Vec::new()))
+        } else {
+            Value::Array(Vec::new())
+        };
+        // Wrap to match existing code expectations (rest of function uses cfg.get("channels").and_then(|c| c.get("discord")))
+        let cfg = serde_json::json!({
+            "channels": { "discord": discord_section },
+            "bindings": bindings_section
         });
 
-    // Extract bot token: top-level first, then fall back to first account token
-    let bot_token = discord_cfg
-        .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
-        .and_then(Value::as_str)
-        .map(|s| s.to_string())
-        .or_else(|| {
-            discord_cfg
-                .and_then(|d| d.get("accounts"))
-                .and_then(Value::as_object)
-                .and_then(|accounts| {
-                    accounts.values().find_map(|acct| {
-                        acct.get("token")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
+        let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
+        let configured_single_guild_id = discord_cfg
+            .and_then(|d| d.get("guilds"))
+            .and_then(Value::as_object)
+            .and_then(|guilds| {
+                if guilds.len() == 1 {
+                    guilds.keys().next().cloned()
+                } else {
+                    None
+                }
+            });
+
+        // Extract bot token: top-level first, then fall back to first account token
+        let bot_token = discord_cfg
+            .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+            .or_else(|| {
+                discord_cfg
+                    .and_then(|d| d.get("accounts"))
+                    .and_then(Value::as_object)
+                    .and_then(|accounts| {
+                        accounts.values().find_map(|acct| {
+                            acct.get("token")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty())
+                                .map(|s| s.to_string())
                     })
                 })
         });
@@ -291,21 +291,21 @@ pub async fn remote_list_bindings(
     host_id: String,
 ) -> Result<Vec<Value>, String> {
     timed_async!("remote_list_bindings", {
-    let output = crate::cli_runner::run_openclaw_remote(
-        &pool,
-        &host_id,
-        &["config", "get", "bindings", "--json"],
-    )
-    .await?;
-    // "bindings" may not exist yet — treat non-zero exit with "not found" as empty
-    if output.exit_code != 0 {
-        let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
-        if msg.contains("not found") {
-            return Ok(Vec::new());
+        let output = crate::cli_runner::run_openclaw_remote(
+            &pool,
+            &host_id,
+            &["config", "get", "bindings", "--json"],
+        )
+        .await?;
+        // "bindings" may not exist yet — treat non-zero exit with "not found" as empty
+        if output.exit_code != 0 {
+            let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
+            if msg.contains("not found") {
+                return Ok(Vec::new());
+            }
         }
-    }
-    let json = crate::cli_runner::parse_json_output(&output)?;
-    clawpal_core::discovery::parse_bindings(&json.to_string())
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        clawpal_core::discovery::parse_bindings(&json.to_string())
     })
 }
 
@@ -315,27 +315,27 @@ pub async fn remote_list_channels_minimal(
     host_id: String,
 ) -> Result<Vec<ChannelNode>, String> {
     timed_async!("remote_list_channels_minimal", {
-    let output = crate::cli_runner::run_openclaw_remote(
-        &pool,
-        &host_id,
-        &["config", "get", "channels", "--json"],
-    )
-    .await?;
-    // channels key might not exist yet
-    if output.exit_code != 0 {
-        let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
-        if msg.contains("not found") {
-            return Ok(Vec::new());
+        let output = crate::cli_runner::run_openclaw_remote(
+            &pool,
+            &host_id,
+            &["config", "get", "channels", "--json"],
+        )
+        .await?;
+        // channels key might not exist yet
+        if output.exit_code != 0 {
+            let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
+            if msg.contains("not found") {
+                return Ok(Vec::new());
+            }
+            return Err(format!(
+                "openclaw config get channels failed: {}",
+                output.stderr
+            ));
         }
-        return Err(format!(
-            "openclaw config get channels failed: {}",
-            output.stderr
-        ));
-    }
-    let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
-    // Wrap in top-level object with "channels" key so collect_channel_nodes works
-    let cfg = serde_json::json!({ "channels": channels_val });
-    Ok(collect_channel_nodes(&cfg))
+        let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
+        // Wrap in top-level object with "channels" key so collect_channel_nodes works
+        let cfg = serde_json::json!({ "channels": channels_val });
+        Ok(collect_channel_nodes(&cfg))
     })
 }
 
@@ -345,44 +345,44 @@ pub async fn remote_list_agents_overview(
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
     timed_async!("remote_list_agents_overview", {
-    let output =
-        run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
-    if output.exit_code != 0 {
-        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
-        return Err(format!(
-            "openclaw agents list failed ({}): {}",
-            output.exit_code,
-            details.trim()
-        ));
-    }
-    let json = crate::cli_runner::parse_json_output(&output)?;
-    // Check which agents have sessions remotely (single command, batch check)
-    // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
-    let online_set = match pool.exec_login(
-        &host_id,
-        "for d in ~/.openclaw/agents/*/sessions/sessions.json; do [ -f \"$d\" ] && [ $(wc -c < \"$d\") -gt 2 ] && basename $(dirname $(dirname \"$d\")); done",
-    ).await {
-        Ok(result) => {
-            result.stdout.lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect::<std::collections::HashSet<String>>()
+        let output =
+            run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]).await?;
+        if output.exit_code != 0 {
+            let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+            return Err(format!(
+                "openclaw agents list failed ({}): {}",
+                output.exit_code,
+                details.trim()
+            ));
         }
-        Err(_) => std::collections::HashSet::new(), // fallback: all offline
-    };
-    parse_agents_cli_output(&json, Some(&online_set))
+        let json = crate::cli_runner::parse_json_output(&output)?;
+        // Check which agents have sessions remotely (single command, batch check)
+        // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
+        let online_set = match pool.exec_login(
+            &host_id,
+            "for d in ~/.openclaw/agents/*/sessions/sessions.json; do [ -f \"$d\" ] && [ $(wc -c < \"$d\") -gt 2 ] && basename $(dirname $(dirname \"$d\")); done",
+        ).await {
+            Ok(result) => {
+                result.stdout.lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect::<std::collections::HashSet<String>>()
+            }
+            Err(_) => std::collections::HashSet::new(), // fallback: all offline
+        };
+        parse_agents_cli_output(&json, Some(&online_set))
     })
 }
 
 #[tauri::command]
 pub async fn list_channels() -> Result<Vec<ChannelNode>, String> {
     timed_async!("list_channels", {
-    tauri::async_runtime::spawn_blocking(|| {
-        let paths = resolve_paths();
-        let cfg = read_openclaw_config(&paths)?;
-        let mut nodes = collect_channel_nodes(&cfg);
-        enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
-        Ok(nodes)
+        tauri::async_runtime::spawn_blocking(|| {
+            let paths = resolve_paths();
+            let cfg = read_openclaw_config(&paths)?;
+            let mut nodes = collect_channel_nodes(&cfg);
+            enrich_channel_display_names(&paths, &cfg, &mut nodes)?;
+            Ok(nodes)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -394,37 +394,37 @@ pub async fn list_channels_minimal(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<ChannelNode>, String> {
     timed_async!("list_channels_minimal", {
-    let cache_key = local_cli_cache_key("channels-minimal");
-    let ttl = Some(std::time::Duration::from_secs(30));
-    if let Some(cached) = cache.get(&cache_key, ttl) {
-        return serde_json::from_str(&cached).map_err(|e| e.to_string());
-    }
-    let cache = cache.inner().clone();
-    let cache_key_cloned = cache_key.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::cli_runner::run_openclaw(&["config", "get", "channels", "--json"])
-            .map_err(|e| format!("Failed to run openclaw: {e}"))?;
-        if output.exit_code != 0 {
-            let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
-            if msg.contains("not found") {
-                return Ok(Vec::new());
+        let cache_key = local_cli_cache_key("channels-minimal");
+        let ttl = Some(std::time::Duration::from_secs(30));
+        if let Some(cached) = cache.get(&cache_key, ttl) {
+            return serde_json::from_str(&cached).map_err(|e| e.to_string());
+        }
+        let cache = cache.inner().clone();
+        let cache_key_cloned = cache_key.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let output = crate::cli_runner::run_openclaw(&["config", "get", "channels", "--json"])
+                .map_err(|e| format!("Failed to run openclaw: {e}"))?;
+            if output.exit_code != 0 {
+                let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
+                if msg.contains("not found") {
+                    return Ok(Vec::new());
+                }
+                // Fallback: direct read
+                let paths = resolve_paths();
+                let cfg = read_openclaw_config(&paths)?;
+                let result = collect_channel_nodes(&cfg);
+                if let Ok(serialized) = serde_json::to_string(&result) {
+                    cache.set(cache_key_cloned, serialized);
+                }
+                return Ok(result);
             }
-            // Fallback: direct read
-            let paths = resolve_paths();
-            let cfg = read_openclaw_config(&paths)?;
+            let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
+            let cfg = serde_json::json!({ "channels": channels_val });
             let result = collect_channel_nodes(&cfg);
             if let Ok(serialized) = serde_json::to_string(&result) {
                 cache.set(cache_key_cloned, serialized);
             }
-            return Ok(result);
-        }
-        let channels_val = crate::cli_runner::parse_json_output(&output).unwrap_or(Value::Null);
-        let cfg = serde_json::json!({ "channels": channels_val });
-        let result = collect_channel_nodes(&cfg);
-        if let Ok(serialized) = serde_json::to_string(&result) {
-            cache.set(cache_key_cloned, serialized);
-        }
-        Ok(result)
+            Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -434,52 +434,52 @@ pub async fn list_channels_minimal(
 #[tauri::command]
 pub fn list_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
     timed_sync!("list_discord_guild_channels", {
-    let paths = resolve_paths();
-    let cache_file = paths.clawpal_dir.join("discord-guild-channels.json");
-    if cache_file.exists() {
-        let text = fs::read_to_string(&cache_file).map_err(|e| e.to_string())?;
-        let entries: Vec<DiscordGuildChannel> = serde_json::from_str(&text).unwrap_or_default();
-        return Ok(entries);
-    }
-    Ok(Vec::new())
+        let paths = resolve_paths();
+        let cache_file = paths.clawpal_dir.join("discord-guild-channels.json");
+        if cache_file.exists() {
+            let text = fs::read_to_string(&cache_file).map_err(|e| e.to_string())?;
+            let entries: Vec<DiscordGuildChannel> = serde_json::from_str(&text).unwrap_or_default();
+            return Ok(entries);
+        }
+        Ok(Vec::new())
     })
 }
 
 #[tauri::command]
 pub async fn refresh_discord_guild_channels() -> Result<Vec<DiscordGuildChannel>, String> {
     timed_async!("refresh_discord_guild_channels", {
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = resolve_paths();
-        ensure_dirs(&paths)?;
-        let cfg = read_openclaw_config(&paths)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let paths = resolve_paths();
+            ensure_dirs(&paths)?;
+            let cfg = read_openclaw_config(&paths)?;
 
-        let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
-        let configured_single_guild_id = discord_cfg
-            .and_then(|d| d.get("guilds"))
-            .and_then(Value::as_object)
-            .and_then(|guilds| {
-                if guilds.len() == 1 {
-                    guilds.keys().next().cloned()
-                } else {
-                    None
-                }
-            });
+            let discord_cfg = cfg.get("channels").and_then(|c| c.get("discord"));
+            let configured_single_guild_id = discord_cfg
+                .and_then(|d| d.get("guilds"))
+                .and_then(Value::as_object)
+                .and_then(|guilds| {
+                    if guilds.len() == 1 {
+                        guilds.keys().next().cloned()
+                    } else {
+                        None
+                    }
+                });
 
-        // Extract bot token: top-level first, then fall back to first account token
-        let bot_token = discord_cfg
-            .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-            .or_else(|| {
-                discord_cfg
-                    .and_then(|d| d.get("accounts"))
-                    .and_then(Value::as_object)
-                    .and_then(|accounts| {
-                        accounts.values().find_map(|acct| {
-                            acct.get("token")
-                                .and_then(Value::as_str)
-                                .filter(|s| !s.is_empty())
-                                .map(|s| s.to_string())
+            // Extract bot token: top-level first, then fall back to first account token
+            let bot_token = discord_cfg
+                .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    discord_cfg
+                        .and_then(|d| d.get("accounts"))
+                        .and_then(Value::as_object)
+                        .and_then(|accounts| {
+                            accounts.values().find_map(|acct| {
+                                acct.get("token")
+                                    .and_then(Value::as_str)
+                                    .filter(|s| !s.is_empty())
+                                    .map(|s| s.to_string())
                         })
                     })
             });
@@ -822,27 +822,27 @@ pub async fn list_bindings(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<Value>, String> {
     timed_async!("list_bindings", {
-    let cache_key = local_cli_cache_key("bindings");
-    if let Some(cached) = cache.get(&cache_key, None) {
-        return serde_json::from_str(&cached).map_err(|e| e.to_string());
-    }
-    let cache = cache.inner().clone();
-    let cache_key_cloned = cache_key.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
-        // "bindings" may not exist yet — treat "not found" as empty
-        if output.exit_code != 0 {
-            let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
-            if msg.contains("not found") {
-                return Ok(Vec::new());
+        let cache_key = local_cli_cache_key("bindings");
+        if let Some(cached) = cache.get(&cache_key, None) {
+            return serde_json::from_str(&cached).map_err(|e| e.to_string());
+        }
+        let cache = cache.inner().clone();
+        let cache_key_cloned = cache_key.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let output = crate::cli_runner::run_openclaw(&["config", "get", "bindings", "--json"])?;
+            // "bindings" may not exist yet — treat "not found" as empty
+            if output.exit_code != 0 {
+                let msg = format!("{} {}", output.stderr, output.stdout).to_lowercase();
+                if msg.contains("not found") {
+                    return Ok(Vec::new());
+                }
             }
-        }
-        let json = crate::cli_runner::parse_json_output(&output)?;
-        let result = json.as_array().cloned().unwrap_or_default();
-        if let Ok(serialized) = serde_json::to_string(&result) {
-            cache.set(cache_key_cloned, serialized);
-        }
-        Ok(result)
+            let json = crate::cli_runner::parse_json_output(&output)?;
+            let result = json.as_array().cloned().unwrap_or_default();
+            if let Ok(serialized) = serde_json::to_string(&result) {
+                cache.set(cache_key_cloned, serialized);
+            }
+            Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -854,20 +854,20 @@ pub async fn list_agents_overview(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<Vec<AgentOverview>, String> {
     timed_async!("list_agents_overview", {
-    let cache_key = local_cli_cache_key("agents-list");
-    if let Some(cached) = cache.get(&cache_key, None) {
-        return serde_json::from_str(&cached).map_err(|e| e.to_string());
-    }
-    let cache = cache.inner().clone();
-    let cache_key_cloned = cache_key.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
-        let json = crate::cli_runner::parse_json_output(&output)?;
-        let result = parse_agents_cli_output(&json, None)?;
-        if let Ok(serialized) = serde_json::to_string(&result) {
-            cache.set(cache_key_cloned, serialized);
+        let cache_key = local_cli_cache_key("agents-list");
+        if let Some(cached) = cache.get(&cache_key, None) {
+            return serde_json::from_str(&cached).map_err(|e| e.to_string());
         }
-        Ok(result)
+        let cache = cache.inner().clone();
+        let cache_key_cloned = cache_key.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let output = crate::cli_runner::run_openclaw(&["agents", "list", "--json"])?;
+            let json = crate::cli_runner::parse_json_output(&output)?;
+            let result = parse_agents_cli_output(&json, None)?;
+            if let Ok(serialized) = serde_json::to_string(&result) {
+                cache.set(cache_key_cloned, serialized);
+            }
+            Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?

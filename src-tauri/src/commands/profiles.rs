@@ -416,8 +416,8 @@ pub async fn remote_list_model_profiles(
     host_id: String,
 ) -> Result<Vec<ModelProfile>, String> {
     timed_async!("remote_list_model_profiles", {
-    let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    Ok(profiles)
+        let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        Ok(profiles)
     })
 }
 
@@ -428,18 +428,18 @@ pub async fn remote_upsert_model_profile(
     profile: ModelProfile,
 ) -> Result<ModelProfile, String> {
     timed_async!("remote_upsert_model_profile", {
-    let content = pool
-        .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
-        .await
-        .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
-    let (saved, next_json) =
-        clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
-            .map_err(|e| e.to_string())?;
+        let content = pool
+            .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
+            .await
+            .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
+        let (saved, next_json) =
+            clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
+                .map_err(|e| e.to_string())?;
 
-    let _ = pool.exec(&host_id, "mkdir -p ~/.clawpal").await;
-    pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
-        .await?;
-    Ok(saved)
+        let _ = pool.exec(&host_id, "mkdir -p ~/.clawpal").await;
+        pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
+            .await?;
+        Ok(saved)
     })
 }
 
@@ -450,19 +450,19 @@ pub async fn remote_delete_model_profile(
     profile_id: String,
 ) -> Result<bool, String> {
     timed_async!("remote_delete_model_profile", {
-    let content = pool
-        .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
-        .await
-        .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
-    let (removed, next_json) =
-        clawpal_core::profile::delete_profile_from_storage_json(&content, &profile_id)
-            .map_err(|e| e.to_string())?;
-    if !removed {
-        return Ok(false);
-    }
-    pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
-        .await?;
-    Ok(true)
+        let content = pool
+            .sftp_read(&host_id, "~/.clawpal/model-profiles.json")
+            .await
+            .unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
+        let (removed, next_json) =
+            clawpal_core::profile::delete_profile_from_storage_json(&content, &profile_id)
+                .map_err(|e| e.to_string())?;
+        if !removed {
+            return Ok(false);
+        }
+        pool.sftp_write(&host_id, "~/.clawpal/model-profiles.json", &next_json)
+            .await?;
+        Ok(true)
     })
 }
 
@@ -472,38 +472,38 @@ pub async fn remote_resolve_api_keys(
     host_id: String,
 ) -> Result<Vec<ResolvedApiKey>, String> {
     timed_async!("remote_resolve_api_keys", {
-    let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles)
-        .await
-        .ok();
+        let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        let auth_cache = RemoteAuthCache::build(&pool, &host_id, &profiles)
+            .await
+            .ok();
 
-    let mut out = Vec::new();
-    for profile in &profiles {
-        let (resolved_key, source) = if let Some(ref cache) = auth_cache {
-            if let Some((key, source)) = cache.resolve_for_profile_with_source(profile) {
-                (key, Some(source))
+        let mut out = Vec::new();
+        for profile in &profiles {
+            let (resolved_key, source) = if let Some(ref cache) = auth_cache {
+                if let Some((key, source)) = cache.resolve_for_profile_with_source(profile) {
+                    (key, Some(source))
+                } else {
+                    (String::new(), None)
+                }
             } else {
-                (String::new(), None)
-            }
-        } else {
-            match resolve_remote_profile_api_key(&pool, &host_id, profile).await {
-                Ok(key) => (key, None),
-                Err(_) => (String::new(), None),
-            }
-        };
-        let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
-            Some(true)
-        } else {
-            None
-        };
-        out.push(build_resolved_api_key(
-            profile,
-            &resolved_key,
-            source,
-            resolved_override,
-        ));
-    }
-    Ok(out)
+                match resolve_remote_profile_api_key(&pool, &host_id, profile).await {
+                    Ok(key) => (key, None),
+                    Err(_) => (String::new(), None),
+                }
+            };
+            let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
+                Some(true)
+            } else {
+                None
+            };
+            out.push(build_resolved_api_key(
+                profile,
+                &resolved_key,
+                source,
+                resolved_override,
+            ));
+        }
+        Ok(out)
     })
 }
 
@@ -514,28 +514,28 @@ pub async fn remote_test_model_profile(
     profile_id: String,
 ) -> Result<bool, String> {
     timed_async!("remote_test_model_profile", {
-    let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    let profile = profiles
-        .into_iter()
-        .find(|candidate| candidate.id == profile_id)
-        .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
+        let (profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        let profile = profiles
+            .into_iter()
+            .find(|candidate| candidate.id == profile_id)
+            .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
 
-    if !profile.enabled {
-        return Err("Profile is disabled".into());
-    }
+        if !profile.enabled {
+            return Err("Profile is disabled".into());
+        }
 
-    let api_key = resolve_remote_profile_api_key(&pool, &host_id, &profile).await?;
-    if api_key.trim().is_empty() && !provider_supports_optional_api_key(&profile.provider) {
-        let hint = missing_profile_auth_hint(&profile.provider, true);
-        return Err(
-            format!("No API key resolved for this remote profile. Set apiKey directly, configure auth_ref in remote auth store (auth-profiles.json/auth.json), or export auth_ref on remote shell.{hint}"),
-        );
-    }
+        let api_key = resolve_remote_profile_api_key(&pool, &host_id, &profile).await?;
+        if api_key.trim().is_empty() && !provider_supports_optional_api_key(&profile.provider) {
+            let hint = missing_profile_auth_hint(&profile.provider, true);
+            return Err(
+                format!("No API key resolved for this remote profile. Set apiKey directly, configure auth_ref in remote auth store (auth-profiles.json/auth.json), or export auth_ref on remote shell.{hint}"),
+            );
+        }
 
-    let resolved_base_url = resolve_remote_profile_base_url(&pool, &host_id, &profile).await?;
+        let resolved_base_url = resolve_remote_profile_base_url(&pool, &host_id, &profile).await?;
 
-    tauri::async_runtime::spawn_blocking(move || {
-        run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
+        tauri::async_runtime::spawn_blocking(move || {
+            run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
     })
     .await
     .map_err(|e| format!("Task join failed: {e}"))??;
@@ -550,8 +550,8 @@ pub async fn remote_extract_model_profiles_from_config(
     host_id: String,
 ) -> Result<ExtractModelProfilesResult, String> {
     timed_async!("remote_extract_model_profiles_from_config", {
-    let (_, result) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    Ok(result)
+        let (_, result) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        Ok(result)
     })
 }
 
@@ -573,101 +573,101 @@ pub async fn remote_sync_profiles_to_local_auth(
     host_id: String,
 ) -> Result<RemoteAuthSyncResult, String> {
     timed_async!("remote_sync_profiles_to_local_auth", {
-    let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    if remote_profiles.is_empty() {
-        return Ok(RemoteAuthSyncResult {
-            total_remote_profiles: 0,
-            synced_profiles: 0,
-            created_profiles: 0,
-            updated_profiles: 0,
-            resolved_keys: 0,
-            unresolved_keys: 0,
-            failed_key_resolves: 0,
-        });
-    }
-
-    let paths = resolve_paths();
-    let mut local_profiles = dedupe_profiles_by_model_key(load_model_profiles(&paths));
-
-    let mut created_profiles = 0usize;
-    let mut updated_profiles = 0usize;
-    let mut resolved_keys = 0usize;
-    let mut unresolved_keys = 0usize;
-    let mut failed_key_resolves = 0usize;
-
-    // Pre-fetch all needed remote env vars and auth-store files in bulk
-    // (~3 SSH calls total instead of 5-7 per profile).
-    let auth_cache = match RemoteAuthCache::build(&pool, &host_id, &remote_profiles).await {
-        Ok(cache) => Some(cache),
-        Err(_) => None,
-    };
-
-    for remote in &remote_profiles {
-        let mut resolved_api_key: Option<String> = None;
-        if !should_skip_session_material_sync(remote) {
-            if let Some(ref cache) = auth_cache {
-                let key = cache.resolve_for_profile(remote);
-                if !key.trim().is_empty() {
-                    resolved_api_key = Some(key);
-                    resolved_keys += 1;
-                } else {
-                    unresolved_keys += 1;
-                }
-            } else {
-                // Fallback to per-profile resolution if cache build failed.
-                match resolve_remote_profile_api_key(&pool, &host_id, remote).await {
-                    Ok(api_key) if !api_key.trim().is_empty() => {
-                        resolved_api_key = Some(api_key);
-                        resolved_keys += 1;
-                    }
-                    Ok(_) => {
-                        unresolved_keys += 1;
-                    }
-                    Err(_) => {
-                        failed_key_resolves += 1;
-                    }
-                }
-            }
+        let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        if remote_profiles.is_empty() {
+            return Ok(RemoteAuthSyncResult {
+                total_remote_profiles: 0,
+                synced_profiles: 0,
+                created_profiles: 0,
+                updated_profiles: 0,
+                resolved_keys: 0,
+                unresolved_keys: 0,
+                failed_key_resolves: 0,
+            });
         }
 
-        let resolved_base_url = if remote
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|v| !v.is_empty())
-        {
-            None
-        } else {
-            match resolve_remote_profile_base_url(&pool, &host_id, remote).await {
-                Ok(Some(remote_base)) if !remote_base.trim().is_empty() => {
-                    Some(remote_base.trim().to_string())
-                }
-                _ => None,
-            }
+        let paths = resolve_paths();
+        let mut local_profiles = dedupe_profiles_by_model_key(load_model_profiles(&paths));
+
+        let mut created_profiles = 0usize;
+        let mut updated_profiles = 0usize;
+        let mut resolved_keys = 0usize;
+        let mut unresolved_keys = 0usize;
+        let mut failed_key_resolves = 0usize;
+
+        // Pre-fetch all needed remote env vars and auth-store files in bulk
+        // (~3 SSH calls total instead of 5-7 per profile).
+        let auth_cache = match RemoteAuthCache::build(&pool, &host_id, &remote_profiles).await {
+            Ok(cache) => Some(cache),
+            Err(_) => None,
         };
 
-        if merge_remote_profile_into_local(
-            &mut local_profiles,
-            remote,
-            resolved_api_key,
-            resolved_base_url,
-        ) {
-            created_profiles += 1;
-        } else {
-            updated_profiles += 1;
+        for remote in &remote_profiles {
+            let mut resolved_api_key: Option<String> = None;
+            if !should_skip_session_material_sync(remote) {
+                if let Some(ref cache) = auth_cache {
+                    let key = cache.resolve_for_profile(remote);
+                    if !key.trim().is_empty() {
+                        resolved_api_key = Some(key);
+                        resolved_keys += 1;
+                    } else {
+                        unresolved_keys += 1;
+                    }
+                } else {
+                    // Fallback to per-profile resolution if cache build failed.
+                    match resolve_remote_profile_api_key(&pool, &host_id, remote).await {
+                        Ok(api_key) if !api_key.trim().is_empty() => {
+                            resolved_api_key = Some(api_key);
+                            resolved_keys += 1;
+                        }
+                        Ok(_) => {
+                            unresolved_keys += 1;
+                        }
+                        Err(_) => {
+                            failed_key_resolves += 1;
+                        }
+                    }
+                }
+            }
+
+            let resolved_base_url = if remote
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|v| !v.is_empty())
+            {
+                None
+            } else {
+                match resolve_remote_profile_base_url(&pool, &host_id, remote).await {
+                    Ok(Some(remote_base)) if !remote_base.trim().is_empty() => {
+                        Some(remote_base.trim().to_string())
+                    }
+                    _ => None,
+                }
+            };
+
+            if merge_remote_profile_into_local(
+                &mut local_profiles,
+                remote,
+                resolved_api_key,
+                resolved_base_url,
+            ) {
+                created_profiles += 1;
+            } else {
+                updated_profiles += 1;
+            }
         }
-    }
 
-    save_model_profiles(&paths, &local_profiles)?;
+        save_model_profiles(&paths, &local_profiles)?;
 
-    Ok(RemoteAuthSyncResult {
-        total_remote_profiles: remote_profiles.len(),
-        synced_profiles: created_profiles + updated_profiles,
-        created_profiles,
-        updated_profiles,
-        resolved_keys,
-        unresolved_keys,
-        failed_key_resolves,
+        Ok(RemoteAuthSyncResult {
+            total_remote_profiles: remote_profiles.len(),
+            synced_profiles: created_profiles + updated_profiles,
+            created_profiles,
+            updated_profiles,
+            resolved_keys,
+            unresolved_keys,
+            failed_key_resolves,
     })
     })
 }
@@ -988,94 +988,94 @@ pub async fn push_related_secrets_to_remote(
     host_id: String,
 ) -> Result<RelatedSecretPushResult, String> {
     timed_async!("push_related_secrets_to_remote", {
-    let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
 
-    let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
-    let related = collect_related_remote_providers(&cfg, &remote_profiles);
+        let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
+        let related = collect_related_remote_providers(&cfg, &remote_profiles);
 
-    if related.is_empty() {
-        return Ok(RelatedSecretPushResult {
-            total_related_providers: 0,
-            resolved_secrets: 0,
-            written_secrets: 0,
-            skipped_providers: 0,
-            failed_providers: 0,
-        });
-    }
-
-    // Secret provider resolution may execute external commands with timeouts.
-    // Run it on the blocking pool so async command threads stay responsive.
-    let local_credentials =
-        tauri::async_runtime::spawn_blocking(collect_provider_credentials_for_internal)
-            .await
-            .map_err(|e| format!("Failed to resolve local provider credentials: {e}"))?;
-    let mut providers = related.into_iter().collect::<Vec<_>>();
-    providers.sort();
-
-    let mut selected = Vec::<(String, InternalProviderCredential)>::new();
-    let mut skipped = 0usize;
-    for provider in &providers {
-        if let Some(credential) = local_credentials.get(provider) {
-            selected.push((provider.clone(), credential.clone()));
-        } else {
-            skipped += 1;
+        if related.is_empty() {
+            return Ok(RelatedSecretPushResult {
+                total_related_providers: 0,
+                resolved_secrets: 0,
+                written_secrets: 0,
+                skipped_providers: 0,
+                failed_providers: 0,
+            });
         }
-    }
 
-    if selected.is_empty() {
-        return Ok(RelatedSecretPushResult {
+        // Secret provider resolution may execute external commands with timeouts.
+        // Run it on the blocking pool so async command threads stay responsive.
+        let local_credentials =
+            tauri::async_runtime::spawn_blocking(collect_provider_credentials_for_internal)
+                .await
+                .map_err(|e| format!("Failed to resolve local provider credentials: {e}"))?;
+        let mut providers = related.into_iter().collect::<Vec<_>>();
+        providers.sort();
+
+        let mut selected = Vec::<(String, InternalProviderCredential)>::new();
+        let mut skipped = 0usize;
+        for provider in &providers {
+            if let Some(credential) = local_credentials.get(provider) {
+                selected.push((provider.clone(), credential.clone()));
+            } else {
+                skipped += 1;
+            }
+        }
+
+        if selected.is_empty() {
+            return Ok(RelatedSecretPushResult {
+                total_related_providers: providers.len(),
+                resolved_secrets: 0,
+                written_secrets: 0,
+                skipped_providers: skipped,
+                failed_providers: 0,
+            });
+        }
+
+        let roots = resolve_remote_openclaw_roots(&pool, &host_id).await?;
+        let root = roots
+            .first()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Failed to resolve remote openclaw root".to_string())?;
+        let root = root.trim_end_matches('/');
+        let remote_auth_dir = format!("{root}/agents/main/agent");
+        let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
+        let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
+            Ok(content) => content,
+            Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
+            Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
+        };
+        let mut remote_auth_json: Value = serde_json::from_str(&remote_auth_raw)
+            .map_err(|e| format!("Failed to parse remote auth store at {remote_auth_path}: {e}"))?;
+
+        let mut written = 0usize;
+        let mut failed = 0usize;
+        for (provider, credential) in &selected {
+            let auth_ref = format!("{provider}:default");
+            match upsert_auth_store_entry(&mut remote_auth_json, &auth_ref, provider, credential) {
+                UpsertAuthStoreResult::Written => written += 1,
+                UpsertAuthStoreResult::Unchanged => {}
+                UpsertAuthStoreResult::Failed => failed += 1,
+            }
+        }
+
+        if written > 0 {
+            let serialized = serde_json::to_string_pretty(&remote_auth_json)
+                .map_err(|e| format!("Failed to serialize remote auth store: {e}"))?;
+            let mkdir_cmd = format!("mkdir -p {}", shell_escape(&remote_auth_dir));
+            let _ = pool.exec(&host_id, &mkdir_cmd).await;
+            pool.sftp_write(&host_id, &remote_auth_path, &serialized)
+                .await?;
+        }
+
+        Ok(RelatedSecretPushResult {
             total_related_providers: providers.len(),
-            resolved_secrets: 0,
-            written_secrets: 0,
+            resolved_secrets: selected.len(),
+            written_secrets: written,
             skipped_providers: skipped,
-            failed_providers: 0,
-        });
-    }
-
-    let roots = resolve_remote_openclaw_roots(&pool, &host_id).await?;
-    let root = roots
-        .first()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Failed to resolve remote openclaw root".to_string())?;
-    let root = root.trim_end_matches('/');
-    let remote_auth_dir = format!("{root}/agents/main/agent");
-    let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
-    let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
-        Ok(content) => content,
-        Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
-        Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
-    };
-    let mut remote_auth_json: Value = serde_json::from_str(&remote_auth_raw)
-        .map_err(|e| format!("Failed to parse remote auth store at {remote_auth_path}: {e}"))?;
-
-    let mut written = 0usize;
-    let mut failed = 0usize;
-    for (provider, credential) in &selected {
-        let auth_ref = format!("{provider}:default");
-        match upsert_auth_store_entry(&mut remote_auth_json, &auth_ref, provider, credential) {
-            UpsertAuthStoreResult::Written => written += 1,
-            UpsertAuthStoreResult::Unchanged => {}
-            UpsertAuthStoreResult::Failed => failed += 1,
-        }
-    }
-
-    if written > 0 {
-        let serialized = serde_json::to_string_pretty(&remote_auth_json)
-            .map_err(|e| format!("Failed to serialize remote auth store: {e}"))?;
-        let mkdir_cmd = format!("mkdir -p {}", shell_escape(&remote_auth_dir));
-        let _ = pool.exec(&host_id, &mkdir_cmd).await;
-        pool.sftp_write(&host_id, &remote_auth_path, &serialized)
-            .await?;
-    }
-
-    Ok(RelatedSecretPushResult {
-        total_related_providers: providers.len(),
-        resolved_secrets: selected.len(),
-        written_secrets: written,
-        skipped_providers: skipped,
-        failed_providers: failed,
+            failed_providers: failed,
     })
     })
 }
@@ -1085,71 +1085,71 @@ pub fn push_model_profiles_to_local_openclaw(
     profile_ids: Vec<String>,
 ) -> Result<ProfilePushResult, String> {
     timed_sync!("push_model_profiles_to_local_openclaw", {
-    let paths = resolve_paths();
-    let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
-    if prepared.is_empty() {
-        return Ok(ProfilePushResult {
-            requested_profiles: profile_ids.len(),
-            pushed_profiles: 0,
-            written_model_entries: 0,
-            written_auth_entries: 0,
-            blocked_profiles,
-        });
-    }
-
-    let mut cfg = read_openclaw_config(&paths)?;
-    let mut written_model_entries = 0usize;
-    for push in &prepared {
-        if upsert_model_registration(&mut cfg, push)? {
-            written_model_entries += 1;
+        let paths = resolve_paths();
+        let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
+        if prepared.is_empty() {
+            return Ok(ProfilePushResult {
+                requested_profiles: profile_ids.len(),
+                pushed_profiles: 0,
+                written_model_entries: 0,
+                written_auth_entries: 0,
+                blocked_profiles,
+            });
         }
-    }
-    if written_model_entries > 0 {
-        write_json(&paths.config_path, &cfg)?;
-    }
 
-    let auth_file = paths
-        .base_dir
-        .join("agents")
-        .join("main")
-        .join("agent")
-        .join("auth-profiles.json");
-    let auth_raw = std::fs::read_to_string(&auth_file)
-        .unwrap_or_else(|_| r#"{"version":1,"profiles":{}}"#.to_string());
-    let mut auth_json = parse_auth_store_json(&auth_raw)?;
-    let mut written_auth_entries = 0usize;
-    for push in &prepared {
-        let Some(credential) = push.credential.as_ref() else {
-            continue;
-        };
-        match upsert_auth_store_entry(
-            &mut auth_json,
-            &push.target_auth_ref,
-            &push.provider_key,
-            credential,
-        ) {
-            UpsertAuthStoreResult::Written => written_auth_entries += 1,
-            UpsertAuthStoreResult::Unchanged => {}
-            UpsertAuthStoreResult::Failed => {
-                return Err(format!(
-                    "Failed to write auth entry for {}/{}",
-                    push.provider_key, push.profile.model
-                ));
+        let mut cfg = read_openclaw_config(&paths)?;
+        let mut written_model_entries = 0usize;
+        for push in &prepared {
+            if upsert_model_registration(&mut cfg, push)? {
+                written_model_entries += 1;
             }
         }
-    }
-    if written_auth_entries > 0 {
-        let serialized = serde_json::to_string_pretty(&auth_json)
-            .map_err(|e| format!("Failed to serialize local auth store: {e}"))?;
-        write_text(&auth_file, &serialized)?;
-    }
+        if written_model_entries > 0 {
+            write_json(&paths.config_path, &cfg)?;
+        }
 
-    Ok(ProfilePushResult {
-        requested_profiles: profile_ids.len(),
-        pushed_profiles: prepared.len(),
-        written_model_entries,
-        written_auth_entries,
-        blocked_profiles,
+        let auth_file = paths
+            .base_dir
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        let auth_raw = std::fs::read_to_string(&auth_file)
+            .unwrap_or_else(|_| r#"{"version":1,"profiles":{}}"#.to_string());
+        let mut auth_json = parse_auth_store_json(&auth_raw)?;
+        let mut written_auth_entries = 0usize;
+        for push in &prepared {
+            let Some(credential) = push.credential.as_ref() else {
+                continue;
+            };
+            match upsert_auth_store_entry(
+                &mut auth_json,
+                &push.target_auth_ref,
+                &push.provider_key,
+                credential,
+            ) {
+                UpsertAuthStoreResult::Written => written_auth_entries += 1,
+                UpsertAuthStoreResult::Unchanged => {}
+                UpsertAuthStoreResult::Failed => {
+                    return Err(format!(
+                        "Failed to write auth entry for {}/{}",
+                        push.provider_key, push.profile.model
+                    ));
+                }
+            }
+        }
+        if written_auth_entries > 0 {
+            let serialized = serde_json::to_string_pretty(&auth_json)
+                .map_err(|e| format!("Failed to serialize local auth store: {e}"))?;
+            write_text(&auth_file, &serialized)?;
+        }
+
+        Ok(ProfilePushResult {
+            requested_profiles: profile_ids.len(),
+            pushed_profiles: prepared.len(),
+            written_model_entries,
+            written_auth_entries,
+            blocked_profiles,
     })
     })
 }
@@ -1161,90 +1161,90 @@ pub async fn push_model_profiles_to_remote_openclaw(
     profile_ids: Vec<String>,
 ) -> Result<ProfilePushResult, String> {
     timed_async!("push_model_profiles_to_remote_openclaw", {
-    let paths = resolve_paths();
-    let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
-    if prepared.is_empty() {
-        return Ok(ProfilePushResult {
-            requested_profiles: profile_ids.len(),
-            pushed_profiles: 0,
-            written_model_entries: 0,
-            written_auth_entries: 0,
-            blocked_profiles,
-        });
-    }
-
-    let (config_path, current_text, mut cfg) =
-        remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    let mut written_model_entries = 0usize;
-    for push in &prepared {
-        if upsert_model_registration(&mut cfg, push)? {
-            written_model_entries += 1;
+        let paths = resolve_paths();
+        let (prepared, blocked_profiles) = collect_selected_profile_pushes(&paths, &profile_ids)?;
+        if prepared.is_empty() {
+            return Ok(ProfilePushResult {
+                requested_profiles: profile_ids.len(),
+                pushed_profiles: 0,
+                written_model_entries: 0,
+                written_auth_entries: 0,
+                blocked_profiles,
+            });
         }
-    }
-    if written_model_entries > 0 {
-        remote_write_config_with_snapshot(
-            &pool,
-            &host_id,
-            &config_path,
-            &current_text,
-            &cfg,
-            "push-profiles",
-        )
-        .await?;
-    }
 
-    let roots = resolve_remote_openclaw_roots(&pool, &host_id).await?;
-    let root = roots
-        .first()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Failed to resolve remote openclaw root".to_string())?;
-    let root = root.trim_end_matches('/');
-    let remote_auth_dir = format!("{root}/agents/main/agent");
-    let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
-    let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
-        Ok(content) => content,
-        Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
-        Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
-    };
-    let mut remote_auth_json = parse_auth_store_json(&remote_auth_raw)?;
-    let mut written_auth_entries = 0usize;
-    for push in &prepared {
-        let Some(credential) = push.credential.as_ref() else {
-            continue;
-        };
-        match upsert_auth_store_entry(
-            &mut remote_auth_json,
-            &push.target_auth_ref,
-            &push.provider_key,
-            credential,
-        ) {
-            UpsertAuthStoreResult::Written => written_auth_entries += 1,
-            UpsertAuthStoreResult::Unchanged => {}
-            UpsertAuthStoreResult::Failed => {
-                return Err(format!(
-                    "Failed to write remote auth entry for {}/{}",
-                    push.provider_key, push.profile.model
-                ));
+        let (config_path, current_text, mut cfg) =
+            remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        let mut written_model_entries = 0usize;
+        for push in &prepared {
+            if upsert_model_registration(&mut cfg, push)? {
+                written_model_entries += 1;
             }
         }
-    }
-    if written_auth_entries > 0 {
-        let serialized = serde_json::to_string_pretty(&remote_auth_json)
-            .map_err(|e| format!("Failed to serialize remote auth store: {e}"))?;
-        let mkdir_cmd = format!("mkdir -p {}", shell_escape(&remote_auth_dir));
-        let _ = pool.exec(&host_id, &mkdir_cmd).await;
-        pool.sftp_write(&host_id, &remote_auth_path, &serialized)
+        if written_model_entries > 0 {
+            remote_write_config_with_snapshot(
+                &pool,
+                &host_id,
+                &config_path,
+                &current_text,
+                &cfg,
+                "push-profiles",
+            )
             .await?;
-    }
+        }
 
-    Ok(ProfilePushResult {
-        requested_profiles: profile_ids.len(),
-        pushed_profiles: prepared.len(),
-        written_model_entries,
-        written_auth_entries,
-        blocked_profiles,
+        let roots = resolve_remote_openclaw_roots(&pool, &host_id).await?;
+        let root = roots
+            .first()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Failed to resolve remote openclaw root".to_string())?;
+        let root = root.trim_end_matches('/');
+        let remote_auth_dir = format!("{root}/agents/main/agent");
+        let remote_auth_path = format!("{remote_auth_dir}/auth-profiles.json");
+        let remote_auth_raw = match pool.sftp_read(&host_id, &remote_auth_path).await {
+            Ok(content) => content,
+            Err(e) if is_remote_missing_path_error(&e) => r#"{"version":1,"profiles":{}}"#.to_string(),
+            Err(e) => return Err(format!("Failed to read remote auth store: {e}")),
+        };
+        let mut remote_auth_json = parse_auth_store_json(&remote_auth_raw)?;
+        let mut written_auth_entries = 0usize;
+        for push in &prepared {
+            let Some(credential) = push.credential.as_ref() else {
+                continue;
+            };
+            match upsert_auth_store_entry(
+                &mut remote_auth_json,
+                &push.target_auth_ref,
+                &push.provider_key,
+                credential,
+            ) {
+                UpsertAuthStoreResult::Written => written_auth_entries += 1,
+                UpsertAuthStoreResult::Unchanged => {}
+                UpsertAuthStoreResult::Failed => {
+                    return Err(format!(
+                        "Failed to write remote auth entry for {}/{}",
+                        push.provider_key, push.profile.model
+                    ));
+                }
+            }
+        }
+        if written_auth_entries > 0 {
+            let serialized = serde_json::to_string_pretty(&remote_auth_json)
+                .map_err(|e| format!("Failed to serialize remote auth store: {e}"))?;
+            let mkdir_cmd = format!("mkdir -p {}", shell_escape(&remote_auth_dir));
+            let _ = pool.exec(&host_id, &mkdir_cmd).await;
+            pool.sftp_write(&host_id, &remote_auth_path, &serialized)
+                .await?;
+        }
+
+        Ok(ProfilePushResult {
+            requested_profiles: profile_ids.len(),
+            pushed_profiles: prepared.len(),
+            written_model_entries,
+            written_auth_entries,
+            blocked_profiles,
     })
     })
 }
@@ -1602,154 +1602,154 @@ mod tests {
 #[tauri::command]
 pub fn get_cached_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
     timed_sync!("get_cached_model_catalog", {
-    let paths = resolve_paths();
-    let cache_path = model_catalog_cache_path(&paths);
-    let current_version = resolve_openclaw_version();
-    if let Some(catalog) = select_catalog_from_cache(
-        read_model_catalog_cache(&cache_path).as_ref(),
-        &current_version,
-    ) {
-        return Ok(catalog);
-    }
-    Ok(Vec::new())
+        let paths = resolve_paths();
+        let cache_path = model_catalog_cache_path(&paths);
+        let current_version = resolve_openclaw_version();
+        if let Some(catalog) = select_catalog_from_cache(
+            read_model_catalog_cache(&cache_path).as_ref(),
+            &current_version,
+        ) {
+            return Ok(catalog);
+        }
+        Ok(Vec::new())
     })
 }
 
 #[tauri::command]
 pub fn refresh_model_catalog() -> Result<Vec<ModelCatalogProvider>, String> {
     timed_sync!("refresh_model_catalog", {
-    let paths = resolve_paths();
-    load_model_catalog(&paths)
+        let paths = resolve_paths();
+        load_model_catalog(&paths)
     })
 }
 
 #[tauri::command]
 pub fn list_model_profiles() -> Result<Vec<ModelProfile>, String> {
     timed_sync!("list_model_profiles", {
-    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())
+        let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+        clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
 pub fn extract_model_profiles_from_config() -> Result<ExtractModelProfilesResult, String> {
     timed_sync!("extract_model_profiles_from_config", {
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let profiles = load_model_profiles(&paths);
-    let (next_profiles, result) = extract_profiles_from_openclaw_config(&cfg, profiles);
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        let profiles = load_model_profiles(&paths);
+        let (next_profiles, result) = extract_profiles_from_openclaw_config(&cfg, profiles);
 
-    if result.created > 0 {
-        save_model_profiles(&paths, &next_profiles)?;
-    }
+        if result.created > 0 {
+            save_model_profiles(&paths, &next_profiles)?;
+        }
 
-    Ok(result)
+        Ok(result)
     })
 }
 
 #[tauri::command]
 pub fn upsert_model_profile(profile: ModelProfile) -> Result<ModelProfile, String> {
     timed_sync!("upsert_model_profile", {
-    let paths = resolve_paths();
-    let path = model_profiles_path(&paths);
-    let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
-    let (saved, next_json) =
-        clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
-            .map_err(|e| e.to_string())?;
-    crate::config_io::write_text(&path, &next_json)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(saved)
+        let paths = resolve_paths();
+        let path = model_profiles_path(&paths);
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.into());
+        let (saved, next_json) =
+            clawpal_core::profile::upsert_profile_in_storage_json(&content, profile)
+                .map_err(|e| e.to_string())?;
+        crate::config_io::write_text(&path, &next_json)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(saved)
     })
 }
 
 #[tauri::command]
 pub fn delete_model_profile(profile_id: String) -> Result<bool, String> {
     timed_sync!("delete_model_profile", {
-    let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-    clawpal_core::profile::delete_profile(&openclaw, &profile_id).map_err(|e| e.to_string())
+        let openclaw = clawpal_core::openclaw::OpenclawCli::new();
+        clawpal_core::profile::delete_profile(&openclaw, &profile_id).map_err(|e| e.to_string())
     })
 }
 
 #[tauri::command]
 pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion, String> {
     timed_sync!("resolve_provider_auth", {
-    let provider_trimmed = provider.trim();
-    if provider_trimmed.is_empty() {
-        return Ok(ProviderAuthSuggestion {
-            auth_ref: None,
-            has_key: false,
-            source: String::new(),
-        });
-    }
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let global_base = local_global_openclaw_base_dir();
-
-    // 1. Check openclaw config auth profiles
-    if let Some(auth_ref) = resolve_auth_ref_for_provider(&cfg, provider_trimmed) {
-        let probe_profile = ModelProfile {
-            id: "provider-auth-probe".into(),
-            name: "provider-auth-probe".into(),
-            provider: provider_trimmed.to_string(),
-            model: "probe".into(),
-            auth_ref: auth_ref.clone(),
-            api_key: None,
-            base_url: None,
-            description: None,
-            enabled: true,
-        };
-        let key = resolve_profile_api_key(&probe_profile, &global_base);
-        if !key.trim().is_empty() {
+        let provider_trimmed = provider.trim();
+        if provider_trimmed.is_empty() {
             return Ok(ProviderAuthSuggestion {
-                auth_ref: Some(auth_ref),
-                has_key: true,
-                source: "openclaw auth profile".into(),
+                auth_ref: None,
+                has_key: false,
+                source: String::new(),
             });
         }
-    }
+        let paths = resolve_paths();
+        let cfg = read_openclaw_config(&paths)?;
+        let global_base = local_global_openclaw_base_dir();
 
-    // 2. Check env vars
-    for env_name in provider_env_var_candidates(provider_trimmed) {
-        if std::env::var(&env_name)
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-        {
-            return Ok(ProviderAuthSuggestion {
-                auth_ref: Some(env_name),
-                has_key: true,
-                source: "environment variable".into(),
-            });
-        }
-    }
-
-    // 3. Check existing model profiles for this provider
-    let profiles = load_model_profiles(&paths);
-    for p in &profiles {
-        if p.provider.eq_ignore_ascii_case(provider_trimmed) {
-            let key = resolve_profile_api_key(p, &global_base);
-            if !key.is_empty() {
-                let auth_ref = if !p.auth_ref.trim().is_empty() {
-                    Some(p.auth_ref.clone())
-                } else {
-                    None
-                };
+        // 1. Check openclaw config auth profiles
+        if let Some(auth_ref) = resolve_auth_ref_for_provider(&cfg, provider_trimmed) {
+            let probe_profile = ModelProfile {
+                id: "provider-auth-probe".into(),
+                name: "provider-auth-probe".into(),
+                provider: provider_trimmed.to_string(),
+                model: "probe".into(),
+                auth_ref: auth_ref.clone(),
+                api_key: None,
+                base_url: None,
+                description: None,
+                enabled: true,
+            };
+            let key = resolve_profile_api_key(&probe_profile, &global_base);
+            if !key.trim().is_empty() {
                 return Ok(ProviderAuthSuggestion {
-                    auth_ref,
+                    auth_ref: Some(auth_ref),
                     has_key: true,
-                    source: format!("existing profile {}/{}", p.provider, p.model),
+                    source: "openclaw auth profile".into(),
                 });
             }
         }
-    }
 
-    Ok(ProviderAuthSuggestion {
-        auth_ref: None,
-        has_key: false,
-        source: String::new(),
+        // 2. Check env vars
+        for env_name in provider_env_var_candidates(provider_trimmed) {
+            if std::env::var(&env_name)
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+            {
+                return Ok(ProviderAuthSuggestion {
+                    auth_ref: Some(env_name),
+                    has_key: true,
+                    source: "environment variable".into(),
+                });
+            }
+        }
+
+        // 3. Check existing model profiles for this provider
+        let profiles = load_model_profiles(&paths);
+        for p in &profiles {
+            if p.provider.eq_ignore_ascii_case(provider_trimmed) {
+                let key = resolve_profile_api_key(p, &global_base);
+                if !key.is_empty() {
+                    let auth_ref = if !p.auth_ref.trim().is_empty() {
+                        Some(p.auth_ref.clone())
+                    } else {
+                        None
+                    };
+                    return Ok(ProviderAuthSuggestion {
+                        auth_ref,
+                        has_key: true,
+                        source: format!("existing profile {}/{}", p.provider, p.model),
+                    });
+                }
+            }
+        }
+
+        Ok(ProviderAuthSuggestion {
+            auth_ref: None,
+            has_key: false,
+            source: String::new(),
     })
     })
 }
@@ -1757,73 +1757,73 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
 #[tauri::command]
 pub fn resolve_api_keys() -> Result<Vec<ResolvedApiKey>, String> {
     timed_sync!("resolve_api_keys", {
-    let paths = resolve_paths();
-    let profiles = load_model_profiles(&paths);
-    let global_base = local_global_openclaw_base_dir();
-    let mut out = Vec::new();
-    for profile in &profiles {
-        let (resolved_key, source) = if let Some((credential, _priority, source)) =
-            resolve_profile_credential_with_priority(profile, &global_base)
-        {
-            (credential.secret, Some(source))
-        } else {
-            (String::new(), None)
-        };
-        let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
-            Some(true)
-        } else {
-            None
-        };
-        out.push(build_resolved_api_key(
-            profile,
-            &resolved_key,
-            source,
-            resolved_override,
-        ));
-    }
-    Ok(out)
+        let paths = resolve_paths();
+        let profiles = load_model_profiles(&paths);
+        let global_base = local_global_openclaw_base_dir();
+        let mut out = Vec::new();
+        for profile in &profiles {
+            let (resolved_key, source) = if let Some((credential, _priority, source)) =
+                resolve_profile_credential_with_priority(profile, &global_base)
+            {
+                (credential.secret, Some(source))
+            } else {
+                (String::new(), None)
+            };
+            let resolved_override = if resolved_key.trim().is_empty() && oauth_session_ready(profile) {
+                Some(true)
+            } else {
+                None
+            };
+            out.push(build_resolved_api_key(
+                profile,
+                &resolved_key,
+                source,
+                resolved_override,
+            ));
+        }
+        Ok(out)
     })
 }
 
 #[tauri::command]
 pub async fn test_model_profile(profile_id: String) -> Result<bool, String> {
     timed_async!("test_model_profile", {
-    let paths = resolve_paths();
-    let profiles = load_model_profiles(&paths);
-    let profile = profiles
-        .into_iter()
-        .find(|p| p.id == profile_id)
-        .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
+        let paths = resolve_paths();
+        let profiles = load_model_profiles(&paths);
+        let profile = profiles
+            .into_iter()
+            .find(|p| p.id == profile_id)
+            .ok_or_else(|| format!("Profile not found: {profile_id}"))?;
 
-    if !profile.enabled {
-        return Err("Profile is disabled".into());
-    }
-
-    let global_base = local_global_openclaw_base_dir();
-    let api_key = resolve_profile_api_key(&profile, &global_base);
-    if api_key.trim().is_empty() {
-        if !provider_supports_optional_api_key(&profile.provider) {
-            let hint = missing_profile_auth_hint(&profile.provider, false);
-            return Err(
-                format!("No API key resolved for this profile. Set apiKey directly, configure auth_ref in auth store (auth-profiles.json/auth.json), or export auth_ref on local shell.{hint}"),
-            );
+        if !profile.enabled {
+            return Err("Profile is disabled".into());
         }
-    }
 
-    let resolved_base_url = profile
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_string())
-        .or_else(|| {
-            read_openclaw_config(&paths)
-                .ok()
-                .and_then(|cfg| resolve_model_provider_base_url(&cfg, &profile.provider))
-        });
+        let global_base = local_global_openclaw_base_dir();
+        let api_key = resolve_profile_api_key(&profile, &global_base);
+        if api_key.trim().is_empty() {
+            if !provider_supports_optional_api_key(&profile.provider) {
+                let hint = missing_profile_auth_hint(&profile.provider, false);
+                return Err(
+                    format!("No API key resolved for this profile. Set apiKey directly, configure auth_ref in auth store (auth-profiles.json/auth.json), or export auth_ref on local shell.{hint}"),
+                );
+            }
+        }
 
-    tauri::async_runtime::spawn_blocking(move || {
-        run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
+        let resolved_base_url = profile
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .or_else(|| {
+                read_openclaw_config(&paths)
+                    .ok()
+                    .and_then(|cfg| resolve_model_provider_base_url(&cfg, &profile.provider))
+            });
+
+        tauri::async_runtime::spawn_blocking(move || {
+            run_provider_probe(profile.provider, profile.model, resolved_base_url, api_key)
     })
     .await
     .map_err(|e| format!("Task join failed: {e}"))??;
@@ -1838,42 +1838,42 @@ pub async fn remote_refresh_model_catalog(
     host_id: String,
 ) -> Result<Vec<ModelCatalogProvider>, String> {
     timed_async!("remote_refresh_model_catalog", {
-    let paths = resolve_paths();
-    let cache_path = remote_model_catalog_cache_path(&paths, &host_id);
-    let remote_version = match pool.exec_login(&host_id, "openclaw --version").await {
-        Ok(r) => {
-            extract_version_from_text(&r.stdout).unwrap_or_else(|| r.stdout.trim().to_string())
+        let paths = resolve_paths();
+        let cache_path = remote_model_catalog_cache_path(&paths, &host_id);
+        let remote_version = match pool.exec_login(&host_id, "openclaw --version").await {
+            Ok(r) => {
+                extract_version_from_text(&r.stdout).unwrap_or_else(|| r.stdout.trim().to_string())
+            }
+            Err(_) => "unknown".into(),
+        };
+        let cached = read_model_catalog_cache(&cache_path);
+        if let Some(selected) = select_catalog_from_cache(cached.as_ref(), &remote_version) {
+            return Ok(selected);
         }
-        Err(_) => "unknown".into(),
-    };
-    let cached = read_model_catalog_cache(&cache_path);
-    if let Some(selected) = select_catalog_from_cache(cached.as_ref(), &remote_version) {
-        return Ok(selected);
-    }
 
-    let result = pool
-        .exec_login(&host_id, "openclaw models list --all --json --no-color")
-        .await;
-    if let Ok(r) = result {
-        if r.exit_code == 0 && !r.stdout.trim().is_empty() {
-            if let Some(catalog) = parse_model_catalog_from_cli_output(&r.stdout) {
-                let cache = ModelCatalogProviderCache {
-                    cli_version: remote_version,
-                    updated_at: unix_timestamp_secs(),
-                    providers: catalog.clone(),
-                    source: "openclaw models list --all --json".into(),
-                    error: None,
-                };
-                let _ = save_model_catalog_cache(&cache_path, &cache);
-                return Ok(catalog);
+        let result = pool
+            .exec_login(&host_id, "openclaw models list --all --json --no-color")
+            .await;
+        if let Ok(r) = result {
+            if r.exit_code == 0 && !r.stdout.trim().is_empty() {
+                if let Some(catalog) = parse_model_catalog_from_cli_output(&r.stdout) {
+                    let cache = ModelCatalogProviderCache {
+                        cli_version: remote_version,
+                        updated_at: unix_timestamp_secs(),
+                        providers: catalog.clone(),
+                        source: "openclaw models list --all --json".into(),
+                        error: None,
+                    };
+                    let _ = save_model_catalog_cache(&cache_path, &cache);
+                    return Ok(catalog);
+                }
             }
         }
-    }
-    if let Some(previous) = cached {
-        if !previous.providers.is_empty() && previous.error.is_none() {
-            return Ok(previous.providers);
+        if let Some(previous) = cached {
+            if !previous.providers.is_empty() && previous.error.is_none() {
+                return Ok(previous.providers);
+            }
         }
-    }
-    Err("Failed to load remote model catalog from openclaw CLI".into())
+        Err("Failed to load remote model catalog from openclaw CLI".into())
     })
 }

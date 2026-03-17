@@ -88,35 +88,35 @@ pub fn save_bug_report_settings_from_paths(
 #[tauri::command]
 pub fn get_app_preferences() -> Result<AppPreferences, String> {
     timed_sync!("get_app_preferences", {
-    let paths = resolve_paths();
-    Ok(load_app_preferences_from_paths(&paths))
+        let paths = resolve_paths();
+        Ok(load_app_preferences_from_paths(&paths))
     })
 }
 
 #[tauri::command]
 pub fn get_bug_report_settings() -> Result<BugReportSettings, String> {
     timed_sync!("get_bug_report_settings", {
-    let paths = resolve_paths();
-    Ok(load_bug_report_settings_from_paths(&paths))
+        let paths = resolve_paths();
+        Ok(load_bug_report_settings_from_paths(&paths))
     })
 }
 
 #[tauri::command]
 pub fn set_bug_report_settings(settings: BugReportSettings) -> Result<BugReportSettings, String> {
     timed_sync!("set_bug_report_settings", {
-    let paths = resolve_paths();
-    save_bug_report_settings_from_paths(&paths, settings)
+        let paths = resolve_paths();
+        save_bug_report_settings_from_paths(&paths, settings)
     })
 }
 
 #[tauri::command]
 pub fn set_ssh_transfer_speed_ui_preference(show_ui: bool) -> Result<AppPreferences, String> {
     timed_sync!("set_ssh_transfer_speed_ui_preference", {
-    let paths = resolve_paths();
-    let mut prefs = load_app_preferences_from_paths(&paths);
-    prefs.show_ssh_transfer_speed_ui = show_ui;
-    save_app_preferences_from_paths(&paths, &prefs)?;
-    Ok(prefs)
+        let paths = resolve_paths();
+        let mut prefs = load_app_preferences_from_paths(&paths);
+        prefs.show_ssh_transfer_speed_ui = show_ui;
+        save_app_preferences_from_paths(&paths, &prefs)?;
+        Ok(prefs)
     })
 }
 
@@ -141,34 +141,34 @@ pub fn lookup_session_model_override(session_id: &str) -> Option<String> {
 #[tauri::command]
 pub fn set_session_model_override(session_id: String, model: String) -> Result<(), String> {
     timed_sync!("set_session_model_override", {
-    let trimmed = model.trim().to_string();
-    if trimmed.is_empty() {
-        return Err("model must not be empty".into());
-    }
-    if let Ok(mut map) = session_model_overrides().lock() {
-        map.insert(session_id, trimmed);
-    }
-    Ok(())
+        let trimmed = model.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("model must not be empty".into());
+        }
+        if let Ok(mut map) = session_model_overrides().lock() {
+            map.insert(session_id, trimmed);
+        }
+        Ok(())
     })
 }
 
 #[tauri::command]
 pub fn get_session_model_override(session_id: String) -> Result<Option<String>, String> {
     timed_sync!("get_session_model_override", {
-    let map = session_model_overrides()
-        .lock()
-        .map_err(|e| e.to_string())?;
-    Ok(map.get(&session_id).cloned())
+        let map = session_model_overrides()
+            .lock()
+            .map_err(|e| e.to_string())?;
+        Ok(map.get(&session_id).cloned())
     })
 }
 
 #[tauri::command]
 pub fn clear_session_model_override(session_id: String) -> Result<(), String> {
     timed_sync!("clear_session_model_override", {
-    if let Ok(mut map) = session_model_overrides().lock() {
-        map.remove(&session_id);
-    }
-    Ok(())
+        if let Ok(mut map) = session_model_overrides().lock() {
+            map.remove(&session_id);
+        }
+        Ok(())
     })
 }
 

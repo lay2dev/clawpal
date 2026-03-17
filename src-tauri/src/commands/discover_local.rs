@@ -46,9 +46,9 @@ fn slug_from_name(name: &str) -> String {
 #[tauri::command]
 pub async fn discover_local_instances() -> Result<Vec<DiscoveredInstance>, String> {
     timed_async!("discover_local_instances", {
-    tauri::async_runtime::spawn_blocking(|| discover_blocking())
-        .await
-        .map_err(|e| e.to_string())?
+        tauri::async_runtime::spawn_blocking(|| discover_blocking())
+            .await
+            .map_err(|e| e.to_string())?
     })
 }
 

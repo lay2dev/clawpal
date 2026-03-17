@@ -293,9 +293,9 @@ async fn remote_channels_runtime_snapshot_impl(
 #[tauri::command]
 pub async fn get_instance_config_snapshot() -> Result<InstanceConfigSnapshot, String> {
     timed_async!("get_instance_config_snapshot", {
-    tauri::async_runtime::spawn_blocking(|| {
-        let cfg = read_openclaw_config(&resolve_paths())?;
-        Ok(extract_instance_config_snapshot(&cfg))
+        tauri::async_runtime::spawn_blocking(|| {
+            let cfg = read_openclaw_config(&resolve_paths())?;
+            Ok(extract_instance_config_snapshot(&cfg))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -308,8 +308,8 @@ pub async fn remote_get_instance_config_snapshot(
     host_id: String,
 ) -> Result<InstanceConfigSnapshot, String> {
     timed_async!("remote_get_instance_config_snapshot", {
-    let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    Ok(extract_instance_config_snapshot(&cfg))
+        let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        Ok(extract_instance_config_snapshot(&cfg))
     })
 }
 
@@ -318,13 +318,13 @@ pub async fn get_instance_runtime_snapshot(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<InstanceRuntimeSnapshot, String> {
     timed_async!("get_instance_runtime_snapshot", {
-    let status = get_status_light().await?;
-    let agents = list_agents_overview(cache).await?;
-    Ok(InstanceRuntimeSnapshot {
-        global_default_model: status.global_default_model.clone(),
-        fallback_models: status.fallback_models.clone(),
-        status,
-        agents,
+        let status = get_status_light().await?;
+        let agents = list_agents_overview(cache).await?;
+        Ok(InstanceRuntimeSnapshot {
+            global_default_model: status.global_default_model.clone(),
+            fallback_models: status.fallback_models.clone(),
+            status,
+            agents,
     })
     })
 }
@@ -335,16 +335,16 @@ pub async fn remote_get_instance_runtime_snapshot(
     host_id: String,
 ) -> Result<InstanceRuntimeSnapshot, String> {
     timed_async!("remote_get_instance_runtime_snapshot", {
-    remote_instance_runtime_snapshot_impl(&pool, &host_id).await
+        remote_instance_runtime_snapshot_impl(&pool, &host_id).await
     })
 }
 
 #[tauri::command]
 pub async fn get_channels_config_snapshot() -> Result<ChannelsConfigSnapshot, String> {
     timed_async!("get_channels_config_snapshot", {
-    tauri::async_runtime::spawn_blocking(|| {
-        let cfg = read_openclaw_config(&resolve_paths())?;
-        extract_channels_config_snapshot(&cfg)
+        tauri::async_runtime::spawn_blocking(|| {
+            let cfg = read_openclaw_config(&resolve_paths())?;
+            extract_channels_config_snapshot(&cfg)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -357,8 +357,8 @@ pub async fn remote_get_channels_config_snapshot(
     host_id: String,
 ) -> Result<ChannelsConfigSnapshot, String> {
     timed_async!("remote_get_channels_config_snapshot", {
-    let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
-    extract_channels_config_snapshot(&cfg)
+        let (_, _, cfg) = remote_read_openclaw_config_text_and_json(&pool, &host_id).await?;
+        extract_channels_config_snapshot(&cfg)
     })
 }
 
@@ -367,18 +367,18 @@ pub async fn get_channels_runtime_snapshot(
     cache: tauri::State<'_, crate::cli_runner::CliCache>,
 ) -> Result<ChannelsRuntimeSnapshot, String> {
     timed_async!("get_channels_runtime_snapshot", {
-    let channels = list_channels_minimal(cache.clone()).await?;
-    let bindings = list_bindings(cache.clone()).await?;
-    let agents = list_agents_overview(cache).await?;
-    let bindings = serde_json::to_value(bindings)
-        .map_err(|error| error.to_string())?
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    Ok(ChannelsRuntimeSnapshot {
-        channels,
-        bindings,
-        agents,
+        let channels = list_channels_minimal(cache.clone()).await?;
+        let bindings = list_bindings(cache.clone()).await?;
+        let agents = list_agents_overview(cache).await?;
+        let bindings = serde_json::to_value(bindings)
+            .map_err(|error| error.to_string())?
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        Ok(ChannelsRuntimeSnapshot {
+            channels,
+            bindings,
+            agents,
     })
     })
 }
@@ -389,16 +389,16 @@ pub async fn remote_get_channels_runtime_snapshot(
     host_id: String,
 ) -> Result<ChannelsRuntimeSnapshot, String> {
     timed_async!("remote_get_channels_runtime_snapshot", {
-    remote_channels_runtime_snapshot_impl(&pool, &host_id).await
+        remote_channels_runtime_snapshot_impl(&pool, &host_id).await
     })
 }
 
 #[tauri::command]
 pub fn get_cron_config_snapshot() -> Result<CronConfigSnapshot, String> {
     timed_sync!("get_cron_config_snapshot", {
-    let jobs = list_cron_jobs()?;
-    let jobs = jobs.as_array().cloned().unwrap_or_default();
-    Ok(CronConfigSnapshot { jobs })
+        let jobs = list_cron_jobs()?;
+        let jobs = jobs.as_array().cloned().unwrap_or_default();
+        Ok(CronConfigSnapshot { jobs })
     })
 }
 
@@ -408,19 +408,19 @@ pub async fn remote_get_cron_config_snapshot(
     host_id: String,
 ) -> Result<CronConfigSnapshot, String> {
     timed_async!("remote_get_cron_config_snapshot", {
-    let jobs = remote_list_cron_jobs(pool, host_id).await?;
-    let jobs = jobs.as_array().cloned().unwrap_or_default();
-    Ok(CronConfigSnapshot { jobs })
+        let jobs = remote_list_cron_jobs(pool, host_id).await?;
+        let jobs = jobs.as_array().cloned().unwrap_or_default();
+        Ok(CronConfigSnapshot { jobs })
     })
 }
 
 #[tauri::command]
 pub async fn get_cron_runtime_snapshot() -> Result<CronRuntimeSnapshot, String> {
     timed_async!("get_cron_runtime_snapshot", {
-    let jobs = list_cron_jobs()?;
-    let watchdog = get_watchdog_status().await?;
-    let jobs = jobs.as_array().cloned().unwrap_or_default();
-    Ok(CronRuntimeSnapshot { jobs, watchdog })
+        let jobs = list_cron_jobs()?;
+        let watchdog = get_watchdog_status().await?;
+        let jobs = jobs.as_array().cloned().unwrap_or_default();
+        Ok(CronRuntimeSnapshot { jobs, watchdog })
     })
 }
 
@@ -430,12 +430,12 @@ pub async fn remote_get_cron_runtime_snapshot(
     host_id: String,
 ) -> Result<CronRuntimeSnapshot, String> {
     timed_async!("remote_get_cron_runtime_snapshot", {
-    let jobs = remote_list_cron_jobs(pool.clone(), host_id.clone()).await?;
-    let watchdog = remote_get_watchdog_status(pool, host_id).await?;
-    let jobs = jobs.as_array().cloned().unwrap_or_default();
-    Ok(CronRuntimeSnapshot {
-        jobs,
-        watchdog: parse_remote_watchdog_value(watchdog),
+        let jobs = remote_list_cron_jobs(pool.clone(), host_id.clone()).await?;
+        let watchdog = remote_get_watchdog_status(pool, host_id).await?;
+        let jobs = jobs.as_array().cloned().unwrap_or_default();
+        Ok(CronRuntimeSnapshot {
+            jobs,
+            watchdog: parse_remote_watchdog_value(watchdog),
     })
     })
 }
