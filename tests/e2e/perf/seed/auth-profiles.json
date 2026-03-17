@@ -1,0 +1,4 @@
+{
+  "anthropic": { "apiKey": "test-key-anthropic" },
+  "openai": { "apiKey": "test-key-openai" }
+}

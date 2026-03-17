@@ -47,6 +47,7 @@ import {
   emitDataLoadMetric,
 } from "@/lib/data-load-log";
 import { readPersistedReadCache } from "@/lib/persistent-read-cache";
+import { RenderProbe } from "@/lib/render-probe";
 
 type OpenclawUpdateLatch = {
   checkedAt: number;
@@ -137,6 +138,9 @@ export function Home({
     persistenceScope: ua.persistenceScope,
     isRemote: ua.isRemote,
   });
+
+  // Render probe: measures time from mount to each section's first data render
+  const probe = useMemo(() => new RenderProbe("home"), []);
 
   const resolveModelValue = (profileId: string | null): string | null => {
     if (!profileId) return null;
@@ -239,6 +243,13 @@ export function Home({
       },
     }));
   }, [statusSettled, status, modelProfiles, t, ua.instanceId, ua.isDocker, ua.isRemote]);
+
+  // Render probe: record first-render of each data section
+  useEffect(() => { if (status) probe.hit("status"); }, [status, probe]);
+  useEffect(() => { if (version) probe.hit("version"); }, [version, probe]);
+  useEffect(() => { if (agents) probe.hit("agents"); }, [agents, probe]);
+  useEffect(() => { if (modelProfiles.length > 0) probe.hit("models"); }, [modelProfiles, probe]);
+  useEffect(() => { if (statusSettled) probe.settled(); }, [statusSettled, probe]);
 
   const applyConfigSnapshot = useCallback((snapshot: {
     globalDefaultModel?: string;
