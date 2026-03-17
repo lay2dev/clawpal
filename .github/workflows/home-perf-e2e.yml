@@ -24,7 +24,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Playwright
-        run: npx playwright install chromium --with-deps
+        run: |
+          bun add -d @playwright/test
+          npx playwright install chromium --with-deps
 
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
