@@ -177,7 +177,95 @@ jobs:
           echo "app_lines=${APP_LINES}" >> "$GITHUB_OUTPUT"
           echo "large_count=${LARGE_COUNT}" >> "$GITHUB_OUTPUT"
 
-      # ── Gate 5: Home page render probes ──
+      # ── Gate 4b: Command perf E2E (local) ──
+      - name: Run command perf E2E
+        id: cmd_perf
+        working-directory: src-tauri
+        run: |
+          set +e
+          OUTPUT=$(cargo test -p clawpal --test command_perf_e2e -- --nocapture 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          PASSED=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo 0)
+          FAILED=$(echo "$OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+' || echo 0)
+
+          # Extract LOCAL_CMD lines
+          echo "$OUTPUT" | grep '^LOCAL_CMD:' > /tmp/local_cmd_perf.txt || true
+          CMD_COUNT=$(wc -l < /tmp/local_cmd_perf.txt)
+
+          # Extract process metrics
+          PROC_RSS=$(echo "$OUTPUT" | grep -oP 'PROCESS:rss_mb=\K[0-9.]+' || echo "N/A")
+
+          echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+          echo "cmd_count=${CMD_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "proc_rss=${PROC_RSS}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Gate 4c: Command perf E2E (remote via SSH Docker) ──
+      - name: Build Docker OpenClaw container (for remote perf)
+        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
+
+      - name: Start SSH container
+        run: |
+          docker run -d --name oc-remote-perf -p 2299:22 clawpal-perf-e2e
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+
+      - name: Run remote command timing via SSH
+        id: remote_perf
+        run: |
+          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
+
+          # Exercise remote OpenClaw commands and measure timing
+          CMDS=(
+            "openclaw status --json"
+            "cat /root/.openclaw/openclaw.json"
+            "openclaw gateway status --json"
+            "openclaw cron list --json"
+            "openclaw agent list --json"
+          )
+
+          echo "REMOTE_PERF_START" > /tmp/remote_perf.txt
+          for CMD in "${CMDS[@]}"; do
+            SHORT=$(echo "$CMD" | awk '{print $1"_"$2}' | tr '/' '_')
+            for i in $(seq 1 3); do
+              START=$(date +%s%N)
+              $SSH "$CMD" > /dev/null 2>&1
+              END=$(date +%s%N)
+              MS=$(( (END - START) / 1000000 ))
+              echo "REMOTE_CMD:${SHORT}:run${i}:${MS}ms" | tee -a /tmp/remote_perf.txt
+            done
+          done
+          echo "REMOTE_PERF_END" >> /tmp/remote_perf.txt
+
+          # Parse medians
+          DETAILS=""
+          for CMD in "${CMDS[@]}"; do
+            SHORT=$(echo "$CMD" | awk '{print $1"_"$2}' | tr '/' '_')
+            TIMES=$(grep "REMOTE_CMD:${SHORT}:" /tmp/remote_perf.txt | grep -oP '\d+(?=ms)' | sort -n)
+            MEDIAN=$(echo "$TIMES" | sed -n '2p')
+            MAX=$(echo "$TIMES" | tail -1)
+            DETAILS="${DETAILS}${SHORT}:median=${MEDIAN:-0}:max=${MAX:-0}
+"
+          done
+          printf "%b" "$DETAILS" > /tmp/remote_perf_summary.txt
+
+          echo "pass=true" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup remote container
+        if: always()
+        run: docker rm -f oc-remote-perf 2>/dev/null || true
+
+            # ── Gate 5: Home page render probes ──
       - name: Install Playwright
         run: |
           bun add -d @playwright/test
@@ -265,6 +353,9 @@ jobs:
           if [ "${{ steps.perf_tests.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
+          if [ "${{ steps.cmd_perf.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
           if [ "${{ steps.home_perf.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
@@ -304,7 +395,33 @@ jobs:
           | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95 }} ms | ≤ 100 ms | $( echo "${{ steps.perf_tests.outputs.cmd_p95 }}" | awk '{print ($1 <= 100) ? "✅" : "❌"}' ) |
           | Command max latency | ${{ steps.perf_tests.outputs.cmd_max }} ms | — | ℹ️ |
 
-          ### Home Page Render Probes  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+          ### Command Perf (local)  $( [ "${{ steps.cmd_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Metric | Value | Status |
+          |--------|-------|--------|
+          | Tests | ${{ steps.cmd_perf.outputs.passed }} passed, ${{ steps.cmd_perf.outputs.failed }} failed | $( [ "${{ steps.cmd_perf.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | Commands measured | ${{ steps.cmd_perf.outputs.cmd_count }} | ℹ️ |
+          | RSS (test process) | ${{ steps.cmd_perf.outputs.proc_rss }} MB | ℹ️ |
+
+          <details><summary>Local command timings</summary>
+
+          | Command | P50 | P95 | Max |
+          |---------|-----|-----|-----|
+          $(cat /tmp/local_cmd_perf.txt 2>/dev/null | awk -F: '{printf "| %s | %s | %s | %s |\n", $2, $4, $5, $6}' | sed 's/p50=//;s/p95=//;s/max=//;s/avg=[0-9]*//;s/count=[0-9]*://' || echo "| N/A | N/A | N/A | N/A |")
+
+          </details>
+
+          ### Command Perf (remote SSH)  ✅
+
+          <details><summary>Remote command timings (via Docker SSH)</summary>
+
+          | Command | Median | Max |
+          |---------|--------|-----|
+          $(cat /tmp/remote_perf_summary.txt 2>/dev/null | awk -F: '{printf "| %s | %s ms | %s ms |\n", $1, $2, $3}' | sed 's/median=//;s/max=//' || echo "| N/A | N/A | N/A |")
+
+          </details>
+
+                    ### Home Page Render Probes  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
