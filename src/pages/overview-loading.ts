@@ -244,9 +244,14 @@ export function shouldShowLatestReleaseBadge({
 // ---------------------------------------------------------------------------
 
 export function shouldSkipConfigSnapshot(
-  persistedRuntimeSnapshot: unknown | null,
+  persistedRuntimeSnapshot: { globalDefaultModel?: string | null } | null,
 ): boolean {
-  return persistedRuntimeSnapshot != null;
+  if (persistedRuntimeSnapshot == null) return false;
+  // Only skip if the cached runtime snapshot actually has model data.
+  // The remote SSH path had a bug where globalDefaultModel was always null
+  // due to a JSON pointer mismatch, so we must not skip ConfigSnapshot
+  // when the cached data is incomplete.
+  return persistedRuntimeSnapshot.globalDefaultModel != null;
 }
 
 // ---------------------------------------------------------------------------

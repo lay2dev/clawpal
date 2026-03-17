@@ -182,7 +182,11 @@ async fn remote_instance_runtime_snapshot_impl(
         .unwrap_or_default();
     let agents = parse_agents_cli_output(&agents_json, Some(&online_set))?;
     let active_agents = count_agent_entries_from_cli_json(&agents_json).unwrap_or(0);
-    let (global_default_model, fallback_models) = extract_default_model_and_fallbacks(&config_json);
+    // config_json is the agents subtree (from `openclaw config get agents --json`),
+    // but extract_default_model_and_fallbacks expects the full config with /agents prefix.
+    // Wrap the subtree so JSON pointers like /agents/defaults/model resolve correctly.
+    let config_wrapped = serde_json::json!({ "agents": config_json });
+    let (global_default_model, fallback_models) = extract_default_model_and_fallbacks(&config_wrapped);
 
     let ssh_diagnostic = if config_output.exit_code != 0 {
         Some(from_any_error(

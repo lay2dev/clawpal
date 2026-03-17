@@ -224,12 +224,20 @@ import {
 } from "../overview-loading";
 
 describe("shouldSkipConfigSnapshot", () => {
-  test("skips when persisted runtime snapshot exists", () => {
-    expect(shouldSkipConfigSnapshot({ status: { healthy: true, activeAgents: 1 }, agents: [], globalDefaultModel: "m", fallbackModels: [] })).toBe(true);
+  test("skips when persisted runtime snapshot has model data", () => {
+    expect(shouldSkipConfigSnapshot({ globalDefaultModel: "anthropic/claude-sonnet-4-20250514" })).toBe(true);
   });
 
   test("does not skip when no persisted runtime snapshot", () => {
     expect(shouldSkipConfigSnapshot(null)).toBe(false);
+  });
+
+  test("does not skip when persisted runtime snapshot has null model (remote SSH bug)", () => {
+    expect(shouldSkipConfigSnapshot({ globalDefaultModel: null })).toBe(false);
+  });
+
+  test("does not skip when persisted runtime snapshot has undefined model", () => {
+    expect(shouldSkipConfigSnapshot({})).toBe(false);
   });
 });
 
