@@ -358,14 +358,7 @@ export interface ChannelsRuntimeSnapshot {
   agents: AgentOverview[];
 }
 
-export interface CronConfigSnapshot {
-  jobs: CronJob[];
-}
 
-export interface CronRuntimeSnapshot {
-  jobs: CronJob[];
-  watchdog: WatchdogStatus & { alive: boolean; deployed: boolean };
-}
 
 export interface Binding {
   agentId: string;
@@ -417,206 +410,29 @@ export interface DiscoveredInstance {
 
 
 
-export type RescueBotAction = "set" | "activate" | "status" | "deactivate" | "unset";
-export type RescueBotRuntimeState =
-  | "unconfigured"
-  | "configured_inactive"
-  | "active"
-  | "checking"
-  | "error";
 
-export interface RescueBotCommandResult {
-  command: string[];
-  output: {
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-  };
-}
 
-export interface RescueBotManageResult {
-  action: RescueBotAction;
-  profile: string;
-  mainPort: number;
-  rescuePort: number;
-  minRecommendedPort: number;
-  configured: boolean;
-  active: boolean;
-  runtimeState: RescueBotRuntimeState;
-  wasAlreadyConfigured: boolean;
-  commands: RescueBotCommandResult[];
-}
 
-export interface RescuePrimaryCheckItem {
-  id: string;
-  title: string;
-  ok: boolean;
-  detail: string;
-}
 
-export interface RescuePrimaryIssue {
-  id: string;
-  code: string;
-  severity: "error" | "warn" | "info";
-  message: string;
-  autoFixable: boolean;
-  fixHint?: string;
-  source: "rescue" | "primary";
-}
 
-export interface RescueDocHypothesis {
-  title: string;
-  reason: string;
-  score: number;
-}
 
-export interface RescueDocCitation {
-  url: string;
-  section: string;
-}
 
-export interface RescuePrimarySummary {
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  headline: string;
-  recommendedAction: string;
-  fixableIssueCount: number;
-  selectedFixIssueIds: string[];
-  rootCauseHypotheses?: RescueDocHypothesis[];
-  fixSteps?: string[];
-  confidence?: number;
-  citations?: RescueDocCitation[];
-  versionAwareness?: string;
-}
 
-export interface RescuePrimarySectionItem {
-  id: string;
-  label: string;
-  status: "ok" | "warn" | "error" | "info" | "inactive";
-  detail: string;
-  autoFixable: boolean;
-  issueId?: string | null;
-}
 
-export interface RescuePrimarySectionResult {
-  key: "gateway" | "models" | "tools" | "agents" | "channels";
-  title: string;
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  summary: string;
-  docsUrl: string;
-  items: RescuePrimarySectionItem[];
-  rootCauseHypotheses?: RescueDocHypothesis[];
-  fixSteps?: string[];
-  confidence?: number;
-  citations?: RescueDocCitation[];
-  versionAwareness?: string;
-}
 
-export interface RescuePrimaryDiagnosisResult {
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  checkedAt: string;
-  targetProfile: string;
-  rescueProfile: string;
-  rescueConfigured: boolean;
-  rescuePort?: number;
-  summary: RescuePrimarySummary;
-  sections: RescuePrimarySectionResult[];
-  checks: RescuePrimaryCheckItem[];
-  issues: RescuePrimaryIssue[];
-}
 
-export interface RescuePrimaryRepairStep {
-  id: string;
-  title: string;
-  ok: boolean;
-  detail: string;
-  command?: string[];
-}
 
-export interface RescuePrimaryPendingAction {
-  kind: "tempProviderSetup";
-  reason: string;
-  tempProviderProfileId?: string | null;
-}
 
-export interface RescuePrimaryRepairResult {
-  status: "completed" | "needsTempProviderSetup";
-  attemptedAt: string;
-  targetProfile: string;
-  rescueProfile: string;
-  selectedIssueIds: string[];
-  appliedIssueIds: string[];
-  skippedIssueIds: string[];
-  failedIssueIds: string[];
-  pendingAction?: RescuePrimaryPendingAction | null;
-  steps: RescuePrimaryRepairStep[];
-  before: RescuePrimaryDiagnosisResult;
-  after: RescuePrimaryDiagnosisResult;
-}
 
 // Cron
 
-export type WatchdogJobStatus = "ok" | "pending" | "triggered" | "retrying" | "escalated";
 
-export interface CronSchedule {
-  kind: "cron" | "every" | "at";
-  expr?: string;
-  tz?: string;
-  everyMs?: number;
-  at?: string;
-}
 
-export interface CronJobState {
-  lastRunAtMs?: number;
-  lastStatus?: string;
-  lastError?: string;
-}
 
-export interface CronJobDelivery {
-  mode?: string;
-  channel?: string;
-  to?: string;
-}
 
-export interface CronJob {
-  jobId: string;
-  name: string;
-  schedule: CronSchedule;
-  sessionTarget: "main" | "isolated";
-  agentId?: string;
-  enabled: boolean;
-  description?: string;
-  state?: CronJobState;
-  delivery?: CronJobDelivery;
-}
 
-export interface CronRun {
-  jobId: string;
-  startedAt: string;
-  endedAt?: string;
-  outcome: string;
-  error?: string;
-  ts?: number;
-  runAtMs?: number;
-  durationMs?: number;
-  summary?: string;
-}
 
-export interface WatchdogJobState {
-  status: WatchdogJobStatus;
-  lastScheduledAt?: string;
-  lastRunAt?: string | null;
-  retries: number;
-  lastError?: string;
-  escalatedAt?: string;
-}
 
-export interface WatchdogStatus {
-  pid: number;
-  startedAt: string;
-  lastCheckAt: string;
-  gatewayHealthy: boolean;
-  jobs: Record<string, WatchdogJobState>;
-}
 
 // Command Queue
 
@@ -682,96 +498,61 @@ export interface ApplyQueueResult {
   rolledBack: boolean;
 }
 
-export type InstallMethod = "local" | "wsl2" | "docker" | "remote_ssh";
 
-export type InstallState =
-  | "idle"
-  | "selected_method"
-  | "precheck_running"
-  | "precheck_failed"
-  | "precheck_passed"
-  | "install_running"
-  | "install_failed"
-  | "install_passed"
-  | "init_running"
-  | "init_failed"
-  | "init_passed"
-  | "verify_running"
-  | "verify_failed"
-  | "ready";
 
-export type InstallStep = "precheck" | "install" | "init" | "verify";
 
-export interface InstallLogEntry {
-  at: string;
-  level: string;
-  message: string;
-}
 
-export interface InstallSession {
-  id: string;
-  method: InstallMethod;
-  state: InstallState;
-  current_step: InstallStep | null;
-  logs: InstallLogEntry[];
-  artifacts: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
 
-export interface InstallStepResult {
-  ok: boolean;
-  summary: string;
-  details: string;
-  commands: string[];
-  artifacts: Record<string, unknown>;
-  next_step: string | null;
-  error_code: string | null;
-  ssh_diagnostic?: SshDiagnosticReport | null;
-}
 
-export interface InstallMethodCapability {
-  method: InstallMethod;
-  available: boolean;
-  hint: string | null;
-}
 
-export interface InstallOrchestratorDecision {
-  step: string | null;
-  reason: string;
-  source: string;
-  errorCode?: string | null;
-  actionHint?: string | null;
-}
 
-export interface InstallUiAction {
-  id: string;
-  kind: string;
-  label: string;
-  payload?: Record<string, unknown>;
-}
 
-export interface InstallTargetDecision {
-  method: InstallMethod | null;
-  reason: string;
-  source: string;
-  requiresSshHost: boolean;
-  requiredFields?: string[];
-  uiActions?: InstallUiAction[];
-  errorCode?: string | null;
-  actionHint?: string | null;
-}
 
-export interface EnsureAccessResult {
-  instanceId: string;
-  transport: string;
-  workingChain: string[];
-  usedLegacyFallback: boolean;
-  profileReused: boolean;
-}
 
-export interface RecordInstallExperienceResult {
-  saved: boolean;
-  totalCount: number;
-}
 
+
+export type {
+  RescueBotAction,
+  RescueBotRuntimeState,
+  RescueBotCommandResult,
+  RescueBotManageResult,
+  RescuePrimaryCheckItem,
+  RescuePrimaryIssue,
+  RescueDocHypothesis,
+  RescueDocCitation,
+  RescuePrimarySummary,
+  RescuePrimarySectionItem,
+  RescuePrimarySectionResult,
+  RescuePrimaryDiagnosisResult,
+  RescuePrimaryRepairStep,
+  RescuePrimaryPendingAction,
+  RescuePrimaryRepairResult,
+} from "./rescue-types";
+
+export type {
+  InstallMethod,
+  InstallState,
+  InstallStep,
+  InstallLogEntry,
+  InstallSession,
+  InstallStepResult,
+  InstallMethodCapability,
+  InstallOrchestratorDecision,
+  InstallUiAction,
+  InstallTargetDecision,
+  EnsureAccessResult,
+  RecordInstallExperienceResult,
+} from "./install-types";
+
+export type {
+  CronConfigSnapshot,
+  CronRuntimeSnapshot,
+  WatchdogJobStatus,
+  CronSchedule,
+  CronJobState,
+  CronJobDelivery,
+  CronJob,
+  CronRun,
+  WatchdogJobState,
+  WatchdogStatus,
+} from "./cron-types";
