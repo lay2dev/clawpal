@@ -399,11 +399,3 @@ export function shouldLogRemoteInvokeMetric(ok: boolean, elapsedMs: number): boo
  * based on the current instance context. Remote calls automatically
  * inject hostId and check connection state.
  */
-
-// Expose cache clear for E2E perf tests — allows measuring IPC fetch + render
-// rather than cache-hit render time.
-if (typeof window !== "undefined") {
-  (window as any).__TEST_CLEAR_READ_CACHE__ = () => {
-    API_READ_CACHE.clear();
-  };
-}

@@ -542,7 +542,7 @@ jobs:
 
           </details>
 
-                    ### Home Page Render Probes (mock IPC ${MOCK_LATENCY}ms, cache cleared before navigation)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+                    ### Home Page Render Probes (mock IPC ${MOCK_LATENCY}ms, cache-first render)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
