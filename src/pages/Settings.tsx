@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AutocompleteField } from "../components/AutocompleteField";
+import { useAppUpdate } from "../hooks/useAppUpdate";
 import {
   emptyForm, normalizeOauthProvider, providerUsesOAuthAuth,
   defaultOauthAuthRef, isEnvVarLikeAuthRef, defaultEnvAuthRef,
@@ -8,9 +9,6 @@ import {
 } from "../lib/profile-utils";
 import type { FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
 import { isAlreadyExplainedGuidanceError } from "@/lib/guidance";
@@ -111,66 +109,7 @@ export function Settings({
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
   // ClawPal app version & self-update
-  const [appVersion, setAppVersion] = useState<string>("");
-  const [appUpdate, setAppUpdate] = useState<{ version: string; body?: string } | null>(null);
-  const [appUpdateChecking, setAppUpdateChecking] = useState(false);
-  const [appUpdating, setAppUpdating] = useState(false);
-  const [appUpdateProgress, setAppUpdateProgress] = useState<number | null>(null);
-
-  useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => {});
-  }, []);
-
-  const handleCheckForUpdates = useCallback(async () => {
-    setAppUpdateChecking(true);
-    setAppUpdate(null);
-    try {
-      const update = await check();
-      if (update) {
-        setAppUpdate({ version: update.version, body: update.body });
-      }
-    } catch (e) {
-      console.error("Update check failed:", e);
-    } finally {
-      setAppUpdateChecking(false);
-    }
-  }, []);
-
-  const handleAppUpdate = useCallback(async () => {
-    setAppUpdating(true);
-    setAppUpdateProgress(0);
-    try {
-      const update = await check();
-      if (!update) return;
-      let totalBytes = 0;
-      let downloadedBytes = 0;
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started" && event.data.contentLength) {
-          totalBytes = event.data.contentLength;
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-          if (totalBytes > 0) {
-            setAppUpdateProgress(Math.round((downloadedBytes / totalBytes) * 100));
-          }
-        } else if (event.event === "Finished") {
-          setAppUpdateProgress(100);
-        }
-      });
-      await relaunch();
-    } catch (e) {
-      console.error("App update failed:", e);
-      setAppUpdating(false);
-      setAppUpdateProgress(null);
-    }
-  }, []);
-
-  // Auto-trigger update check when navigated to from red dot
-  useEffect(() => {
-    if (hasAppUpdate) {
-      handleCheckForUpdates();
-      onAppUpdateSeen?.();
-    }
-  }, [hasAppUpdate, handleCheckForUpdates, onAppUpdateSeen]);
+  const { appVersion, appUpdate, appUpdateChecking, appUpdating, appUpdateProgress, handleCheckForUpdates, handleAppUpdate } = useAppUpdate(hasAppUpdate, onAppUpdateSeen);
 
   // Extract profiles from config on first load
   useEffect(() => {
