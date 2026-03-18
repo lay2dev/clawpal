@@ -77,7 +77,7 @@ jobs:
           printf "%b" "$DETAILS" > /tmp/commit_details.txt
           echo "max_lines=${MAX_LINES}" >> "$GITHUB_OUTPUT"
 
-      # ── Gate 2: Frontend bundle size ≤ 512 KB (gzip) ──
+      # ── Gate 2: Frontend bundle size ≤ 350 KB (gzip) ──
       - name: Check bundle size
         id: bundle_size
         run: |
@@ -443,14 +443,14 @@ jobs:
           if [ "${{ steps.bundle_size.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
-          if [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -gt 200 ] 2>/dev/null; then
+          if [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -gt 180 ] 2>/dev/null; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           if [ "${{ steps.perf_tests.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           CMD_P50="${{ steps.perf_tests.outputs.cmd_p50_us }}"
-          if [ "$CMD_P50" != "N/A" ] && [ "$CMD_P50" -gt 50000 ]; then
+          if [ "$CMD_P50" != "N/A" ] && [ "$CMD_P50" -gt 1000 ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           if [ "${{ steps.cmd_perf.outputs.pass }}" = "false" ]; then
@@ -460,7 +460,7 @@ jobs:
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           for PROBE_VAL in "${{ steps.home_perf.outputs.status_ms }}" "${{ steps.home_perf.outputs.version_ms }}" "${{ steps.home_perf.outputs.agents_ms }}" "${{ steps.home_perf.outputs.models_ms }}"; do
-            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 500 ] 2>/dev/null; then
+            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 200 ] 2>/dev/null; then
               OVERALL="❌ Some gates failed"; GATE_FAIL=1
             fi
           done
@@ -491,18 +491,18 @@ jobs:
           |--------|-------|-------|--------|
           | JS bundle (raw) | ${{ steps.bundle_size.outputs.raw_kb }} KB | — | — |
           | JS bundle (gzip) | ${{ steps.bundle_size.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle_size.outputs.limit_kb }} KB | ${BUNDLE_ICON} |
-          | JS initial load (gzip) | ${{ steps.bundle_size.outputs.init_gzip_kb }} KB | ≤ 200 KB | $( [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -le 200 ] && echo "✅" || echo "❌" ) |
+          | JS initial load (gzip) | ${{ steps.bundle_size.outputs.init_gzip_kb }} KB | ≤ 180 KB | $( [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -le 180 ] && echo "✅" || echo "❌" ) |
 
           ### Perf Metrics E2E  $( [ "${{ steps.perf_tests.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Metric | Value | Limit | Status |
           |--------|-------|-------|--------|
           | Tests | ${{ steps.perf_tests.outputs.passed }} passed, ${{ steps.perf_tests.outputs.failed }} failed | 0 failures | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
-          | RSS (test process) | ${{ steps.perf_tests.outputs.rss_mb }} MB | ≤ 80 MB | $( echo "${{ steps.perf_tests.outputs.rss_mb }}" | awk '{print ($1 <= 80) ? "✅" : "❌"}' ) |
+          | RSS (test process) | ${{ steps.perf_tests.outputs.rss_mb }} MB | ≤ 20 MB | $( echo "${{ steps.perf_tests.outputs.rss_mb }}" | awk '{print ($1 <= 80) ? "✅" : "❌"}' ) |
           | VMS (test process) | ${{ steps.perf_tests.outputs.vms_mb }} MB | — | ℹ️ |
-          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50_us }} µs | ≤ 50000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p50_us }}" | awk '{print ($1 != "N/A" && $1 <= 50000) ? "✅" : "❌"}' ) |
-          | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95_us }} µs | ≤ 100000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p95_us }}" | awk '{print ($1 != "N/A" && $1 <= 100000) ? "✅" : "❌"}' ) |
-          | Command max latency | ${{ steps.perf_tests.outputs.cmd_max_us }} µs | ≤ 200000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_max_us }}" | awk '{print ($1 != "N/A" && $1 <= 200000) ? "✅" : "❌"}' ) |
+          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50_us }} µs | ≤ 1000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p50_us }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
+          | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95_us }} µs | ≤ 5000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p95_us }}" | awk '{print ($1 != "N/A" && $1 <= 5000) ? "✅" : "❌"}' ) |
+          | Command max latency | ${{ steps.perf_tests.outputs.cmd_max_us }} µs | ≤ 50000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_max_us }}" | awk '{print ($1 != "N/A" && $1 <= 50000) ? "✅" : "❌"}' ) |
 
           ### Command Perf (local)  $( [ "${{ steps.cmd_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
@@ -539,11 +539,11 @@ jobs:
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
-          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
-          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
-          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
-          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
-          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | < 5000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 < 5000) ? "✅" : "❌"}' ) |
+          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 300 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 300) ? "✅" : "❌"}' ) |
+          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | ≤ 1000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
 
           ### Code Readability
 

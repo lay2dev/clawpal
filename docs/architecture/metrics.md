@@ -103,8 +103,8 @@ pub fn get_process_metrics() -> Result<ProcessMetrics, String> {
 | macOS x64 包体积 | 13.3 MB | ≤ 15 MB | CI build artifact | ✅ |
 | Windows x64 包体积 | 16.3 MB | ≤ 20 MB | CI build artifact | ✅ |
 | Linux x64 包体积 | 103.8 MB | ≤ 110 MB | CI build artifact | ✅ |
-| 前端 JS bundle 大小 (gzip) | 待统计 | ≤ 500 KB | `vite build` + `gzip -k` | ✅ |
-| 前端 JS initial load (gzip) | 待统计 | ≤ 200 KB | `vite build` 初始加载 chunks | ✅ |
+| 前端 JS bundle 大小 (gzip) | 待统计 | ≤ 350 KB | `vite build` + `gzip -k` | ✅ |
+| 前端 JS initial load (gzip) | 待统计 | ≤ 180 KB | `vite build` 初始加载 chunks | ✅ |
 
 **CI Gate 方案**:
 
@@ -143,9 +143,9 @@ pub fn get_process_metrics() -> Result<ProcessMetrics, String> {
 
 | 指标 | 基线值 | 目标 | 量化方式 | CI Gate |
 |------|--------|------|----------|---------|
-| 本地 command P50 耗时 | 待埋点 | ≤ 50ms (50,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
-| 本地 command P95 耗时 | 待埋点 | ≤ 100ms (100,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
-| 本地 command Max 耗时 | 待埋点 | ≤ 200ms (200,000µs) | Rust `Instant::now()` (微秒精度) | ℹ️ |
+| 本地 command P50 耗时 | 待埋点 | ≤ 1ms (1,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
+| 本地 command P95 耗时 | 待埋点 | ≤ 5ms (5,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
+| 本地 command Max 耗时 | 待埋点 | ≤ 50ms (50,000µs) | Rust `Instant::now()` (微秒精度) | ℹ️ |
 | SSH command P95 耗时 | 待埋点 | ≤ 2s | 含网络 RTT | — |
 | Doctor 全量诊断耗时 | 待埋点 | ≤ 5s | 端到端计时 | — |
 | 配置文件读写耗时 | 待埋点 | ≤ 50ms | `Instant::now()` | — |

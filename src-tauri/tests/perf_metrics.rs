@@ -33,7 +33,7 @@ fn process_metrics_rss_within_bounds() {
         "RSS too low: {:.1} MB — likely measurement error",
         rss_mb
     );
-    assert!(rss_mb < 80.0, "RSS exceeds 80 MB target: {:.1} MB", rss_mb);
+    assert!(rss_mb < 20.0, "RSS exceeds 20 MB target: {:.1} MB", rss_mb);
 }
 
 #[test]
@@ -197,6 +197,6 @@ fn z_report_metrics_for_ci() {
     println!("METRIC:cmd_p50_us={}", p50);
     println!("METRIC:cmd_p95_us={}", p95);
     println!("METRIC:cmd_max_us={}", max);
-    println!("METRIC:rss_limit_mb=80");
+    println!("METRIC:rss_limit_mb=20");
     println!("METRIC:cmd_p95_limit_us=100000");
 }
