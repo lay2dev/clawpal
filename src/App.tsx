@@ -1,14 +1,6 @@
 import { Suspense, lazy, startTransition, useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  HomeIcon,
-  HashIcon,
-  ClockIcon,
-  HistoryIcon,
-  StethoscopeIcon,
-  BookOpenIcon,
-  KeyRoundIcon,
-  SettingsIcon,
   MessageCircleIcon,
   XIcon,
 } from "lucide-react";
@@ -20,14 +12,10 @@ import { api } from "./lib/api";
 import { withGuidance } from "./lib/guidance";
 import { useFont } from "./lib/use-font";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { Route } from "./lib/routes";
 import type { SshHost } from "./lib/types";
-const SshFormWidget = lazy(() => import("./components/SshFormWidget").then((m) => ({ default: m.SshFormWidget })));
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -40,7 +28,6 @@ const Channels = lazy(() => import("./pages/Channels").then((m) => ({ default: m
 const Cron = lazy(() => import("./pages/Cron").then((m) => ({ default: m.Cron })));
 const Orchestrator = lazy(() => import("./pages/Orchestrator").then((m) => ({ default: m.Orchestrator })));
 const Chat = lazy(() => import("./components/Chat").then((m) => ({ default: m.Chat })));
-const PendingChangesBar = lazy(() => import("./components/PendingChangesBar").then((m) => ({ default: m.PendingChangesBar })));
 
 import { useInstanceManager } from "./hooks/useInstanceManager";
 import { useSshConnection } from "./hooks/useSshConnection";
@@ -48,6 +35,9 @@ import { useInstancePersistence } from "./hooks/useInstancePersistence";
 import { useChannelCache } from "./hooks/useChannelCache";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useWorkspaceTabs } from "./hooks/useWorkspaceTabs";
+import { useNavItems } from "./hooks/useNavItems";
+import { PassphraseDialog, SshEditDialog } from "./components/AppDialogs";
+import { SidebarFooter } from "./components/SidebarFooter";
 
 export function App() {
   const { t } = useTranslation();
@@ -286,79 +276,7 @@ export function App() {
   }, [navigateRoute, setDoctorNavPulse, setInStart]);
 
   // ── Navigation items ──
-  const navItems: { key: string; active: boolean; icon: React.ReactNode; label: string; badge?: React.ReactNode; onClick: () => void }[] = inStart
-    ? [
-      {
-        key: "start-profiles",
-        active: startSection === "profiles",
-        icon: <KeyRoundIcon className="size-4" />,
-        label: t("start.nav.profiles"),
-        onClick: () => { navigateRoute("home"); setStartSection("profiles"); },
-      },
-      {
-        key: "start-settings",
-        active: startSection === "settings",
-        icon: <SettingsIcon className="size-4" />,
-        label: t("start.nav.settings"),
-        onClick: () => { navigateRoute("home"); setStartSection("settings"); },
-      },
-    ]
-    : [
-      {
-        key: "instance-home",
-        active: route === "home",
-        icon: <HomeIcon className="size-4" />,
-        label: t("nav.home"),
-        onClick: () => navigateRoute("home"),
-      },
-      {
-        key: "channels",
-        active: route === "channels",
-        icon: <HashIcon className="size-4" />,
-        label: t("nav.channels"),
-        onClick: () => navigateRoute("channels"),
-      },
-      {
-        key: "recipes",
-        active: route === "recipes",
-        icon: <BookOpenIcon className="size-4" />,
-        label: t("nav.recipes"),
-        onClick: () => navigateRoute("recipes"),
-      },
-      {
-        key: "cron",
-        active: route === "cron",
-        icon: <ClockIcon className="size-4" />,
-        label: t("nav.cron"),
-        onClick: () => navigateRoute("cron"),
-      },
-      {
-        key: "doctor",
-        active: route === "doctor",
-        icon: <StethoscopeIcon className="size-4" />,
-        label: t("nav.doctor"),
-        onClick: () => {
-          openDoctor();
-        },
-        badge: doctorNavPulse
-          ? <span className="ml-auto h-2 w-2 rounded-full bg-primary animate-pulse" />
-          : undefined,
-      },
-      {
-        key: "openclaw-context",
-        active: route === "context",
-        icon: <BookOpenIcon className="size-4" />,
-        label: t("nav.context"),
-        onClick: () => navigateRoute("context"),
-      },
-      {
-        key: "history",
-        active: route === "history",
-        icon: <HistoryIcon className="size-4" />,
-        label: t("nav.history"),
-        onClick: () => navigateRoute("history"),
-      },
-    ];
+  const navItems = useNavItems({ inStart, startSection, setStartSection, route, navigateRoute, openDoctor, doctorNavPulse });
 
   return (
     <>
@@ -424,76 +342,16 @@ export function App() {
 
         </nav>
 
-        <div className="px-5 pb-3 text-[11px] text-muted-foreground/80">
-          <div className="flex items-center gap-1.5">
-            <span
-              className={cn(
-                "inline-block h-1.5 w-1.5 rounded-full",
-                profileSyncStatus.phase === "syncing" && "bg-amber-500 animate-pulse",
-                profileSyncStatus.phase === "success" && "bg-green-500",
-                profileSyncStatus.phase === "error" && "bg-red-500",
-                profileSyncStatus.phase === "idle" && "bg-muted-foreground/40",
-              )}
-            />
-            <span>
-              {profileSyncStatus.phase === "idle"
-                ? t("doctor.profileSyncIdle")
-                : profileSyncStatus.phase === "syncing"
-                  ? t("doctor.profileSyncSyncing", {
-                    instance: profileSyncStatus.instanceId || t("instance.current"),
-                  })
-                  : profileSyncStatus.phase === "success"
-                      ? t("doctor.profileSyncSuccessStatus", {
-                        instance: profileSyncStatus.instanceId || t("instance.current"),
-                      })
-                      : t("doctor.profileSyncErrorStatus", {
-                        instance: profileSyncStatus.instanceId || t("instance.current"),
-                      })}
-            </span>
-          </div>
-          {showSshTransferSpeedUi && isRemote && isConnected && (
-            <div className="mt-2 border-t border-border/40 pt-2 text-muted-foreground/75">
-              <div className="text-[10px] uppercase tracking-wide">{t("doctor.sshTransferSpeedTitle")}</div>
-              <div className="mt-0.5">
-                {t("doctor.sshTransferSpeedDown", {
-                  speed: `${formatBytes(Math.max(0, Math.round(sshTransferStats?.downloadBytesPerSec ?? 0)))} /s`,
-                })}
-              </div>
-              <div>
-                {t("doctor.sshTransferSpeedUp", {
-                  speed: `${formatBytes(Math.max(0, Math.round(sshTransferStats?.uploadBytesPerSec ?? 0)))} /s`,
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {!inStart && (
-          <Suspense fallback={null}>
-            <PendingChangesBar
-              showToast={showToast}
-              onApplied={bumpConfigVersion}
-              onDiscarded={bumpConfigVersion}
-            />
-          </Suspense>
-        )}
-        <div className="px-5 pb-3 pt-2 flex items-center gap-2 text-xs text-muted-foreground/70">
-          <a
-            href="#"
-            className="hover:text-foreground transition-colors duration-200"
-            onClick={(e) => { e.preventDefault(); api.openUrl("https://clawpal.xyz"); }}
-          >
-            {t('nav.website')}
-          </a>
-          <span className="text-border">·</span>
-          <a
-            href="#"
-            className="hover:text-foreground transition-colors duration-200"
-            onClick={(e) => { e.preventDefault(); api.openUrl("https://x.com/zhixianio"); }}
-          >
-            @zhixian
-          </a>
-        </div>
+        <SidebarFooter
+          profileSyncStatus={profileSyncStatus}
+          showSshTransferSpeedUi={showSshTransferSpeedUi}
+          isRemote={isRemote}
+          isConnected={isConnected}
+          sshTransferStats={sshTransferStats}
+          inStart={inStart}
+          showToast={showToast}
+          bumpConfigVersion={bumpConfigVersion}
+        />
       </aside>
 
       {/* ── Main Content ── */}
@@ -622,64 +480,19 @@ export function App() {
       </div>
       </InstanceContext.Provider>
     </div>
-    <Dialog
+    <PassphraseDialog
       open={passphraseOpen}
-      onOpenChange={(open) => {
-        if (!open) closePassphraseDialog(null);
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("ssh.passphraseTitle")}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            {t("ssh.passphrasePrompt", { host: passphraseHostLabel })}
-          </p>
-          <Label htmlFor="ssh-passphrase">{t("ssh.passphraseLabel")}</Label>
-          <Input
-            id="ssh-passphrase"
-            type="password"
-            value={passphraseInput}
-            onChange={(e) => setPassphraseInput(e.target.value)}
-            placeholder={t("ssh.passphrasePlaceholder")}
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                closePassphraseDialog(passphraseInput);
-              }
-            }}
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => closePassphraseDialog(null)}>
-            {t("instance.cancel")}
-          </Button>
-          <Button onClick={() => closePassphraseDialog(passphraseInput)}>
-            {t("ssh.passphraseConfirm")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    <Dialog open={sshEditOpen} onOpenChange={setSshEditOpen}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("instance.editSsh")}</DialogTitle>
-        </DialogHeader>
-        {editingSshHost && (
-          <Suspense fallback={<p className="text-sm text-muted-foreground animate-pulse">Loading…</p>}>
-          <SshFormWidget
-            invokeId="ssh-edit-form"
-            defaults={editingSshHost}
-            onSubmit={(_invokeId, host) => {
-              handleSshEditSave({ ...host, id: editingSshHost.id });
-            }}
-            onCancel={() => setSshEditOpen(false)}
-          />
-          </Suspense>
-        )}
-      </DialogContent>
-    </Dialog>
+      hostLabel={passphraseHostLabel}
+      input={passphraseInput}
+      onInputChange={setPassphraseInput}
+      onClose={closePassphraseDialog}
+    />
+    <SshEditDialog
+      open={sshEditOpen}
+      onOpenChange={setSshEditOpen}
+      host={editingSshHost}
+      onSave={handleSshEditSave}
+    />
     <Toaster position="top-right" richColors />
     </>
   );
