@@ -276,20 +276,7 @@ export interface HistoryItem {
   rollbackOf?: string;
 }
 
-export interface DoctorIssue {
-  id: string;
-  code: string;
-  severity: "error" | "warn" | "info";
-  message: string;
-  autoFixable: boolean;
-  fixHint?: string;
-}
 
-export interface DoctorReport {
-  ok: boolean;
-  score: number;
-  issues: DoctorIssue[];
-}
 
 export interface GuidanceAction {
   label: string;
@@ -436,73 +423,6 @@ export interface DiscoveredInstance {
 
 // Command Queue
 
-export interface PendingCommand {
-  id: string;
-  label: string;
-  command: string[];
-  createdAt: string;
-}
-
-export interface PreviewQueueResult {
-  commands: PendingCommand[];
-  configBefore: string;
-  configAfter: string;
-  warnings: string[];
-  errors: string[];
-}
-
-// Doctor Agent
-
-export interface DoctorInvoke {
-  id: string;
-  command: string;
-  args: Record<string, unknown>;
-  type: "read" | "write";
-}
-
-export interface DiagnosisCitation {
-  url: string;
-  section?: string;
-}
-
-export interface DiagnosisReportItem {
-  problem: string;
-  severity: "error" | "warn" | "info";
-  fix_options: string[];
-  root_cause_hypothesis?: string;
-  fix_steps?: string[];
-  confidence?: number;
-  citations?: DiagnosisCitation[];
-  version_awareness?: string;
-  action?: { tool: string; args: string; instance?: string; reason?: string };
-}
-
-export interface DoctorChatMessage {
-  id: string;
-  role: "assistant" | "user" | "tool-call" | "tool-result";
-  content: string;
-  invoke?: DoctorInvoke;
-  invokeResult?: unknown;
-  invokeId?: string;
-  status?: "pending" | "approved" | "rejected" | "auto";
-  diagnosisReport?: { items: DiagnosisReportItem[] };
-  /** Epoch milliseconds when the message was created. */
-  timestamp?: number;
-}
-
-export interface ApplyQueueResult {
-  ok: boolean;
-  appliedCount: number;
-  totalCount: number;
-  error: string | null;
-  rolledBack: boolean;
-}
-
-
-
-
-
-
 
 
 
@@ -556,3 +476,15 @@ export type {
   WatchdogJobState,
   WatchdogStatus,
 } from "./cron-types";
+
+export type {
+  ApplyQueueResult,
+  DiagnosisCitation,
+  DiagnosisReportItem,
+  DoctorChatMessage,
+  DoctorInvoke,
+  DoctorIssue,
+  DoctorReport,
+  PendingCommand,
+  PreviewQueueResult,
+} from "./doctor-types";
