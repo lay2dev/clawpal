@@ -99,10 +99,10 @@ fn local_config_commands_record_timing() {
 
     for s in &samples {
         assert!(
-            s.elapsed_ms < 100,
+            s.elapsed_us < 100,
             "{} took {}ms — should be < 100ms for local ops",
             s.name,
-            s.elapsed_ms
+            s.elapsed_us
         );
     }
 }
@@ -166,13 +166,13 @@ fn z_local_perf_report_for_ci() {
     for (name, _) in &commands {
         if let Some(stats) = report.get(*name) {
             println!(
-                "LOCAL_CMD:{}:count={}:p50={}:p95={}:max={}:avg={}",
+                "LOCAL_CMD:{}:count={}:p50_us={}:p95_us={}:max_us={}:avg_us={}",
                 name,
                 stats["count"],
-                stats["p50_ms"],
-                stats["p95_ms"],
-                stats["max_ms"],
-                stats["avg_ms"],
+                stats["p50_us"],
+                stats["p95_us"],
+                stats["max_us"],
+                stats["avg_us"],
             );
         }
     }

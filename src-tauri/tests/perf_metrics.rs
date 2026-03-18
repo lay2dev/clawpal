@@ -67,36 +67,36 @@ fn process_metrics_uptime_is_positive() {
 #[test]
 fn trace_command_measures_fast_operation() {
     init_perf_clock();
-    let (result, elapsed_ms) = trace_command("test_fast_op", || {
+    let (result, elapsed_us) = trace_command("test_fast_op", || {
         let x = 2 + 2;
         x
     });
     assert_eq!(result, 4);
-    // A trivial operation should complete in well under 100ms (the local threshold)
+    // A trivial operation should complete in well under 100ms (100_000us)
     assert!(
-        elapsed_ms < 100,
-        "fast operation took {}ms — should be < 100ms",
-        elapsed_ms
+        elapsed_us < 100_000,
+        "fast operation took {}us — should be < 100_000us",
+        elapsed_us
     );
 }
 
 #[test]
 fn trace_command_measures_slow_operation() {
     init_perf_clock();
-    let (_, elapsed_ms) = trace_command("test_slow_op", || {
+    let (_, elapsed_us) = trace_command("test_slow_op", || {
         thread::sleep(Duration::from_millis(150));
     });
-    // Should measure at least 100ms
+    // Should measure at least 100ms (100_000us)
     assert!(
-        elapsed_ms >= 100,
-        "slow operation measured as {}ms — should be >= 100ms",
-        elapsed_ms
+        elapsed_us >= 100_000,
+        "slow operation measured as {}us — should be >= 100_000us",
+        elapsed_us
     );
     // But shouldn't be wildly over (allow up to 500ms for CI scheduling jitter)
     assert!(
-        elapsed_ms < 500,
-        "slow operation measured as {}ms — excessive",
-        elapsed_ms
+        elapsed_us < 500_000,
+        "slow operation measured as {}us — excessive",
+        elapsed_us
     );
 }
 
@@ -150,7 +150,7 @@ fn memory_stable_across_repeated_metrics_calls() {
 fn perf_sample_serializes_correctly() {
     let sample = PerfSample {
         name: "test_command".to_string(),
-        elapsed_ms: 42,
+        elapsed_us: 42,
         timestamp: 1710000000000,
         exceeded_threshold: false,
     };
@@ -187,16 +187,16 @@ fn z_report_metrics_for_ci() {
     let max = *times.last().unwrap_or(&0);
 
     // Output structured lines for CI to parse
-    // Format: METRIC:<name>=<value>
+    // Format: METRIC:<name>=<value>  (all latencies in microseconds)
     println!();
     println!("METRIC:rss_mb={:.1}", rss_mb);
     println!("METRIC:vms_mb={:.1}", vms_mb);
     println!("METRIC:pid={}", metrics.pid);
     println!("METRIC:platform={}", metrics.platform);
     println!("METRIC:uptime_secs={:.2}", metrics.uptime_secs);
-    println!("METRIC:cmd_p50_ms={}", p50);
-    println!("METRIC:cmd_p95_ms={}", p95);
-    println!("METRIC:cmd_max_ms={}", max);
+    println!("METRIC:cmd_p50_us={}", p50);
+    println!("METRIC:cmd_p95_us={}", p95);
+    println!("METRIC:cmd_max_us={}", max);
     println!("METRIC:rss_limit_mb=80");
-    println!("METRIC:cmd_p95_limit_ms=100");
+    println!("METRIC:cmd_p95_limit_us=100000");
 }

@@ -17,31 +17,32 @@ pub struct ProcessMetrics {
 }
 
 /// Tracks elapsed time of a named operation and logs it.
-/// Returns `(result, elapsed_ms)`.
+/// Returns `(result, elapsed_us)` — elapsed time in **microseconds** for
+/// sub-millisecond accuracy on fast local commands.
 pub fn trace_command<F, T>(name: &str, f: F) -> (T, u64)
 where
     F: FnOnce() -> T,
 {
     let start = Instant::now();
     let result = f();
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let elapsed_us = start.elapsed().as_micros() as u64;
 
-    let threshold_ms = if name.starts_with("remote_") || name.starts_with("ssh_") {
-        2000
+    let threshold_us = if name.starts_with("remote_") || name.starts_with("ssh_") {
+        2_000_000 // 2s
     } else {
-        100
+        100_000 // 100ms
     };
 
-    if elapsed_ms > threshold_ms {
+    if elapsed_us > threshold_us {
         crate::logging::log_info(&format!(
-            "[perf] SLOW {} completed in {}ms (threshold: {}ms)",
-            name, elapsed_ms, threshold_ms
+            "[perf] SLOW {} completed in {}us (threshold: {}us)",
+            name, elapsed_us, threshold_us
         ));
     } else {
-        crate::logging::log_info(&format!("[perf] {} completed in {}ms", name, elapsed_ms));
+        crate::logging::log_info(&format!("[perf] {} completed in {}us", name, elapsed_us));
     }
 
-    (result, elapsed_ms)
+    (result, elapsed_us)
 }
 
 /// Single perf sample emitted to the frontend via events or returned directly.
@@ -50,8 +51,8 @@ where
 pub struct PerfSample {
     /// The command or operation name
     pub name: String,
-    /// Elapsed time in milliseconds
-    pub elapsed_ms: u64,
+    /// Elapsed time in microseconds
+    pub elapsed_us: u64,
     /// Timestamp (Unix millis) when the sample was taken
     pub timestamp: u64,
     /// Whether the command exceeded its latency threshold
@@ -178,8 +179,8 @@ mod tests {
     fn test_trace_command_returns_result_and_timing() {
         let (result, elapsed) = trace_command("test_noop", || 42);
         assert_eq!(result, 42);
-        // Should complete in well under 100ms
-        assert!(elapsed < 100, "noop took {}ms", elapsed);
+        // Should complete in well under 100ms (100_000us)
+        assert!(elapsed < 100_000, "noop took {}us", elapsed);
     }
 
     #[test]
@@ -215,21 +216,21 @@ static PERF_REGISTRY: LazyLock<Arc<Mutex<VecDeque<PerfSample>>>> =
 
 /// Record a timing sample into the global registry.
 /// When the registry is full, the oldest sample is evicted.
-pub fn record_timing(name: &str, elapsed_ms: u64) {
+pub fn record_timing(name: &str, elapsed_us: u64) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let threshold = if name.starts_with("remote_") {
-        2000
+    let threshold_us = if name.starts_with("remote_") {
+        2_000_000
     } else {
-        100
+        100_000
     };
     let sample = PerfSample {
         name: name.to_string(),
-        elapsed_ms,
+        elapsed_us,
         timestamp: ts,
-        exceeded_threshold: elapsed_ms > threshold,
+        exceeded_threshold: elapsed_us > threshold_us,
     };
     if let Ok(mut reg) = PERF_REGISTRY.lock() {
         if reg.len() >= MAX_PERF_SAMPLES {
@@ -257,7 +258,7 @@ pub fn get_perf_report() -> Result<Value, String> {
         by_name
             .entry(s.name.clone())
             .or_default()
-            .push(s.elapsed_ms);
+            .push(s.elapsed_us);
     }
 
     let mut report = serde_json::Map::new();
@@ -276,10 +277,10 @@ pub fn get_perf_report() -> Result<Value, String> {
             name,
             json!({
                 "count": count,
-                "p50_ms": p50,
-                "p95_ms": p95,
-                "max_ms": max,
-                "avg_ms": if count > 0 { sum / count as u64 } else { 0 },
+                "p50_us": p50,
+                "p95_us": p95,
+                "max_us": max,
+                "avg_us": if count > 0 { sum / count as u64 } else { 0 },
             }),
         );
     }
