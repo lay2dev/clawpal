@@ -372,3 +372,88 @@ pub fn check_openclaw_update() -> Result<OpenclawUpdateCheck, String> {
         check_openclaw_update_cached(&paths, true)
     })
 }
+
+// --- Extracted from mod.rs ---
+
+pub(crate) fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    skip_dirs: &HashSet<&str>,
+    total: &mut u64,
+) -> Result<(), String> {
+    let entries =
+        fs::read_dir(src).map_err(|e| format!("Failed to read dir {}: {e}", src.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        // Skip the config file (already copied separately) and skip dirs
+        if name_str == "openclaw.json" {
+            continue;
+        }
+
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let dest = dst.join(&name);
+
+        if file_type.is_dir() {
+            if skip_dirs.contains(name_str.as_ref()) {
+                continue;
+            }
+            fs::create_dir_all(&dest)
+                .map_err(|e| format!("Failed to create dir {}: {e}", dest.display()))?;
+            copy_dir_recursive(&entry.path(), &dest, skip_dirs, total)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &dest)
+                .map_err(|e| format!("Failed to copy {}: {e}", name_str))?;
+            *total += fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                total += dir_size(&entry.path());
+            } else {
+                total += fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
+pub(crate) fn restore_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    skip_dirs: &HashSet<&str>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(src).map_err(|e| format!("Failed to read backup dir: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if name_str == "openclaw.json" {
+            continue; // Already restored separately
+        }
+
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let dest = dst.join(&name);
+
+        if file_type.is_dir() {
+            if skip_dirs.contains(name_str.as_ref()) {
+                continue;
+            }
+            fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+            restore_dir_recursive(&entry.path(), &dest, skip_dirs)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &dest)
+                .map_err(|e| format!("Failed to restore {}: {e}", name_str))?;
+        }
+    }
+    Ok(())
+}

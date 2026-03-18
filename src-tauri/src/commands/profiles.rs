@@ -1886,3 +1886,592 @@ pub async fn remote_refresh_model_catalog(
         Err("Failed to load remote model catalog from openclaw CLI".into())
     })
 }
+
+// --- Extracted from mod.rs ---
+
+pub(crate) fn model_profiles_path(paths: &crate::models::OpenClawPaths) -> std::path::PathBuf {
+    paths.clawpal_dir.join("model-profiles.json")
+}
+
+pub(crate) fn profile_to_model_value(profile: &ModelProfile) -> String {
+    let provider = profile.provider.trim();
+    let model = profile.model.trim();
+    if provider.is_empty() {
+        return model.to_string();
+    }
+    if model.is_empty() {
+        return format!("{provider}/");
+    }
+    let normalized_prefix = format!("{}/", provider.to_lowercase());
+    if model.to_lowercase().starts_with(&normalized_prefix) {
+        model.to_string()
+    } else {
+        format!("{provider}/{model}")
+    }
+}
+
+pub(crate) fn load_model_profiles(paths: &crate::models::OpenClawPaths) -> Vec<ModelProfile> {
+    let path = model_profiles_path(paths);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"profiles":[]}"#.to_string());
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Storage {
+        Wrapped {
+            #[serde(default)]
+            profiles: Vec<ModelProfile>,
+        },
+        Plain(Vec<ModelProfile>),
+    }
+    match serde_json::from_str::<Storage>(&text).unwrap_or(Storage::Wrapped {
+        profiles: Vec::new(),
+    }) {
+        Storage::Wrapped { profiles } => profiles,
+        Storage::Plain(profiles) => profiles,
+    }
+}
+
+pub(crate) fn save_model_profiles(
+    paths: &crate::models::OpenClawPaths,
+    profiles: &[ModelProfile],
+) -> Result<(), String> {
+    let path = model_profiles_path(paths);
+    #[derive(serde::Serialize)]
+    struct Storage<'a> {
+        profiles: &'a [ModelProfile],
+        #[serde(rename = "version")]
+        version: u8,
+    }
+    let payload = Storage {
+        profiles,
+        version: 1,
+    };
+    let text = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    crate::config_io::write_text(&path, &text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+pub(crate) fn sync_profile_auth_to_main_agent_with_source(
+    paths: &crate::models::OpenClawPaths,
+    profile: &ModelProfile,
+    source_base_dir: &Path,
+) -> Result<(), String> {
+    let resolved_key = resolve_profile_api_key(profile, source_base_dir);
+    let api_key = resolved_key.trim();
+    if api_key.is_empty() {
+        return Ok(());
+    }
+
+    let provider = profile.provider.trim();
+    if provider.is_empty() {
+        return Ok(());
+    }
+    let auth_ref = profile.auth_ref.trim().to_string();
+    let auth_ref = if auth_ref.is_empty() {
+        format!("{provider}:default")
+    } else {
+        auth_ref
+    };
+
+    let auth_file = paths
+        .base_dir
+        .join("agents")
+        .join("main")
+        .join("agent")
+        .join("auth-profiles.json");
+    if let Some(parent) = auth_file.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut root = fs::read_to_string(&auth_file)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({ "version": 1 }));
+
+    if !root.is_object() {
+        root = serde_json::json!({ "version": 1 });
+    }
+    let Some(root_obj) = root.as_object_mut() else {
+        return Err("failed to prepare auth profile root object".to_string());
+    };
+
+    if !root_obj.contains_key("version") {
+        root_obj.insert("version".into(), Value::from(1_u64));
+    }
+
+    let profiles_val = root_obj
+        .entry("profiles".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !profiles_val.is_object() {
+        *profiles_val = Value::Object(Map::new());
+    }
+    if let Some(profiles_map) = profiles_val.as_object_mut() {
+        profiles_map.insert(
+            auth_ref.clone(),
+            serde_json::json!({
+                "type": "api_key",
+                "provider": provider,
+                "key": api_key,
+            }),
+        );
+    }
+
+    let last_good_val = root_obj
+        .entry("lastGood".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !last_good_val.is_object() {
+        *last_good_val = Value::Object(Map::new());
+    }
+    if let Some(last_good_map) = last_good_val.as_object_mut() {
+        last_good_map.insert(provider.to_string(), Value::String(auth_ref));
+    }
+
+    let serialized = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    write_text(&auth_file, &serialized)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&auth_file, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+pub(crate) fn maybe_sync_main_auth_for_model_value(
+    paths: &crate::models::OpenClawPaths,
+    model_value: Option<String>,
+) -> Result<(), String> {
+    let source_base_dir = paths.base_dir.clone();
+    maybe_sync_main_auth_for_model_value_with_source(paths, model_value, &source_base_dir)
+}
+
+pub(crate) fn maybe_sync_main_auth_for_model_value_with_source(
+    paths: &crate::models::OpenClawPaths,
+    model_value: Option<String>,
+    source_base_dir: &Path,
+) -> Result<(), String> {
+    let Some(model_value) = model_value else {
+        return Ok(());
+    };
+    let normalized = model_value.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Ok(());
+    }
+    let profiles = load_model_profiles(paths);
+    for profile in &profiles {
+        let profile_model = profile_to_model_value(profile);
+        if profile_model.trim().to_lowercase() == normalized {
+            return sync_profile_auth_to_main_agent_with_source(paths, profile, source_base_dir);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn sync_main_auth_for_config(
+    paths: &crate::models::OpenClawPaths,
+    cfg: &Value,
+) -> Result<(), String> {
+    let source_base_dir = paths.base_dir.clone();
+    let mut seen = HashSet::new();
+    for model in collect_main_auth_model_candidates(cfg) {
+        let normalized = model.trim().to_lowercase();
+        if normalized.is_empty() || !seen.insert(normalized) {
+            continue;
+        }
+        maybe_sync_main_auth_for_model_value_with_source(paths, Some(model), &source_base_dir)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn sync_main_auth_for_active_config(
+    paths: &crate::models::OpenClawPaths,
+) -> Result<(), String> {
+    let cfg = read_openclaw_config(paths)?;
+    sync_main_auth_for_config(paths, &cfg)
+}
+
+#[cfg(test)]
+mod model_profile_upsert_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub(crate) fn mk_profile(
+        id: &str,
+        provider: &str,
+        model: &str,
+        auth_ref: &str,
+        api_key: Option<&str>,
+    ) -> ModelProfile {
+        ModelProfile {
+            id: id.to_string(),
+            name: format!("{provider}/{model}"),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            auth_ref: auth_ref.to_string(),
+            api_key: api_key.map(str::to_string),
+            base_url: None,
+            description: None,
+            enabled: true,
+        }
+    }
+
+    pub(crate) fn mk_paths(
+        base_dir: PathBuf,
+        clawpal_dir: PathBuf,
+    ) -> crate::models::OpenClawPaths {
+        crate::models::OpenClawPaths {
+            openclaw_dir: base_dir.clone(),
+            config_path: base_dir.join("openclaw.json"),
+            base_dir,
+            history_dir: clawpal_dir.join("history"),
+            metadata_path: clawpal_dir.join("metadata.json"),
+            clawpal_dir,
+        }
+    }
+
+    #[test]
+    pub(crate) fn preserve_existing_auth_fields_on_edit_when_payload_is_blank() {
+        let profiles = vec![mk_profile(
+            "p-1",
+            "kimi-coding",
+            "k2p5",
+            "kimi-coding:default",
+            Some("sk-old"),
+        )];
+        let incoming = mk_profile("p-1", "kimi-coding", "k2.5", "", None);
+        let content = serde_json::json!({ "profiles": profiles, "version": 1 }).to_string();
+        let (persisted, next_json) =
+            clawpal_core::profile::upsert_profile_in_storage_json(&content, incoming)
+                .expect("upsert");
+        assert_eq!(persisted.api_key.as_deref(), Some("sk-old"));
+        assert_eq!(persisted.auth_ref, "kimi-coding:default");
+        let next_profiles = clawpal_core::profile::list_profiles_from_storage_json(&next_json);
+        assert_eq!(next_profiles[0].model, "k2.5");
+    }
+
+    #[test]
+    pub(crate) fn reuse_provider_credentials_for_new_profile_when_missing() {
+        let donor = mk_profile(
+            "p-donor",
+            "openrouter",
+            "model-a",
+            "openrouter:default",
+            Some("sk-donor"),
+        );
+        let incoming = mk_profile("", "openrouter", "model-b", "", None);
+        let content = serde_json::json!({ "profiles": [donor], "version": 1 }).to_string();
+        let (saved, _) = clawpal_core::profile::upsert_profile_in_storage_json(&content, incoming)
+            .expect("upsert");
+        assert_eq!(saved.auth_ref, "openrouter:default");
+        assert_eq!(saved.api_key.as_deref(), Some("sk-donor"));
+    }
+
+    #[test]
+    pub(crate) fn sync_auth_can_copy_key_from_auth_ref_source_store() {
+        let tmp_root =
+            std::env::temp_dir().join(format!("clawpal-auth-sync-{}", uuid::Uuid::new_v4()));
+        let source_base = tmp_root.join("source-openclaw");
+        let target_base = tmp_root.join("target-openclaw");
+        let clawpal_dir = tmp_root.join("clawpal");
+        let source_auth_file = source_base
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        let target_auth_file = target_base
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+
+        fs::create_dir_all(source_auth_file.parent().unwrap()).expect("create source auth dir");
+        let source_payload = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "kimi-coding:default": {
+                    "type": "api_key",
+                    "provider": "kimi-coding",
+                    "key": "sk-from-source-store"
+                }
+            }
+        });
+        write_text(
+            &source_auth_file,
+            &serde_json::to_string_pretty(&source_payload).expect("serialize source payload"),
+        )
+        .expect("write source auth");
+
+        let paths = mk_paths(target_base, clawpal_dir);
+        let profile = mk_profile("p1", "kimi-coding", "k2p5", "kimi-coding:default", None);
+        sync_profile_auth_to_main_agent_with_source(&paths, &profile, &source_base)
+            .expect("sync auth");
+
+        let target_text = fs::read_to_string(target_auth_file).expect("read target auth");
+        let target_json: Value = serde_json::from_str(&target_text).expect("parse target auth");
+        let key = target_json
+            .pointer("/profiles/kimi-coding:default/key")
+            .and_then(Value::as_str);
+        assert_eq!(key, Some("sk-from-source-store"));
+
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    pub(crate) fn resolve_key_from_auth_store_json_supports_wrapped_and_legacy_formats() {
+        let wrapped = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "kimi-coding:default": {
+                    "type": "api_key",
+                    "provider": "kimi-coding",
+                    "key": "sk-wrapped"
+                }
+            }
+        });
+        assert_eq!(
+            resolve_key_from_auth_store_json(&wrapped, "kimi-coding:default"),
+            Some("sk-wrapped".to_string())
+        );
+
+        let legacy = serde_json::json!({
+            "kimi-coding": {
+                "type": "api_key",
+                "provider": "kimi-coding",
+                "key": "sk-legacy"
+            }
+        });
+        assert_eq!(
+            resolve_key_from_auth_store_json(&legacy, "kimi-coding:default"),
+            Some("sk-legacy".to_string())
+        );
+    }
+
+    #[test]
+    pub(crate) fn resolve_key_from_local_auth_store_dir_reads_auth_json_when_profiles_file_missing()
+    {
+        let tmp_root =
+            std::env::temp_dir().join(format!("clawpal-auth-store-test-{}", uuid::Uuid::new_v4()));
+        let agent_dir = tmp_root.join("agents").join("main").join("agent");
+        fs::create_dir_all(&agent_dir).expect("create agent dir");
+        let legacy_auth = serde_json::json!({
+            "openai": {
+                "type": "api_key",
+                "provider": "openai",
+                "key": "sk-openai-legacy"
+            }
+        });
+        write_text(
+            &agent_dir.join("auth.json"),
+            &serde_json::to_string_pretty(&legacy_auth).expect("serialize legacy auth"),
+        )
+        .expect("write auth.json");
+
+        let resolved = resolve_credential_from_local_auth_store_dir(&agent_dir, "openai:default");
+        assert_eq!(
+            resolved.map(|credential| credential.secret),
+            Some("sk-openai-legacy".to_string())
+        );
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    pub(crate) fn resolve_profile_api_key_prefers_auth_ref_store_over_direct_api_key() {
+        let tmp_root =
+            std::env::temp_dir().join(format!("clawpal-auth-priority-{}", uuid::Uuid::new_v4()));
+        let base_dir = tmp_root.join("openclaw");
+        let auth_file = base_dir
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        fs::create_dir_all(auth_file.parent().expect("auth parent")).expect("create auth dir");
+        let payload = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": "sk-anthropic-from-store"
+                }
+            }
+        });
+        write_text(
+            &auth_file,
+            &serde_json::to_string_pretty(&payload).expect("serialize payload"),
+        )
+        .expect("write auth payload");
+
+        let profile = mk_profile(
+            "p-anthropic",
+            "anthropic",
+            "claude-opus-4-5",
+            "anthropic:default",
+            Some("sk-stale-direct"),
+        );
+        let resolved = resolve_profile_api_key(&profile, &base_dir);
+        assert_eq!(resolved, "sk-anthropic-from-store");
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    pub(crate) fn collect_provider_api_keys_prefers_higher_priority_source_for_same_provider() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "clawpal-provider-key-priority-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let base_dir = tmp_root.join("openclaw");
+        let auth_file = base_dir
+            .join("agents")
+            .join("main")
+            .join("agent")
+            .join("auth-profiles.json");
+        fs::create_dir_all(auth_file.parent().expect("auth parent")).expect("create auth dir");
+        let payload = serde_json::json!({
+            "version": 1,
+            "profiles": {
+                "anthropic:default": {
+                    "type": "token",
+                    "provider": "anthropic",
+                    "token": "sk-anthropic-good"
+                }
+            }
+        });
+        write_text(
+            &auth_file,
+            &serde_json::to_string_pretty(&payload).expect("serialize payload"),
+        )
+        .expect("write auth payload");
+        let stale = mk_profile(
+            "anthropic-stale",
+            "anthropic",
+            "claude-opus-4-5",
+            "",
+            Some("sk-anthropic-stale"),
+        );
+        let preferred = mk_profile(
+            "anthropic-ref",
+            "anthropic",
+            "claude-opus-4-6",
+            "anthropic:default",
+            None,
+        );
+        let creds = collect_provider_credentials_from_profiles(
+            &[stale.clone(), preferred.clone()],
+            &base_dir,
+        );
+        let anthropic = creds
+            .get("anthropic")
+            .expect("anthropic credential should exist");
+        assert_eq!(anthropic.secret, "sk-anthropic-good");
+        assert_eq!(anthropic.kind, InternalAuthKind::Authorization);
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    pub(crate) fn collect_main_auth_candidates_prefers_defaults_and_main_agent() {
+        let cfg = serde_json::json!({
+            "agents": {
+                "defaults": {
+                    "model": { "primary": "kimi-coding/k2p5" }
+                },
+                "list": [
+                    { "id": "main", "model": "anthropic/claude-opus-4-6" },
+                    { "id": "worker", "model": "openai/gpt-4.1" }
+                ]
+            }
+        });
+        let models = collect_main_auth_model_candidates(&cfg);
+        assert_eq!(
+            models,
+            vec![
+                "kimi-coding/k2p5".to_string(),
+                "anthropic/claude-opus-4-6".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    pub(crate) fn infer_resolved_credential_kind_detects_oauth_ref() {
+        let profile = mk_profile(
+            "p-oauth",
+            "openai-codex",
+            "gpt-5",
+            "openai-codex:default",
+            None,
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::OAuth
+        );
+    }
+
+    #[test]
+    pub(crate) fn infer_resolved_credential_kind_detects_env_ref() {
+        let profile = mk_profile("p-env", "openai", "gpt-4o", "OPENAI_API_KEY", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
+
+    #[test]
+    pub(crate) fn infer_resolved_credential_kind_detects_manual_and_unset() {
+        let manual = mk_profile(
+            "p-manual",
+            "openrouter",
+            "deepseek-v3",
+            "",
+            Some("sk-manual"),
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, Some(ResolvedCredentialSource::ManualApiKey)),
+            ResolvedCredentialKind::Manual
+        );
+        assert_eq!(
+            infer_resolved_credential_kind(&manual, None),
+            ResolvedCredentialKind::Manual
+        );
+
+        let unset = mk_profile("p-unset", "openrouter", "deepseek-v3", "", None);
+        assert_eq!(
+            infer_resolved_credential_kind(&unset, None),
+            ResolvedCredentialKind::Unset
+        );
+    }
+
+    #[test]
+    pub(crate) fn infer_resolved_credential_kind_does_not_treat_plain_openai_as_oauth() {
+        let profile = mk_profile("p-openai", "openai", "gpt-4o", "openai:default", None);
+        assert_eq!(
+            infer_resolved_credential_kind(
+                &profile,
+                Some(ResolvedCredentialSource::ExplicitAuthRef)
+            ),
+            ResolvedCredentialKind::EnvRef
+        );
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn resolve_full_api_key(profile_id: String) -> Result<String, String> {
+    let paths = resolve_paths();
+    let profiles = load_model_profiles(&paths);
+    let profile = profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| "Profile not found".to_string())?;
+    let key = resolve_profile_api_key(profile, &paths.base_dir);
+    if key.is_empty() {
+        return Err("No API key configured for this profile".to_string());
+    }
+    Ok(key)
+}

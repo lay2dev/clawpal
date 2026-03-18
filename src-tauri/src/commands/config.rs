@@ -328,3 +328,92 @@ pub fn rollback(snapshot_id: String) -> Result<ApplyResult, String> {
         })
     })
 }
+
+// --- Extracted from mod.rs ---
+
+pub(crate) fn write_config_with_snapshot(
+    paths: &crate::models::OpenClawPaths,
+    current_text: &str,
+    next: &Value,
+    source: &str,
+) -> Result<(), String> {
+    let _ = add_snapshot(
+        &paths.history_dir,
+        &paths.metadata_path,
+        Some(source.to_string()),
+        source,
+        true,
+        current_text,
+        None,
+    )?;
+    write_json(&paths.config_path, next)
+}
+
+pub(crate) fn set_nested_value(
+    root: &mut Value,
+    path: &str,
+    value: Option<Value>,
+) -> Result<(), String> {
+    let path = path.trim().trim_matches('.');
+    if path.is_empty() {
+        return Err("invalid path".into());
+    }
+    let mut cur = root;
+    let mut parts = path.split('.').peekable();
+    while let Some(part) = parts.next() {
+        let is_last = parts.peek().is_none();
+        let obj = cur
+            .as_object_mut()
+            .ok_or_else(|| "path must point to object".to_string())?;
+        if is_last {
+            if let Some(v) = value {
+                obj.insert(part.to_string(), v);
+            } else {
+                obj.remove(part);
+            }
+            return Ok(());
+        }
+        let child = obj
+            .entry(part.to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !child.is_object() {
+            *child = Value::Object(Default::default());
+        }
+        cur = child;
+    }
+    unreachable!("path should have at least one segment");
+}
+
+pub(crate) fn set_agent_model_value(
+    root: &mut Value,
+    agent_id: &str,
+    model: Option<String>,
+) -> Result<(), String> {
+    if let Some(agents) = root.pointer_mut("/agents").and_then(Value::as_object_mut) {
+        if let Some(list) = agents.get_mut("list").and_then(Value::as_array_mut) {
+            for agent in list {
+                if agent.get("id").and_then(Value::as_str) == Some(agent_id) {
+                    if let Some(agent_obj) = agent.as_object_mut() {
+                        match model {
+                            Some(v) => {
+                                // If existing model is an object, update "primary" inside it
+                                if let Some(existing) = agent_obj.get_mut("model") {
+                                    if let Some(model_obj) = existing.as_object_mut() {
+                                        model_obj.insert("primary".into(), Value::String(v));
+                                        return Ok(());
+                                    }
+                                }
+                                agent_obj.insert("model".into(), Value::String(v));
+                            }
+                            None => {
+                                agent_obj.remove("model");
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(format!("agent not found: {agent_id}"))
+}

@@ -305,3 +305,171 @@ pub async fn chat_via_openclaw(
         .map_err(|e| format!("Task join failed: {}", e))?
     })
 }
+
+// --- Extracted from mod.rs ---
+
+/// Check if an agent has active sessions by examining sessions/sessions.json.
+/// Returns true if the file exists and is larger than 2 bytes (i.e. not just "{}").
+pub(crate) fn agent_has_sessions(base_dir: &std::path::Path, agent_id: &str) -> bool {
+    let sessions_file = base_dir
+        .join("agents")
+        .join(agent_id)
+        .join("sessions")
+        .join("sessions.json");
+    match std::fs::metadata(&sessions_file) {
+        Ok(m) => m.len() > 2, // "{}" is 2 bytes = empty
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn agent_entries_from_cli_json(json: &Value) -> Result<&Vec<Value>, String> {
+    json.as_array()
+        .or_else(|| json.get("agents").and_then(Value::as_array))
+        .or_else(|| json.get("data").and_then(Value::as_array))
+        .or_else(|| json.get("items").and_then(Value::as_array))
+        .or_else(|| json.get("result").and_then(Value::as_array))
+        .or_else(|| {
+            json.get("data")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .or_else(|| {
+            json.get("result")
+                .and_then(|value| value.get("agents"))
+                .and_then(Value::as_array)
+        })
+        .ok_or_else(|| {
+            let shape = match json {
+                Value::Array(array) => format!("top-level array(len={})", array.len()),
+                Value::Object(map) => {
+                    let mut keys = map.keys().cloned().collect::<Vec<_>>();
+                    keys.sort();
+                    format!("top-level object keys=[{}]", keys.join(", "))
+                }
+                Value::Null => "top-level null".to_string(),
+                Value::Bool(_) => "top-level bool".to_string(),
+                Value::Number(_) => "top-level number".to_string(),
+                Value::String(_) => "top-level string".to_string(),
+            };
+            format!(
+                "agents list output is not an array ({shape}; raw={})",
+                truncated_json_debug(json, 240)
+            )
+        })
+}
+
+/// Parse the JSON output of `openclaw agents list --json` into Vec<AgentOverview>.
+/// `online_set`: if Some, use it to determine online status; if None, check local sessions.
+pub(crate) fn parse_agents_cli_output(
+    json: &Value,
+    online_set: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<AgentOverview>, String> {
+    let arr = agent_entries_from_cli_json(json)?;
+    let paths = if online_set.is_none() {
+        Some(resolve_paths())
+    } else {
+        None
+    };
+    let mut agents = Vec::new();
+    for entry in arr {
+        let id = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("main")
+            .to_string();
+        let name = entry
+            .get("identityName")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        let emoji = entry
+            .get("identityEmoji")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        let model = entry
+            .get("model")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        let workspace = entry
+            .get("workspace")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        let online = match online_set {
+            Some(set) => set.contains(&id),
+            None => agent_has_sessions(paths.as_ref().unwrap().base_dir.as_path(), &id),
+        };
+        agents.push(AgentOverview {
+            id,
+            name,
+            emoji,
+            model,
+            channels: Vec::new(),
+            online,
+            workspace,
+        });
+    }
+    Ok(agents)
+}
+
+#[cfg(test)]
+mod parse_agents_cli_output_tests {
+    use super::{count_agent_entries_from_cli_json, parse_agents_cli_output};
+    use serde_json::json;
+
+    #[test]
+    pub(crate) fn keeps_empty_agent_lists_empty() {
+        let parsed = parse_agents_cli_output(&json!([]), None).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    pub(crate) fn counts_real_agent_entries_without_implicit_main() {
+        let count = count_agent_entries_from_cli_json(&json!([])).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    pub(crate) fn accepts_wrapped_agent_arrays_from_multiple_cli_shapes() {
+        for payload in [
+            json!({ "agents": [{ "id": "main" }] }),
+            json!({ "data": [{ "id": "main" }] }),
+            json!({ "items": [{ "id": "main" }] }),
+            json!({ "result": [{ "id": "main" }] }),
+            json!({ "data": { "agents": [{ "id": "main" }] } }),
+            json!({ "result": { "agents": [{ "id": "main" }] } }),
+        ] {
+            let count = count_agent_entries_from_cli_json(&payload).unwrap();
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    pub(crate) fn invalid_agent_shapes_include_top_level_keys_in_error() {
+        let err = count_agent_entries_from_cli_json(&json!({
+            "status": "ok",
+            "payload": { "entries": [] }
+        }))
+        .unwrap_err();
+        assert!(err.contains("top-level object keys=[payload, status]"));
+        assert!(err.contains("\"payload\":{\"entries\":[]}"));
+    }
+}
+
+pub(crate) fn collect_agent_ids(cfg: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(agents) = cfg
+        .get("agents")
+        .and_then(|v| v.get("list"))
+        .and_then(Value::as_array)
+    {
+        for agent in agents {
+            if let Some(id) = agent.get("id").and_then(Value::as_str) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    // Implicit "main" agent when no agents.list
+    if ids.is_empty() {
+        ids.push("main".into());
+    }
+    ids
+}
