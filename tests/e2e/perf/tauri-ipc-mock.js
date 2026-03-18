@@ -19,9 +19,15 @@
       if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return null;
       return FIXTURES.runtimeSnapshot;
     },
-    get_status_extra: () => FIXTURES.statusExtra,
+    get_status_extra: () => {
+      if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return {};
+      return FIXTURES.statusExtra;
+    },
     list_model_profiles: () => FIXTURES.modelProfiles || [],
-    get_status_light: () => FIXTURES.runtimeSnapshot?.status || { healthy: true, activeAgents: 2 },
+    get_status_light: () => {
+      if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return { healthy: null, activeAgents: 0 };
+      return FIXTURES.runtimeSnapshot?.status || { healthy: true, activeAgents: 2 };
+    },
     queued_commands_count: () => 0,
     check_openclaw_update: () => ({ upgradeAvailable: false, latestVersion: null, installedVersion: FIXTURES.statusExtra?.openclawVersion }),
     log_app_event: () => true,
@@ -63,7 +69,10 @@
     precheck_auth: () => ({ ok: true }),
     connect_local_instance: () => null,
     ssh_status: () => ({ connected: false }),
-    list_agents_overview: () => FIXTURES.runtimeSnapshot?.agents || [],
+    list_agents_overview: () => {
+      if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return [];
+      return FIXTURES.runtimeSnapshot?.agents || [];
+    },
     record_install_experience: () => null,
     "plugin:event|listen": () => 0,
     "plugin:event|unlisten": () => null,
