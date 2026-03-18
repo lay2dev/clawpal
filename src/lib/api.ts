@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RemoteDoctorRepairResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
 
 export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
@@ -20,6 +20,10 @@ export const api = {
     invoke("capture_frontend_error", { message, stack, level }),
   setSshTransferSpeedUiPreference: (showUi: boolean): Promise<AppPreferences> =>
     invoke("set_ssh_transfer_speed_ui_preference", { showUi }),
+  setRemoteDoctorGatewayUrlPreference: (gatewayUrl: string | null): Promise<AppPreferences> =>
+    invoke("set_remote_doctor_gateway_url_preference", { gatewayUrl }),
+  setRemoteDoctorGatewayAuthTokenPreference: (authToken: string | null): Promise<AppPreferences> =>
+    invoke("set_remote_doctor_gateway_auth_token_preference", { authToken }),
   explainOperationError: (
     instanceId: string,
     operation: string,
@@ -187,6 +191,14 @@ export const api = {
     invoke("repair_doctor_assistant", {
       tempProviderProfileId: tempProviderProfileId ?? null,
       currentDiagnosis: currentDiagnosis ?? null,
+    }),
+  startRemoteDoctorRepair: (
+    instanceId: string,
+    targetLocation: "local_openclaw" | "remote_openclaw",
+  ): Promise<RemoteDoctorRepairResult> =>
+    invoke("start_remote_doctor_repair", {
+      instanceId,
+      targetLocation,
     }),
   manageRescueBot: (action: RescueBotAction, profile?: string, rescuePort?: number): Promise<RescueBotManageResult> =>
     invoke("manage_rescue_bot", { action, profile: profile ?? null, rescuePort: rescuePort ?? null }),

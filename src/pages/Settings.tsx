@@ -256,6 +256,8 @@ export function Settings({
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
+  const [remoteDoctorGatewayUrl, setRemoteDoctorGatewayUrl] = useState("");
+  const [remoteDoctorGatewayAuthToken, setRemoteDoctorGatewayAuthToken] = useState("");
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -359,6 +361,8 @@ export function Settings({
     ua.getAppPreferences()
       .then((prefs) => {
         setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
+        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
+        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
@@ -652,6 +656,32 @@ export function Settings({
       });
   }, [t, ua]);
 
+  const handleRemoteDoctorGatewayUrlSave = useCallback(() => {
+    const nextValue = remoteDoctorGatewayUrl.trim();
+    ua.setRemoteDoctorGatewayUrlPreference(nextValue || null)
+      .then((prefs) => {
+        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
+        toast.success(t("settings.remoteDoctorGatewayUrlSaved"));
+      })
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.remoteDoctorGatewayUrlSaveFailed", { error: errorText }));
+      });
+  }, [remoteDoctorGatewayUrl, t, ua]);
+
+  const handleRemoteDoctorGatewayAuthTokenSave = useCallback(() => {
+    const nextValue = remoteDoctorGatewayAuthToken.trim();
+    ua.setRemoteDoctorGatewayAuthTokenPreference(nextValue || null)
+      .then((prefs) => {
+        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
+        toast.success(t("settings.remoteDoctorGatewayAuthTokenSaved"));
+      })
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.remoteDoctorGatewayAuthTokenSaveFailed", { error: errorText }));
+      });
+  }, [remoteDoctorGatewayAuthToken, t, ua]);
+
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
@@ -882,7 +912,13 @@ export function Settings({
             {showPreferences && (
               <SettingsAlphaFeaturesCard
                 showSshTransferSpeedUi={showSshTransferSpeedUi}
+                remoteDoctorGatewayUrl={remoteDoctorGatewayUrl}
+                remoteDoctorGatewayAuthToken={remoteDoctorGatewayAuthToken}
                 onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
+                onRemoteDoctorGatewayUrlChange={setRemoteDoctorGatewayUrl}
+                onRemoteDoctorGatewayUrlSave={handleRemoteDoctorGatewayUrlSave}
+                onRemoteDoctorGatewayAuthTokenChange={setRemoteDoctorGatewayAuthToken}
+                onRemoteDoctorGatewayAuthTokenSave={handleRemoteDoctorGatewayAuthTokenSave}
               />
             )}
 

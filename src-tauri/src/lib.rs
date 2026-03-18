@@ -55,7 +55,9 @@ use crate::commands::{
     restart_gateway, restore_from_backup, rollback, run_doctor_command, run_openclaw_upgrade,
     set_active_clawpal_data_dir, set_active_openclaw_home, set_agent_model,
     set_bug_report_settings, set_global_model, set_session_model_override,
-    set_ssh_transfer_speed_ui_preference, setup_agent_identity, sftp_list_dir, sftp_read_file,
+    set_remote_doctor_gateway_auth_token_preference, set_remote_doctor_gateway_url_preference,
+    set_ssh_transfer_speed_ui_preference,
+    setup_agent_identity, sftp_list_dir, sftp_read_file,
     sftp_remove_file, sftp_write_file, ssh_connect, ssh_connect_with_passphrase, ssh_disconnect,
     ssh_exec, ssh_status, start_watchdog, stop_watchdog, test_model_profile, trigger_cron_job,
     uninstall_watchdog, upsert_model_profile, upsert_ssh_host,
@@ -66,6 +68,7 @@ use crate::install::commands::{
 };
 use crate::install::session_store::InstallSessionStore;
 use crate::node_client::NodeClient;
+use crate::remote_doctor::start_remote_doctor_repair;
 use crate::ssh::SshConnectionPool;
 
 pub mod access_discovery;
@@ -86,6 +89,7 @@ pub mod openclaw_doc_resolver;
 pub mod path_fix;
 pub mod prompt_templates;
 pub mod recipe;
+pub mod remote_doctor;
 pub mod ssh;
 
 pub fn run() {
@@ -181,6 +185,8 @@ pub fn run() {
             repair_primary_via_rescue,
             set_global_model,
             set_agent_model,
+            set_remote_doctor_gateway_auth_token_preference,
+            set_remote_doctor_gateway_url_preference,
             set_ssh_transfer_speed_ui_preference,
             list_bindings,
             list_ssh_hosts,
@@ -213,6 +219,7 @@ pub fn run() {
             remote_restart_gateway,
             remote_diagnose_doctor_assistant,
             remote_repair_doctor_assistant,
+            start_remote_doctor_repair,
             remote_get_rescue_bot_status,
             remote_manage_rescue_bot,
             remote_diagnose_primary_via_rescue,

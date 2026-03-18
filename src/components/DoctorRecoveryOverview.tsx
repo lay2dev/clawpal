@@ -24,6 +24,7 @@ interface DoctorRecoveryOverviewProps {
   repairResult: RescuePrimaryRepairResult | null;
   repairError: string | null;
   onRepairAll: () => void;
+  onRemoteDoctorRepair?: () => void;
   onRepairIssue: (issueId: string) => void;
   showRepairActions?: boolean;
 }
@@ -94,6 +95,7 @@ export function DoctorRecoveryOverview({
   repairResult,
   repairError,
   onRepairAll,
+  onRemoteDoctorRepair,
   onRepairIssue,
   showRepairActions = true,
 }: DoctorRecoveryOverviewProps) {
@@ -185,14 +187,28 @@ export function DoctorRecoveryOverview({
         <CardContent className={cn("space-y-3", !showRepairActions && "space-y-2 pt-0")}>
           <div className={cn("flex flex-wrap items-center gap-2", !showRepairActions && "justify-between gap-3")}>
             {showRepairActions ? (
-              <Button
-                size="sm"
-                onClick={onRepairAll}
-                disabled={checkLoading || repairing || fixableCount === 0}
-              >
-                <WrenchIcon className="mr-1.5 size-3.5" />
-                {fixText}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  onClick={onRepairAll}
+                  disabled={checkLoading || repairing || fixableCount === 0}
+                >
+                  <WrenchIcon className="mr-1.5 size-3.5" />
+                  {t("doctor.localRepair", { defaultValue: "Local Repair" })}
+                </Button>
+                {onRemoteDoctorRepair ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={onRemoteDoctorRepair}
+                    disabled={checkLoading || repairing || fixableCount === 0}
+                  >
+                    <WrenchIcon className="mr-1.5 size-3.5" />
+                    {t("doctor.remoteDoctorRepair", { defaultValue: "Remote Doctor Repair" })}
+                  </Button>
+                ) : null}
+                <span className="text-xs text-muted-foreground">{fixText}</span>
+              </>
             ) : null}
             {!showRepairActions && affectedSections.length > 0 ? (
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

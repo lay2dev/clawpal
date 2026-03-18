@@ -759,6 +759,10 @@ export function useApi() {
         api.remoteRepairDoctorAssistant,
         "repairDoctorAssistant",
       ),
+      startRemoteDoctorRepair: () => api.startRemoteDoctorRepair(
+        instanceId,
+        isRemote ? "remote_openclaw" : "local_openclaw",
+      ),
       getRescueBotStatus: dispatchCached(
         "getRescueBotStatus",
         isRemote ? 8_000 : 5_000,
@@ -977,6 +981,14 @@ export function useApi() {
       ),
       setSshTransferSpeedUiPreference: withGlobalInvalidation(
         api.setSshTransferSpeedUiPreference,
+        ["getAppPreferences"],
+      ),
+      setRemoteDoctorGatewayUrlPreference: withGlobalInvalidation(
+        api.setRemoteDoctorGatewayUrlPreference,
+        ["getAppPreferences"],
+      ),
+      setRemoteDoctorGatewayAuthTokenPreference: withGlobalInvalidation(
+        api.setRemoteDoctorGatewayAuthTokenPreference,
         ["getAppPreferences"],
       ),
       ensureAccessProfile: api.ensureAccessProfile,

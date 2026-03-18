@@ -1,4 +1,8 @@
 [workspace]
-members = ["clawpal-core", "clawpal-cli", "src-tauri"]
+members = [
+    "clawpal-core",
+    "clawpal-cli",
+    "src-tauri",
+    "openclaw-gateway-client",
+]
 resolver = "2"
-

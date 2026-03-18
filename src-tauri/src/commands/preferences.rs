@@ -14,6 +14,10 @@ use crate::models::{resolve_paths, OpenClawPaths};
 pub struct AppPreferences {
     #[serde(default)]
     pub show_ssh_transfer_speed_ui: bool,
+    #[serde(default)]
+    pub remote_doctor_gateway_url: Option<String>,
+    #[serde(default)]
+    pub remote_doctor_gateway_auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -21,6 +25,10 @@ pub struct AppPreferences {
 struct StoredAppPreferences {
     #[serde(default)]
     show_ssh_transfer_speed_ui: bool,
+    #[serde(default)]
+    remote_doctor_gateway_url: Option<String>,
+    #[serde(default)]
+    remote_doctor_gateway_auth_token: Option<String>,
     #[serde(default)]
     show_clawpal_logs_ui: bool,
     #[serde(default)]
@@ -38,12 +46,34 @@ fn app_preferences_path(paths: &OpenClawPaths) -> std::path::PathBuf {
 fn app_preferences_from_stored(stored: &StoredAppPreferences) -> AppPreferences {
     AppPreferences {
         show_ssh_transfer_speed_ui: stored.show_ssh_transfer_speed_ui,
+        remote_doctor_gateway_url: normalize_remote_doctor_gateway_url(
+            stored.remote_doctor_gateway_url.clone(),
+        ),
+        remote_doctor_gateway_auth_token: normalize_remote_doctor_gateway_auth_token(
+            stored.remote_doctor_gateway_auth_token.clone(),
+        ),
     }
+}
+
+fn normalize_remote_doctor_gateway_url(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn normalize_remote_doctor_gateway_auth_token(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn load_stored_preferences_from_paths(paths: &OpenClawPaths) -> StoredAppPreferences {
     let path = app_preferences_path(paths);
     let mut prefs = read_json::<StoredAppPreferences>(&path).unwrap_or_default();
+    prefs.remote_doctor_gateway_url =
+        normalize_remote_doctor_gateway_url(prefs.remote_doctor_gateway_url);
+    prefs.remote_doctor_gateway_auth_token =
+        normalize_remote_doctor_gateway_auth_token(prefs.remote_doctor_gateway_auth_token);
     prefs.bug_report = normalize_bug_report_settings(prefs.bug_report);
     prefs
 }
@@ -67,6 +97,11 @@ fn save_app_preferences_from_paths(
 ) -> Result<(), String> {
     let mut stored = load_stored_preferences_from_paths(paths);
     stored.show_ssh_transfer_speed_ui = prefs.show_ssh_transfer_speed_ui;
+    stored.remote_doctor_gateway_url =
+        normalize_remote_doctor_gateway_url(prefs.remote_doctor_gateway_url.clone());
+    stored.remote_doctor_gateway_auth_token = normalize_remote_doctor_gateway_auth_token(
+        prefs.remote_doctor_gateway_auth_token.clone(),
+    );
     save_stored_preferences_from_paths(paths, &stored)
 }
 
@@ -108,6 +143,29 @@ pub fn set_ssh_transfer_speed_ui_preference(show_ui: bool) -> Result<AppPreferen
     let paths = resolve_paths();
     let mut prefs = load_app_preferences_from_paths(&paths);
     prefs.show_ssh_transfer_speed_ui = show_ui;
+    save_app_preferences_from_paths(&paths, &prefs)?;
+    Ok(prefs)
+}
+
+#[tauri::command]
+pub fn set_remote_doctor_gateway_url_preference(
+    gateway_url: Option<String>,
+) -> Result<AppPreferences, String> {
+    let paths = resolve_paths();
+    let mut prefs = load_app_preferences_from_paths(&paths);
+    prefs.remote_doctor_gateway_url = normalize_remote_doctor_gateway_url(gateway_url);
+    save_app_preferences_from_paths(&paths, &prefs)?;
+    Ok(prefs)
+}
+
+#[tauri::command]
+pub fn set_remote_doctor_gateway_auth_token_preference(
+    auth_token: Option<String>,
+) -> Result<AppPreferences, String> {
+    let paths = resolve_paths();
+    let mut prefs = load_app_preferences_from_paths(&paths);
+    prefs.remote_doctor_gateway_auth_token =
+        normalize_remote_doctor_gateway_auth_token(auth_token);
     save_app_preferences_from_paths(&paths, &prefs)?;
     Ok(prefs)
 }
@@ -200,6 +258,8 @@ mod tests {
             &paths,
             &AppPreferences {
                 show_ssh_transfer_speed_ui: false,
+                remote_doctor_gateway_url: None,
+                remote_doctor_gateway_auth_token: None,
             },
         )
         .unwrap();
@@ -223,6 +283,8 @@ mod tests {
             &paths,
             &AppPreferences {
                 show_ssh_transfer_speed_ui: true,
+                remote_doctor_gateway_url: Some("ws://doctor.example.test:18789".into()),
+                remote_doctor_gateway_auth_token: Some("doctor-test-token".into()),
             },
         )
         .unwrap();
@@ -241,6 +303,14 @@ mod tests {
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(app_prefs.show_ssh_transfer_speed_ui);
+        assert_eq!(
+            app_prefs.remote_doctor_gateway_url.as_deref(),
+            Some("ws://doctor.example.test:18789")
+        );
+        assert_eq!(
+            app_prefs.remote_doctor_gateway_auth_token.as_deref(),
+            Some("doctor-test-token")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -252,6 +322,27 @@ mod tests {
 
         let app_prefs = load_app_preferences_from_paths(&paths);
         assert!(app_prefs.show_ssh_transfer_speed_ui);
+        assert!(app_prefs.remote_doctor_gateway_url.is_none());
+        assert!(app_prefs.remote_doctor_gateway_auth_token.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saving_remote_doctor_gateway_url_trims_blank_values() {
+        let (paths, root) = test_paths();
+        save_app_preferences_from_paths(
+            &paths,
+            &AppPreferences {
+                show_ssh_transfer_speed_ui: false,
+                remote_doctor_gateway_url: Some("   ".into()),
+                remote_doctor_gateway_auth_token: Some("   ".into()),
+            },
+        )
+        .unwrap();
+
+        let app_prefs = load_app_preferences_from_paths(&paths);
+        assert!(app_prefs.remote_doctor_gateway_url.is_none());
+        assert!(app_prefs.remote_doctor_gateway_auth_token.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

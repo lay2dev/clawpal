@@ -216,6 +216,8 @@ export interface RelatedSecretPushResult {
 
 export interface AppPreferences {
   showSshTransferSpeedUi: boolean;
+  remoteDoctorGatewayUrl: string | null;
+  remoteDoctorGatewayAuthToken: string | null;
 }
 
 export interface SshTransferStats {
@@ -657,6 +659,50 @@ export interface RescuePrimaryRepairResult {
   steps: RescuePrimaryRepairStep[];
   before: RescuePrimaryDiagnosisResult;
   after: RescuePrimaryDiagnosisResult;
+}
+
+export type DoctorRepairMode = "localRepair" | "remoteDoctor";
+
+export type RemoteDoctorPlanKind = "detect" | "investigate" | "repair";
+
+export type RemoteDoctorSessionStatus = "running" | "completed" | "completed_with_warnings" | "failed";
+
+export interface RemoteDoctorCommandPlan {
+  argv: string[];
+  timeoutSec?: number;
+  purpose?: string;
+  continueOnFailure?: boolean;
+}
+
+export interface RemoteDoctorCommandResult {
+  argv: string[];
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  timedOut: boolean;
+}
+
+export interface RemoteDoctorRepairResult {
+  mode: "remoteDoctor";
+  status: RemoteDoctorSessionStatus;
+  round: number;
+  phase: string;
+  lastPlanKind: RemoteDoctorPlanKind;
+  latestDiagnosisHealthy: boolean;
+  lastCommand?: string[] | null;
+  sessionId: string;
+  message: string;
+}
+
+export interface RemoteDoctorProgressEvent {
+  sessionId: string;
+  mode: "remoteDoctor";
+  round: number;
+  phase: string;
+  line: string;
+  planKind?: RemoteDoctorPlanKind | null;
+  command?: string[] | null;
 }
 
 // Cron

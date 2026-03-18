@@ -15,12 +15,20 @@ describe("SettingsAlphaFeaturesCard", () => {
         i18n,
         children: React.createElement(SettingsAlphaFeaturesCard, {
           showSshTransferSpeedUi: false,
+          remoteDoctorGatewayUrl: "",
+          remoteDoctorGatewayAuthToken: "",
           onSshTransferSpeedUiToggle: () => {},
+          onRemoteDoctorGatewayUrlChange: () => {},
+          onRemoteDoctorGatewayUrlSave: () => {},
+          onRemoteDoctorGatewayAuthTokenChange: () => {},
+          onRemoteDoctorGatewayAuthTokenSave: () => {},
         }),
       }),
     );
 
     expect(html).toContain("SSH transfer speed");
+    expect(html).toContain("Remote Doctor Gateway URL");
+    expect(html).toContain("Remote Doctor Gateway Auth Token");
     expect(html).not.toContain("ClawPal Logs");
     expect(html).not.toContain("OpenClaw Gateway Logs");
     expect(html).not.toContain("OpenClaw Context");

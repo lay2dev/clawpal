@@ -113,6 +113,7 @@ describe("DoctorRecoveryOverview", () => {
           repairResult: null,
           repairError: null,
           onRepairAll: () => {},
+          onRemoteDoctorRepair: () => {},
           onRepairIssue: () => {},
         }),
       }),
@@ -193,6 +194,7 @@ describe("DoctorRecoveryOverview", () => {
           repairResult: null,
           repairError: null,
           onRepairAll: () => {},
+          onRemoteDoctorRepair: () => {},
           onRepairIssue: () => {},
         }),
       }),
@@ -201,6 +203,76 @@ describe("DoctorRecoveryOverview", () => {
     expect(html).toContain("Optimize 2 issues");
     expect(html).toContain("Optimize");
     expect(html).not.toContain("Fix 2 issues");
+  });
+
+  test("shows local and remote doctor repair actions", async () => {
+    await i18n.changeLanguage("en");
+    const diagnosis: RescuePrimaryDiagnosisResult = {
+      status: "broken",
+      checkedAt: "2026-03-07T00:00:00Z",
+      targetProfile: "primary",
+      rescueProfile: "rescue",
+      rescueConfigured: true,
+      rescuePort: 19789,
+      summary: {
+        status: "broken",
+        headline: "Gateway needs attention first",
+        recommendedAction: "Apply 1 fix and re-run recovery",
+        fixableIssueCount: 1,
+        selectedFixIssueIds: ["field.agents"],
+        rootCauseHypotheses: [],
+        fixSteps: [],
+        confidence: undefined,
+        citations: [],
+        versionAwareness: undefined,
+      },
+      sections: [
+        {
+          key: "agents",
+          title: "Agents",
+          status: "degraded",
+          summary: "Agents has 1 recommended change",
+          docsUrl: "https://docs.openclaw.ai/agents",
+          rootCauseHypotheses: [],
+          fixSteps: [],
+          confidence: undefined,
+          citations: [],
+          versionAwareness: undefined,
+          items: [
+            {
+              id: "field.agents",
+              label: "Missing agent defaults",
+              status: "warn",
+              detail: "Initialize agents.defaults.model",
+              autoFixable: true,
+              issueId: "field.agents",
+            },
+          ],
+        },
+      ],
+      checks: [],
+      issues: [],
+    };
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(DoctorRecoveryOverview, {
+          diagnosis,
+          checkLoading: false,
+          repairing: false,
+          progressLine: null,
+          repairResult: null,
+          repairError: null,
+          onRepairAll: () => {},
+          onRemoteDoctorRepair: () => {},
+          onRepairIssue: () => {},
+        }),
+      }),
+    );
+
+    expect(html).toContain("Local Repair");
+    expect(html).toContain("Remote Doctor Repair");
   });
 
   test("shows the broken badge once when summary, section, and item describe the same blocker", async () => {
