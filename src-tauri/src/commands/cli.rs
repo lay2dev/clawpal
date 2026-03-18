@@ -19,7 +19,7 @@ pub fn clear_openclaw_version_cache() {
     *OPENCLAW_VERSION_CACHE.lock().unwrap() = None;
 }
 
-static OPENCLAW_VERSION_CACHE: std::sync::Mutex<Option<Option<String>>> =
+pub(crate) static OPENCLAW_VERSION_CACHE: std::sync::Mutex<Option<Option<String>>> =
     std::sync::Mutex::new(None);
 
 pub(crate) fn resolve_openclaw_version() -> String {

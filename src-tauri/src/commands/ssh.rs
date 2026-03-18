@@ -1036,7 +1036,7 @@ pub(crate) async fn resolve_remote_profile_api_key(
     Ok(String::new())
 }
 
-struct RemoteAuthCache {
+pub(crate) struct RemoteAuthCache {
     env_vars: HashMap<String, String>,
     auth_store_files: Vec<Value>,
 }

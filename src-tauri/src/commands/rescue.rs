@@ -566,6 +566,7 @@ pub async fn repair_primary_via_rescue(
 
 // --- Internal rescue helpers (extracted from mod.rs) ---
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RescueBotAction {
     Set,
     Activate,

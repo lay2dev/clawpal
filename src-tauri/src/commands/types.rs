@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::openclaw_doc_resolver::{DocCitation, RootCauseHypothesis};
-use crate::ssh::SshDiagnosticReport;
+use clawpal_core::ssh::diagnostic::SshDiagnosticReport;
 
 pub type ModelProfile = clawpal_core::profile::ModelProfile;
 
