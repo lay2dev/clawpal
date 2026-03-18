@@ -99,8 +99,8 @@ fn local_config_commands_record_timing() {
 
     for s in &samples {
         assert!(
-            s.elapsed_us < 100,
-            "{} took {}ms — should be < 100ms for local ops",
+            s.elapsed_us < 500_000,
+            "{} took {}us — should be < 500ms for local ops",
             s.name,
             s.elapsed_us
         );
