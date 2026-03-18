@@ -69,7 +69,7 @@ fn report_aggregates_correctly() {
     let report = get_perf_report().expect("should return report");
     let fast = &report["cmd_fast"];
     assert_eq!(fast["count"], 3);
-    assert_eq!(fast["p50_ms"], 20);
+    assert_eq!(fast["p50_us"], 20);
     let slow = &report["cmd_slow"];
     assert_eq!(slow["count"], 2);
 }
