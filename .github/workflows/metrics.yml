@@ -256,6 +256,7 @@ jobs:
         id: remote_perf
         run: |
           set +e
+          REMOTE_FAIL=0
           SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
 
           # Exercise remote OpenClaw commands and measure timing
@@ -273,6 +274,8 @@ jobs:
             for i in $(seq 1 3); do
               START=$(date +%s%N)
               $SSH "$CMD" > /dev/null 2>&1
+              CMD_EXIT=$?
+              if [ "$CMD_EXIT" -ne 0 ]; then REMOTE_FAIL=1; fi
               END=$(date +%s%N)
               MS=$(( (END - START) / 1000000 ))
               echo "REMOTE_CMD:${SHORT}:run${i}:${MS}ms" | tee -a /tmp/remote_perf.txt
@@ -296,12 +299,18 @@ jobs:
           for i in $(seq 1 3); do
             START=$(date +%s%N)
             $SSH "$BATCH_CMD" > /dev/null 2>&1
+            CMD_EXIT=$?
+            if [ "$CMD_EXIT" -ne 0 ]; then REMOTE_FAIL=1; fi
             END=$(date +%s%N)
             MS=$(( (END - START) / 1000000 ))
             echo "REMOTE_CMD:batch_all:run${i}:${MS}ms" | tee -a /tmp/remote_perf.txt
           done
 
-          echo "pass=true" >> "$GITHUB_OUTPUT"
+          if [ "$REMOTE_FAIL" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cleanup remote container
         if: always()
@@ -407,6 +416,9 @@ jobs:
           if [ "${{ steps.home_perf.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
+          if [ "${{ steps.remote_perf.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
 
           BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
           COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
@@ -460,7 +472,7 @@ jobs:
 
           </details>
 
-          ### Command Perf (remote SSH)  ✅
+          ### Command Perf (remote SSH)  $( [ "${{ steps.remote_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           <details><summary>Remote command timings (via Docker SSH)</summary>
 

@@ -1,4 +1,4 @@
-import i18n from "i18next";
+import i18n, { type Callback } from "i18next";
 import { initReactI18next } from "react-i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import en from "./locales/en.json";
@@ -24,26 +24,26 @@ i18n
     },
   });
 
-// Lazy-load detected language if not English
+// Intercept changeLanguage to pre-load lazy bundles before the switch.
+// This ensures the bundle is available when i18next fires "languageChanged",
+// so React components render translated text on the first pass.
+const _originalChangeLanguage = i18n.changeLanguage.bind(i18n);
+i18n.changeLanguage = async (lng?: string, callback?: Callback) => {
+  if (lng) {
+    const base = lng.split("-")[0];
+    if (base !== "en" && lazyLocales[base] && !i18n.hasResourceBundle(base, "translation")) {
+      const mod = await lazyLocales[base]();
+      i18n.addResourceBundle(base, "translation", mod.default, true, true);
+    }
+  }
+  return _originalChangeLanguage(lng, callback);
+};
+
+// Eager-load detected language on startup (e.g. persisted clawpal_language=zh)
 const detected = i18n.language?.split("-")[0];
 if (detected && detected !== "en" && lazyLocales[detected]) {
-  lazyLocales[detected]().then((mod) => {
-    i18n.addResourceBundle(detected, "translation", mod.default, true, true);
-    // Re-trigger resolution so components pick up the newly loaded bundle
-    i18n.changeLanguage(detected);
-  });
+  // Use our wrapped changeLanguage so the bundle loads before the switch
+  i18n.changeLanguage(detected);
 }
-
-// Lazy-load on language change
-i18n.on("languageChanged", (lng) => {
-  const base = lng.split("-")[0];
-  if (base !== "en" && lazyLocales[base] && !i18n.hasResourceBundle(base, "translation")) {
-    lazyLocales[base]().then((mod) => {
-      i18n.addResourceBundle(base, "translation", mod.default, true, true);
-      // Re-trigger resolution so components pick up the newly loaded bundle
-      i18n.changeLanguage(base);
-    });
-  }
-});
 
 export default i18n;
