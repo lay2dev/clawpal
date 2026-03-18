@@ -1,0 +1,9 @@
+{
+  "name": "clawpal-screenshot-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "selenium-webdriver": "^4.34.0"
+  }
+}
