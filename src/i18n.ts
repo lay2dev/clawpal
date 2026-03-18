@@ -29,6 +29,8 @@ const detected = i18n.language?.split("-")[0];
 if (detected && detected !== "en" && lazyLocales[detected]) {
   lazyLocales[detected]().then((mod) => {
     i18n.addResourceBundle(detected, "translation", mod.default, true, true);
+    // Re-trigger resolution so components pick up the newly loaded bundle
+    i18n.changeLanguage(detected);
   });
 }
 
@@ -38,6 +40,8 @@ i18n.on("languageChanged", (lng) => {
   if (base !== "en" && lazyLocales[base] && !i18n.hasResourceBundle(base, "translation")) {
     lazyLocales[base]().then((mod) => {
       i18n.addResourceBundle(base, "translation", mod.default, true, true);
+      // Re-trigger resolution so components pick up the newly loaded bundle
+      i18n.changeLanguage(base);
     });
   }
 });

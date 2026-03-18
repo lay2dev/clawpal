@@ -205,11 +205,16 @@ mod tests {
 
 use std::sync::Arc;
 
-/// Thread-safe registry of command timing samples.
-static PERF_REGISTRY: LazyLock<Arc<Mutex<Vec<PerfSample>>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(Vec::with_capacity(1024))));
+/// Maximum number of samples retained in the ring buffer.
+/// Prevents unbounded memory growth from long-running polling commands.
+const MAX_PERF_SAMPLES: usize = 4096;
+
+/// Thread-safe ring-buffer registry of command timing samples.
+static PERF_REGISTRY: LazyLock<Arc<Mutex<VecDeque<PerfSample>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(VecDeque::with_capacity(MAX_PERF_SAMPLES))));
 
 /// Record a timing sample into the global registry.
+/// When the registry is full, the oldest sample is evicted.
 pub fn record_timing(name: &str, elapsed_ms: u64) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -227,7 +232,10 @@ pub fn record_timing(name: &str, elapsed_ms: u64) {
         exceeded_threshold: elapsed_ms > threshold,
     };
     if let Ok(mut reg) = PERF_REGISTRY.lock() {
-        reg.push(sample);
+        if reg.len() >= MAX_PERF_SAMPLES {
+            reg.pop_front();
+        }
+        reg.push_back(sample);
     }
 }
 
@@ -235,7 +243,7 @@ pub fn record_timing(name: &str, elapsed_ms: u64) {
 #[tauri::command]
 pub fn get_perf_timings() -> Result<Vec<PerfSample>, String> {
     let mut reg = PERF_REGISTRY.lock().map_err(|e| e.to_string())?;
-    let samples = reg.drain(..).collect();
+    let samples: Vec<PerfSample> = reg.drain(..).collect();
     Ok(samples)
 }
 

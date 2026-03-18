@@ -1400,16 +1400,18 @@ export function App() {
   return (
     <>
     <div className="flex flex-col h-screen bg-background text-foreground">
-      <InstanceTabBar
-        openTabs={openTabs}
-        activeId={inStart ? null : activeInstance}
-        startActive={inStart}
-        connectionStatus={connectionStatus}
-        appVersion={appVersion}
-        onSelectStart={openControlCenter}
-        onSelect={handleInstanceSelect}
-        onClose={closeTab}
-      />
+      <Suspense fallback={null}>
+        <InstanceTabBar
+          openTabs={openTabs}
+          activeId={inStart ? null : activeInstance}
+          startActive={inStart}
+          connectionStatus={connectionStatus}
+          appVersion={appVersion}
+          onSelectStart={openControlCenter}
+          onSelect={handleInstanceSelect}
+          onClose={closeTab}
+        />
+      </Suspense>
       <InstanceContext.Provider value={{
         instanceId: activeInstance,
         instanceViewToken: activeInstance,
@@ -1716,6 +1718,7 @@ export function App() {
           <DialogTitle>{t("instance.editSsh")}</DialogTitle>
         </DialogHeader>
         {editingSshHost && (
+          <Suspense fallback={<p className="text-sm text-muted-foreground animate-pulse">Loading…</p>}>
           <SshFormWidget
             invokeId="ssh-edit-form"
             defaults={editingSshHost}
@@ -1724,6 +1727,7 @@ export function App() {
             }}
             onCancel={() => setSshEditOpen(false)}
           />
+          </Suspense>
         )}
       </DialogContent>
     </Dialog>
