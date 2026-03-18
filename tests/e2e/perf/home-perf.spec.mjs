@@ -75,7 +75,7 @@ test("home page render timing", async ({ page }) => {
     content: `
       window.__PERF_FIXTURES__ = ${JSON.stringify(fixtures)};
       window.__PERF_MOCK_LATENCY__ = "${MOCK_LATENCY_MS}";
-      window.__PERF_COLD_START_SKIP__ = "2";
+      window.__PERF_COLD_START_SKIP__ = "4";
       ${MOCK_SCRIPT}
     `,
   });
@@ -83,6 +83,10 @@ test("home page render timing", async ({ page }) => {
   const allRuns = [];
 
   for (let i = 0; i < RUNS; i++) {
+    // Clear persisted read cache so each run is a true cold start
+    await page.evaluate(() => {
+      try { localStorage.clear(); sessionStorage.clear(); } catch {}
+    }).catch(() => {});
     await page.goto("http://localhost:1420");
 
     // Wait for app to render the Start page, then click the local instance card
