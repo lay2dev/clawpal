@@ -450,7 +450,7 @@ jobs:
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           CMD_P50="${{ steps.perf_tests.outputs.cmd_p50_us }}"
-          if [ "$CMD_P50" != "N/A" ] && [ "$CMD_P50" -gt 50000 ] 2>/dev/null; then
+          if [ "$CMD_P50" != "N/A" ] && [ "$CMD_P50" -gt 50000 ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           if [ "${{ steps.cmd_perf.outputs.pass }}" = "false" ]; then
