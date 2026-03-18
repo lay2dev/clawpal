@@ -156,4 +156,3 @@ pub(crate) fn extract_json5_top_level_value(text: &str, key: &str) -> Option<Str
     }
     None
 }
-
