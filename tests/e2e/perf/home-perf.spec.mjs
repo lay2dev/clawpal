@@ -88,6 +88,13 @@ test("home page render timing", async ({ page }) => {
     // to navigate into Home
     await page.waitForTimeout(2000); // Let app initialize
 
+    // Clear IPC read cache so Home probes measure real IPC fetch + render,
+    // not cache-hit render time (which would be ~8ms instead of ~60ms).
+    await page.evaluate(() => {
+      if (window.__TEST_CLEAR_READ_CACHE__) window.__TEST_CLEAR_READ_CACHE__();
+      delete window.__RENDER_PROBES__;
+    });
+
     // Click the local instance card — look for it by text or role
     const instanceCard = page.locator('text=local').first();
     if (await instanceCard.isVisible({ timeout: 5000 }).catch(() => false)) {
