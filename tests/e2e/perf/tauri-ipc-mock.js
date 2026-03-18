@@ -6,9 +6,19 @@
   const FIXTURES = window.__PERF_FIXTURES__ || {};
   const LATENCY_MS = parseInt(window.__PERF_MOCK_LATENCY__ || "50", 10);
 
+  let _runtimeSnapshotCallCount = 0;
+  const _COLD_START_SKIP = parseInt(window.__PERF_COLD_START_SKIP__ || "0", 10);
+
   const handlers = {
-    get_instance_config_snapshot: () => FIXTURES.configSnapshot,
-    get_instance_runtime_snapshot: () => FIXTURES.runtimeSnapshot,
+    get_instance_config_snapshot: () => {
+      if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return null;
+      return FIXTURES.configSnapshot;
+    },
+    get_instance_runtime_snapshot: () => {
+      _runtimeSnapshotCallCount++;
+      if (_COLD_START_SKIP > 0 && _runtimeSnapshotCallCount <= _COLD_START_SKIP) return null;
+      return FIXTURES.runtimeSnapshot;
+    },
     get_status_extra: () => FIXTURES.statusExtra,
     list_model_profiles: () => FIXTURES.modelProfiles || [],
     get_status_light: () => FIXTURES.runtimeSnapshot?.status || { healthy: true, activeAgents: 2 },
