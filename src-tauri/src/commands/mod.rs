@@ -1,3 +1,27 @@
+/// Macro for wrapping synchronous command bodies with timing.
+/// Uses a closure to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_sync {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = (|| $body)();
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
+
+/// Macro for wrapping async command bodies with timing.
+/// Uses an async block to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_async {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = async $body.await;
+        let __elapsed_ms = __start.elapsed().as_millis() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_ms);
+        __result
+    }};
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -44,6 +68,7 @@ pub mod instance;
 pub mod logs;
 pub mod model;
 pub mod overview;
+pub mod perf;
 pub mod precheck;
 pub mod preferences;
 pub mod profiles;
@@ -84,6 +109,8 @@ pub use logs::*;
 pub use model::*;
 #[allow(unused_imports)]
 pub use overview::*;
+#[allow(unused_imports)]
+pub use perf::*;
 #[allow(unused_imports)]
 pub use precheck::*;
 #[allow(unused_imports)]

@@ -18,10 +18,11 @@ use crate::commands::{
     get_bug_report_settings, get_cached_model_catalog, get_channels_config_snapshot,
     get_channels_runtime_snapshot, get_cron_config_snapshot, get_cron_runs,
     get_cron_runtime_snapshot, get_instance_config_snapshot, get_instance_runtime_snapshot,
-    get_rescue_bot_status, get_session_model_override, get_ssh_transfer_stats, get_status_extra,
-    get_status_light, get_system_status, get_watchdog_status, list_agents_overview, list_backups,
-    list_bindings, list_channels_minimal, list_cron_jobs, list_discord_guild_channels,
-    list_history, list_model_profiles, list_recipes, list_registered_instances, list_session_files,
+    get_perf_report, get_perf_timings, get_process_metrics, get_rescue_bot_status,
+    get_session_model_override, get_ssh_transfer_stats, get_status_extra, get_status_light,
+    get_system_status, get_watchdog_status, list_agents_overview, list_backups, list_bindings,
+    list_channels_minimal, list_cron_jobs, list_discord_guild_channels, list_history,
+    list_model_profiles, list_recipes, list_registered_instances, list_session_files,
     list_ssh_config_hosts, list_ssh_hosts, local_openclaw_cli_available,
     local_openclaw_config_exists, log_app_event, manage_rescue_bot, migrate_legacy_instances,
     open_url, precheck_auth, precheck_instance, precheck_registry, precheck_transport,
@@ -278,6 +279,9 @@ pub fn run() {
             read_gateway_log,
             read_gateway_error_log,
             log_app_event,
+            get_process_metrics,
+            get_perf_timings,
+            get_perf_report,
             remote_read_app_log,
             remote_read_error_log,
             remote_read_helper_log,
@@ -304,6 +308,7 @@ pub fn run() {
         ])
         .setup(|_app| {
             crate::bug_report::install_panic_hook();
+            crate::commands::perf::init_perf_clock();
             let settings = crate::commands::preferences::load_bug_report_settings_from_paths(
                 &crate::models::resolve_paths(),
             );

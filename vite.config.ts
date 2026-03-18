@@ -11,4 +11,20 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split large vendor deps into separate chunks
+          "vendor-react": ["react", "react-dom"],
+          "vendor-i18n": ["i18next", "react-i18next", "i18next-browser-languagedetector"],
+          "vendor-ui": ["radix-ui", "cmdk", "class-variance-authority", "clsx", "tailwind-merge"],
+          "vendor-icons": ["lucide-react"],
+          "vendor-diff": ["react-diff-viewer-continued"],
+        },
+      },
+    },
+    // Target smaller chunks
+    chunkSizeWarningLimit: 300,
+  },
 });

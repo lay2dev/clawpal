@@ -70,14 +70,6 @@ jobs:
             echo '⚠️ E2E run failed before probe collection. Check workflow logs.' >> tests/e2e/perf/report.md
           fi
 
-      - name: Post / update PR performance report
-        if: always() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: home-perf-e2e
-          path: tests/e2e/perf/report.md
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Cleanup
         if: always()
         run: docker rm -f oc-perf 2>/dev/null || true

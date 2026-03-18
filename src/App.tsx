@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { StartPage } from "./pages/StartPage";
 import logoUrl from "./assets/logo.png";
-import { InstanceTabBar } from "./components/InstanceTabBar";
+const InstanceTabBar = lazy(() => import("./components/InstanceTabBar").then((m) => ({ default: m.InstanceTabBar })));
 import { InstanceContext } from "./lib/instance-context";
 import { api } from "./lib/api";
 import { buildCacheKey, invalidateGlobalReadCache, prewarmRemoteInstanceReadCache, subscribeToCacheKey } from "./lib/use-api";
@@ -40,7 +40,7 @@ import { Label } from "@/components/ui/label";
 import { cn, formatBytes } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { ChannelNode, DiscordGuildChannel, DiscoveredInstance, DockerInstance, InstallSession, PrecheckIssue, RegisteredInstance, SshHost, SshTransferStats } from "./lib/types";
-import { SshFormWidget } from "./components/SshFormWidget";
+const SshFormWidget = lazy(() => import("./components/SshFormWidget").then((m) => ({ default: m.SshFormWidget })));
 import { closeWorkspaceTab } from "@/lib/tabWorkspace";
 import {
   SSH_PASSPHRASE_RETRY_HINT,
@@ -75,14 +75,21 @@ const preloadRouteModules = () =>
   ]);
 
 const PING_URL = "https://api.clawpal.zhixian.io/ping";
-const LEGACY_DOCKER_INSTANCES_KEY = "clawpal_docker_instances";
-const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
-const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
-const DEFAULT_DOCKER_INSTANCE_ID = "docker:local";
+import {
+  LEGACY_DOCKER_INSTANCES_KEY,
+  DEFAULT_DOCKER_OPENCLAW_HOME,
+  DEFAULT_DOCKER_CLAWPAL_DATA_DIR,
+  DEFAULT_DOCKER_INSTANCE_ID,
+  sanitizeDockerPathSuffix,
+  deriveDockerPaths,
+  deriveDockerLabel,
+  hashInstanceToken,
+  normalizeDockerInstance,
+} from "./lib/docker-instance-helpers";
+import { logDevException, logDevIgnoredError } from "./lib/dev-logging";
+import { Route, INSTANCE_ROUTES, OPEN_TABS_STORAGE_KEY } from "./lib/routes";
 
-type Route = "home" | "recipes" | "cook" | "history" | "channels" | "cron" | "doctor" | "context" | "orchestrator";
-const INSTANCE_ROUTES: Route[] = ["home", "channels", "recipes", "cron", "doctor", "context", "history"];
-const OPEN_TABS_STORAGE_KEY = "clawpal_open_tabs";
+
 const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
 interface ProfileSyncStatus {
   phase: "idle" | "syncing" | "success" | "error";
@@ -90,68 +97,7 @@ interface ProfileSyncStatus {
   instanceId: string | null;
 }
 
-function logDevException(label: string, detail: unknown): void {
-  if (!import.meta.env.DEV) return;
-  console.error(`[dev exception] ${label}`, detail);
-}
 
-function logDevIgnoredError(context: string, detail: unknown): void {
-  if (!import.meta.env.DEV) return;
-  console.warn(`[dev ignored error] ${context}`, detail);
-}
-
-function sanitizeDockerPathSuffix(raw: string): string {
-  const lowered = raw.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  const trimmed = lowered.replace(/^[-_]+|[-_]+$/g, "");
-  return trimmed || "docker-local";
-}
-
-function deriveDockerPaths(instanceId: string): { openclawHome: string; clawpalDataDir: string } {
-  if (instanceId === DEFAULT_DOCKER_INSTANCE_ID) {
-    return {
-      openclawHome: DEFAULT_DOCKER_OPENCLAW_HOME,
-      clawpalDataDir: DEFAULT_DOCKER_CLAWPAL_DATA_DIR,
-    };
-  }
-  const suffixRaw = instanceId.startsWith("docker:") ? instanceId.slice(7) : instanceId;
-  const suffix = suffixRaw === "local"
-    ? "docker-local"
-    : suffixRaw.startsWith("docker-")
-      ? sanitizeDockerPathSuffix(suffixRaw)
-      : `docker-${sanitizeDockerPathSuffix(suffixRaw)}`;
-  const openclawHome = `~/.clawpal/${suffix}`;
-  return {
-    openclawHome,
-    clawpalDataDir: `${openclawHome}/data`,
-  };
-}
-
-function deriveDockerLabel(instanceId: string): string {
-  if (instanceId === DEFAULT_DOCKER_INSTANCE_ID) return "docker-local";
-  const suffix = instanceId.startsWith("docker:") ? instanceId.slice(7) : instanceId;
-  const match = suffix.match(/^local-(\d+)$/);
-  if (match) return `docker-local-${match[1]}`;
-  return suffix.startsWith("docker-") ? suffix : `docker-${suffix}`;
-}
-
-function hashInstanceToken(raw: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash ^= raw.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function normalizeDockerInstance(instance: DockerInstance): DockerInstance {
-  const fallback = deriveDockerPaths(instance.id);
-  return {
-    ...instance,
-    label: instance.label?.trim() || deriveDockerLabel(instance.id),
-    openclawHome: instance.openclawHome || fallback.openclawHome,
-    clawpalDataDir: instance.clawpalDataDir || fallback.clawpalDataDir,
-  };
-}
 
 export function App() {
   const { t } = useTranslation();
@@ -1454,16 +1400,18 @@ export function App() {
   return (
     <>
     <div className="flex flex-col h-screen bg-background text-foreground">
-      <InstanceTabBar
-        openTabs={openTabs}
-        activeId={inStart ? null : activeInstance}
-        startActive={inStart}
-        connectionStatus={connectionStatus}
-        appVersion={appVersion}
-        onSelectStart={openControlCenter}
-        onSelect={handleInstanceSelect}
-        onClose={closeTab}
-      />
+      <Suspense fallback={null}>
+        <InstanceTabBar
+          openTabs={openTabs}
+          activeId={inStart ? null : activeInstance}
+          startActive={inStart}
+          connectionStatus={connectionStatus}
+          appVersion={appVersion}
+          onSelectStart={openControlCenter}
+          onSelect={handleInstanceSelect}
+          onClose={closeTab}
+        />
+      </Suspense>
       <InstanceContext.Provider value={{
         instanceId: activeInstance,
         instanceViewToken: activeInstance,
@@ -1770,6 +1718,7 @@ export function App() {
           <DialogTitle>{t("instance.editSsh")}</DialogTitle>
         </DialogHeader>
         {editingSshHost && (
+          <Suspense fallback={<p className="text-sm text-muted-foreground animate-pulse">Loading…</p>}>
           <SshFormWidget
             invokeId="ssh-edit-form"
             defaults={editingSshHost}
@@ -1778,6 +1727,7 @@ export function App() {
             }}
             onCancel={() => setSshEditOpen(false)}
           />
+          </Suspense>
         )}
       </DialogContent>
     </Dialog>
