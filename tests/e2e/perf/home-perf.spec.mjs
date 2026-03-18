@@ -75,7 +75,7 @@ test("home page render timing", async ({ page }) => {
     content: `
       window.__PERF_FIXTURES__ = ${JSON.stringify(fixtures)};
       window.__PERF_MOCK_LATENCY__ = "${MOCK_LATENCY_MS}";
-      window.__PERF_COLD_START_SKIP__ = "4";
+      window.__PERF_COLD_START_SKIP__ = "1";
       ${MOCK_SCRIPT}
     `,
   });
