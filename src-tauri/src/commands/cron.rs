@@ -160,3 +160,11 @@ pub fn delete_cron_job(job_id: String) -> Result<String, String> {
         }
     })
 }
+
+// --- Extracted from mod.rs ---
+
+pub(crate) fn parse_cron_jobs(text: &str) -> Value {
+    let jobs = clawpal_core::cron::parse_cron_jobs(text).unwrap_or_default();
+    Value::Array(jobs)
+}
+
