@@ -181,43 +181,49 @@ jobs:
       - name: Check large files
         id: large_files
         run: |
-          # Tracked files with per-file targets
-          declare -A TARGETS
-          TARGETS["src-tauri/src/commands/mod.rs"]=2000
-          TARGETS["src/App.tsx"]=500
-          TARGETS["src-tauri/src/commands/doctor_assistant.rs"]=3000
-          TARGETS["src-tauri/src/commands/rescue.rs"]=2000
-          TARGETS["src-tauri/src/commands/profiles.rs"]=1500
-          TARGETS["src-tauri/src/cli_runner.rs"]=1200
-          TARGETS["src-tauri/src/commands/credentials.rs"]=1000
-          TARGETS["src-tauri/src/openclaw_doc_resolver.rs"]=800
-          TARGETS["src-tauri/src/commands/ssh.rs"]=800
-          TARGETS["src-tauri/src/commands/doctor.rs"]=800
-          TARGETS["src/pages/Settings.tsx"]=800
-          TARGETS["src/lib/use-api.ts"]=800
-          TARGETS["src/pages/Home.tsx"]=700
-          TARGETS["src/pages/StartPage.tsx"]=700
-          TARGETS["src-tauri/src/commands/sessions.rs"]=600
-          TARGETS["src/lib/types.ts"]=600
-          TARGETS["src-tauri/src/commands/discovery.rs"]=600
-          TARGETS["src-tauri/src/install/commands.rs"]=600
-
+          # Auto-scan ALL source files >300 lines and assign targets
+          # Target = min(current_lines * 0.6, current_lines - 200) rounded to nearest 100, floor 500
           DETAILS=""
           OVER_TARGET=0
-          for FILE in $(echo "${!TARGETS[@]}" | tr ' ' '\n' | sort); do
-            TARGET=${TARGETS[$FILE]}
-            LINES=$(wc -l < "$FILE" 2>/dev/null || echo 0)
+          TOTAL_LARGE=0
+
+          # Manually tracked key files with specific targets
+          declare -A OVERRIDES
+          OVERRIDES["src-tauri/src/commands/mod.rs"]=300
+          OVERRIDES["src/App.tsx"]=500
+          OVERRIDES["src-tauri/src/commands/doctor_assistant.rs"]=3000
+          OVERRIDES["src-tauri/src/commands/rescue.rs"]=2000
+          OVERRIDES["src-tauri/src/commands/profiles.rs"]=1500
+          OVERRIDES["src-tauri/src/cli_runner.rs"]=1200
+          OVERRIDES["src-tauri/src/commands/credentials.rs"]=1000
+
+          while IFS= read -r LINE; do
+            LINES=$(echo "$LINE" | awk '{print $1}')
+            FILE=$(echo "$LINE" | awk '{print $2}')
+            [ "$LINES" -le 300 ] 2>/dev/null && continue
+
             SHORT=$(echo "$FILE" | sed 's|src-tauri/src/||;s|src/||')
+
+            # Use override if available, otherwise auto-calculate
+            if [ -n "${OVERRIDES[$FILE]+x}" ]; then
+              TARGET=${OVERRIDES[$FILE]}
+            else
+              # Target: 60% of current, rounded to nearest 100, floor 500
+              TARGET=$(( (LINES * 60 / 100 + 50) / 100 * 100 ))
+              [ "$TARGET" -lt 500 ] && TARGET=500
+            fi
+
+            if [ "$LINES" -gt 500 ]; then
+              TOTAL_LARGE=$((TOTAL_LARGE + 1))
+            fi
+
             if [ "$LINES" -gt "$TARGET" ]; then
               DETAILS="${DETAILS}| \`${SHORT}\` | ${LINES} | ≤ ${TARGET} | ⚠️ |\n"
               OVER_TARGET=$((OVER_TARGET + 1))
             else
               DETAILS="${DETAILS}| \`${SHORT}\` | ${LINES} | ≤ ${TARGET} | ✅ |\n"
             fi
-          done
-
-          LARGE_COUNT=$(find src/ src-tauri/src/ \( -name '*.ts' -o -name '*.tsx' -o -name '*.rs' \) -exec wc -l {} + 2>/dev/null | \
-            grep -v total | awk '$1 > 500 {count++} END {print count+0}')
+          done < <(find src/ src-tauri/src/ \( -name '*.ts' -o -name '*.tsx' -o -name '*.rs' \) -exec wc -l {} + 2>/dev/null | grep -v total | sort -rn)
 
           MOD_LINES=$(wc -l < src-tauri/src/commands/mod.rs 2>/dev/null || echo 0)
           APP_LINES=$(wc -l < src/App.tsx 2>/dev/null || echo 0)
@@ -225,7 +231,7 @@ jobs:
           printf "%b" "$DETAILS" > /tmp/large_file_details.txt
           echo "mod_lines=${MOD_LINES}" >> "$GITHUB_OUTPUT"
           echo "app_lines=${APP_LINES}" >> "$GITHUB_OUTPUT"
-          echo "large_count=${LARGE_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "large_count=${TOTAL_LARGE}" >> "$GITHUB_OUTPUT"
           echo "over_target=${OVER_TARGET}" >> "$GITHUB_OUTPUT"
 
       # ── Gate 4b: Command perf E2E (local) ──
@@ -469,6 +475,7 @@ jobs:
           fi
 
           BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+          MOCK_LATENCY="${{ env.PERF_MOCK_LATENCY_MS || '50' }}"
           COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
 
           cat > /tmp/metrics_comment.md << COMMENTEOF
@@ -535,7 +542,7 @@ jobs:
 
           </details>
 
-                    ### Home Page Render Probes  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+                    ### Home Page Render Probes (mock IPC, ${MOCK_LATENCY}ms latency)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
