@@ -459,6 +459,11 @@ jobs:
           if [ "${{ steps.home_perf.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
+          for PROBE_VAL in "${{ steps.home_perf.outputs.status_ms }}" "${{ steps.home_perf.outputs.version_ms }}" "${{ steps.home_perf.outputs.agents_ms }}" "${{ steps.home_perf.outputs.models_ms }}"; do
+            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 500 ] 2>/dev/null; then
+              OVERALL="❌ Some gates failed"; GATE_FAIL=1
+            fi
+          done
           if [ "${{ steps.remote_perf.outputs.pass }}" = "false" ]; then
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
@@ -534,10 +539,10 @@ jobs:
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
-          | status | ${{ steps.home_perf.outputs.status_ms }} ms | — | ℹ️ |
-          | version | ${{ steps.home_perf.outputs.version_ms }} ms | — | ℹ️ |
-          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | — | ℹ️ |
-          | models | ${{ steps.home_perf.outputs.models_ms }} ms | — | ℹ️ |
+          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
           | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | < 5000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 < 5000) ? "✅" : "❌"}' ) |
 
           ### Code Readability
