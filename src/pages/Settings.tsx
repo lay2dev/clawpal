@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AutocompleteField } from "../components/AutocompleteField";
+import {
+  emptyForm, normalizeOauthProvider, providerUsesOAuthAuth,
+  defaultOauthAuthRef, isEnvVarLikeAuthRef, defaultEnvAuthRef,
+  inferCredentialSource, providerSupportsOptionalApiKey,
+  type ProfileForm, type CredentialSource,
+} from "../lib/profile-utils";
 import type { FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
@@ -52,18 +59,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-type ProfileForm = {
-  id: string;
-  provider: string;
-  model: string;
-  authRef: string;
-  apiKey: string;
-  useCustomUrl: boolean;
-  baseUrl: string;
-  enabled: boolean;
-};
-
-type CredentialSource = "oauth" | "env" | "manual";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
@@ -79,153 +74,9 @@ const PROVIDER_FALLBACK_OPTIONS = [
   "vllm",
 ];
 
-function emptyForm(): ProfileForm {
-  return {
-    id: "",
-    provider: "",
-    model: "",
-    authRef: "",
-    apiKey: "",
-    useCustomUrl: false,
-    baseUrl: "",
-    enabled: true,
-  };
-}
+// Profile utility functions extracted to ../lib/profile-utils.ts
 
-function normalizeOauthProvider(provider: string): string {
-  const lower = provider.trim().toLowerCase();
-  if (lower === "openai_codex" || lower === "github-copilot" || lower === "copilot") {
-    return "openai-codex";
-  }
-  return lower;
-}
-
-function providerUsesOAuthAuth(provider: string): boolean {
-  return normalizeOauthProvider(provider) === "openai-codex";
-}
-
-function defaultOauthAuthRef(provider: string): string {
-  const normalized = normalizeOauthProvider(provider);
-  if (normalized === "openai-codex") {
-    return "openai-codex:default";
-  }
-  return "";
-}
-
-function isEnvVarLikeAuthRef(authRef: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef.trim());
-}
-
-function defaultEnvAuthRef(provider: string): string {
-  const normalized = normalizeOauthProvider(provider);
-  if (!normalized) return "";
-  if (normalized === "openai-codex") {
-    return "OPENAI_CODEX_TOKEN";
-  }
-  const providerEnv = normalized
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  return providerEnv ? `${providerEnv}_API_KEY` : "";
-}
-
-function inferCredentialSource(provider: string, authRef: string): CredentialSource {
-  const trimmed = authRef.trim();
-  if (!trimmed) {
-    return providerUsesOAuthAuth(provider) ? "oauth" : "manual";
-  }
-  if (providerUsesOAuthAuth(provider) && trimmed.toLowerCase().startsWith("openai-codex:")) {
-    return "oauth";
-  }
-  return "env";
-}
-
-function providerSupportsOptionalApiKey(provider: string): boolean {
-  if (providerUsesOAuthAuth(provider)) {
-    return true;
-  }
-  const lower = provider.trim().toLowerCase();
-  return [
-    "ollama",
-    "lmstudio",
-    "lm-studio",
-    "localai",
-    "vllm",
-    "llamacpp",
-    "llama.cpp",
-  ].includes(lower);
-}
-
-function AutocompleteField({
-  value,
-  onChange,
-  onFocus,
-  options,
-  placeholder,
-}: {
-  value: string;
-  onChange: (val: string) => void;
-  onFocus?: () => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  const filtered = options.filter(
-    (o) =>
-      !value ||
-      o.value.toLowerCase().includes(value.toLowerCase()) ||
-      o.label.toLowerCase().includes(value.toLowerCase()),
-  );
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  return (
-    <div ref={wrapperRef} className="relative">
-      <Input
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => {
-          setOpen(true);
-          onFocus?.();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
-        }}
-      />
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-md max-h-[200px] overflow-y-auto">
-          {filtered.map((option) => (
-            <div
-              key={option.value}
-              className="px-3 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              {option.label}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// AutocompleteField extracted to ../components/AutocompleteField.tsx
 
 export function Settings({
   onDataChange,
