@@ -157,7 +157,7 @@ fn perf_sample_serializes_correctly() {
 
     let json = serde_json::to_string(&sample).expect("should serialize");
     assert!(json.contains("\"name\":\"test_command\""));
-    assert!(json.contains("\"elapsedMs\":42")); // camelCase
+    assert!(json.contains("\"elapsedUs\":42")); // camelCase
     assert!(json.contains("\"exceededThreshold\":false"));
 }
 
