@@ -322,46 +322,20 @@ export function Home({
   }, [applyConfigSnapshot, liveReadsReady, persistedRuntimeSnapshot, ua]);
 
   useEffect(() => {
-    if (persistedConfigSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceConfigSnapshot"),
-        resource: "getInstanceConfigSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedRuntimeSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceRuntimeSnapshot"),
-        resource: "getInstanceRuntimeSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedStatusExtra) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getStatusExtra"),
-        resource: "getStatusExtra",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
+    // Emit persisted-cache metrics for each pre-loaded resource
+    for (const [resource, data] of [
+      ["getInstanceConfigSnapshot", persistedConfigSnapshot],
+      ["getInstanceRuntimeSnapshot", persistedRuntimeSnapshot],
+      ["getStatusExtra", persistedStatusExtra],
+    ] as const) {
+      if (data) {
+        emitDataLoadMetric({
+          requestId: createDataLoadRequestId(resource),
+          resource, page: "home",
+          instanceId: ua.instanceId, instanceToken: ua.instanceToken,
+          source: "persisted", phase: "success", elapsedMs: 0, cacheHit: true,
+        });
+      }
     }
     setUpdateInfo(null);
     setCheckingUpdate(false);
