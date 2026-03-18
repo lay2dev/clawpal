@@ -80,6 +80,7 @@ pub mod doctor;
 pub mod history;
 pub mod install;
 pub mod json_util;
+pub mod json5_extract;
 pub mod logging;
 pub mod models;
 pub mod node_client;
