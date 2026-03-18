@@ -473,4 +473,3 @@ pub(crate) fn collect_agent_ids(cfg: &Value) -> Vec<String> {
     }
     ids
 }
-

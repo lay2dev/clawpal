@@ -104,7 +104,10 @@ pub(crate) fn read_openclaw_update_cache(path: &Path) -> Option<OpenclawUpdateCa
     serde_json::from_str::<OpenclawUpdateCache>(&text).ok()
 }
 
-pub(crate) fn save_openclaw_update_cache(path: &Path, cache: &OpenclawUpdateCache) -> Result<(), String> {
+pub(crate) fn save_openclaw_update_cache(
+    path: &Path,
+    cache: &OpenclawUpdateCache,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }

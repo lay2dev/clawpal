@@ -183,8 +183,11 @@ pub(crate) fn resolve_profile_api_key_with_priority(
         .map(|(credential, priority, _)| (credential.secret, priority))
 }
 
-
-pub(crate) fn infer_auth_kind(provider: &str, secret: &str, fallback: InternalAuthKind) -> InternalAuthKind {
+pub(crate) fn infer_auth_kind(
+    provider: &str,
+    secret: &str,
+    fallback: InternalAuthKind,
+) -> InternalAuthKind {
     if provider.trim().eq_ignore_ascii_case("anthropic") {
         let lower = secret.trim().to_ascii_lowercase();
         if lower.starts_with("sk-ant-oat") || lower.starts_with("oauth_") {
@@ -689,7 +692,10 @@ pub(crate) fn try_parse_secret_ref(value: &Value) -> Option<SecretRef> {
     })
 }
 
-pub(crate) fn normalize_secret_provider_name(cfg: &Value, secret_ref: &SecretRef) -> Option<String> {
+pub(crate) fn normalize_secret_provider_name(
+    cfg: &Value,
+    secret_ref: &SecretRef,
+) -> Option<String> {
     if let Some(provider) = secret_ref.provider.as_deref().map(str::trim) {
         if !provider.is_empty() {
             return Some(provider.to_ascii_lowercase());
@@ -1096,7 +1102,9 @@ pub(crate) fn collect_secret_ref_env_names_from_auth_store(data: &Value) -> Vec<
 /// Extract the actual key/token from an agent auth-profiles entry.
 /// Handles different auth types: token, api_key, oauth, and SecretRef objects.
 #[allow(dead_code)]
-pub(crate) fn extract_credential_from_auth_entry(entry: &Value) -> Option<InternalProviderCredential> {
+pub(crate) fn extract_credential_from_auth_entry(
+    entry: &Value,
+) -> Option<InternalProviderCredential> {
     extract_credential_from_auth_entry_with_env(entry, &local_env_lookup)
 }
 

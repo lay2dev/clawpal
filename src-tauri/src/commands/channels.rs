@@ -327,7 +327,10 @@ pub(crate) fn is_channel_like_node(prefix: &str, obj: &serde_json::Map<String, V
     false
 }
 
-pub(crate) fn resolve_channel_type(prefix: &str, obj: &serde_json::Map<String, Value>) -> Option<String> {
+pub(crate) fn resolve_channel_type(
+    prefix: &str,
+    obj: &serde_json::Map<String, Value>,
+) -> Option<String> {
     obj.get("type")
         .and_then(Value::as_str)
         .map(str::to_string)

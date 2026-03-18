@@ -54,12 +54,12 @@ use clawpal_core::ssh::diagnostic::{
     from_any_error, SshDiagnosticReport, SshDiagnosticStatus, SshErrorCode, SshIntent, SshStage,
 };
 
-pub mod types;
-pub mod cli;
-pub mod version;
-pub mod discord;
 pub mod channels;
+pub mod cli;
 pub mod credentials;
+pub mod discord;
+pub mod types;
+pub mod version;
 
 pub mod agent;
 pub mod app_logs;
@@ -89,27 +89,23 @@ pub mod watchdog;
 pub mod watchdog_cmds;
 
 #[allow(unused_imports)]
-pub use types::*;
-#[allow(unused_imports)]
-pub use cli::*;
-#[allow(unused_imports)]
-pub use version::*;
-#[allow(unused_imports)]
-pub use discord::*;
-#[allow(unused_imports)]
-pub use channels::*;
-#[allow(unused_imports)]
-pub use credentials::*;
-#[allow(unused_imports)]
 pub use agent::*;
 #[allow(unused_imports)]
 pub use app_logs::*;
 #[allow(unused_imports)]
 pub use backup::*;
 #[allow(unused_imports)]
+pub use channels::*;
+#[allow(unused_imports)]
+pub use cli::*;
+#[allow(unused_imports)]
 pub use config::*;
 #[allow(unused_imports)]
+pub use credentials::*;
+#[allow(unused_imports)]
 pub use cron::*;
+#[allow(unused_imports)]
+pub use discord::*;
 #[allow(unused_imports)]
 pub use discover_local::*;
 #[allow(unused_imports)]
@@ -145,9 +141,13 @@ pub use sessions::*;
 #[allow(unused_imports)]
 pub use ssh::*;
 #[allow(unused_imports)]
+pub use types::*;
+#[allow(unused_imports)]
 pub use upgrade::*;
 #[allow(unused_imports)]
 pub use util::*;
+#[allow(unused_imports)]
+pub use version::*;
 #[allow(unused_imports)]
 pub use watchdog::*;
 #[allow(unused_imports)]

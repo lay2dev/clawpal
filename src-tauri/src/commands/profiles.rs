@@ -2086,7 +2086,9 @@ pub(crate) fn sync_main_auth_for_config(
     Ok(())
 }
 
-pub(crate) fn sync_main_auth_for_active_config(paths: &crate::models::OpenClawPaths) -> Result<(), String> {
+pub(crate) fn sync_main_auth_for_active_config(
+    paths: &crate::models::OpenClawPaths,
+) -> Result<(), String> {
     let cfg = read_openclaw_config(paths)?;
     sync_main_auth_for_config(paths, &cfg)
 }
@@ -2116,7 +2118,10 @@ mod model_profile_upsert_tests {
         }
     }
 
-    pub(crate) fn mk_paths(base_dir: PathBuf, clawpal_dir: PathBuf) -> crate::models::OpenClawPaths {
+    pub(crate) fn mk_paths(
+        base_dir: PathBuf,
+        clawpal_dir: PathBuf,
+    ) -> crate::models::OpenClawPaths {
         crate::models::OpenClawPaths {
             openclaw_dir: base_dir.clone(),
             config_path: base_dir.join("openclaw.json"),
@@ -2245,7 +2250,8 @@ mod model_profile_upsert_tests {
     }
 
     #[test]
-    pub(crate) fn resolve_key_from_local_auth_store_dir_reads_auth_json_when_profiles_file_missing() {
+    pub(crate) fn resolve_key_from_local_auth_store_dir_reads_auth_json_when_profiles_file_missing()
+    {
         let tmp_root =
             std::env::temp_dir().join(format!("clawpal-auth-store-test-{}", uuid::Uuid::new_v4()));
         let agent_dir = tmp_root.join("agents").join("main").join("agent");
@@ -2469,4 +2475,3 @@ pub(crate) fn resolve_full_api_key(profile_id: String) -> Result<String, String>
     }
     Ok(key)
 }
-

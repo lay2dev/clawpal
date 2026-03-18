@@ -503,7 +503,10 @@ pub(crate) fn analyze_sessions_sync() -> Result<Vec<AgentSessionAnalysis>, Strin
     Ok(results)
 }
 
-pub(crate) fn delete_sessions_by_ids_sync(agent_id: &str, session_ids: &[String]) -> Result<usize, String> {
+pub(crate) fn delete_sessions_by_ids_sync(
+    agent_id: &str,
+    session_ids: &[String],
+) -> Result<usize, String> {
     if agent_id.trim().is_empty() {
         return Err("agent id is required".into());
     }
@@ -900,4 +903,3 @@ pub(crate) fn clear_directory_contents(target: &Path) -> Result<usize, String> {
     }
     Ok(total)
 }
-

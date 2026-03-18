@@ -349,7 +349,11 @@ pub(crate) fn write_config_with_snapshot(
     write_json(&paths.config_path, next)
 }
 
-pub(crate) fn set_nested_value(root: &mut Value, path: &str, value: Option<Value>) -> Result<(), String> {
+pub(crate) fn set_nested_value(
+    root: &mut Value,
+    path: &str,
+    value: Option<Value>,
+) -> Result<(), String> {
     let path = path.trim().trim_matches('.');
     if path.is_empty() {
         return Err("invalid path".into());
@@ -413,4 +417,3 @@ pub(crate) fn set_agent_model_value(
     }
     Err(format!("agent not found: {agent_id}"))
 }
-

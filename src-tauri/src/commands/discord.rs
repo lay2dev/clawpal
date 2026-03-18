@@ -223,7 +223,9 @@ pub(crate) fn collect_discord_cache_guild_name_fallbacks(
     guild_names
 }
 
-pub(crate) fn parse_discord_cache_guild_name_fallbacks(cache_json: &str) -> HashMap<String, String> {
+pub(crate) fn parse_discord_cache_guild_name_fallbacks(
+    cache_json: &str,
+) -> HashMap<String, String> {
     let entries: Vec<DiscordGuildChannel> = serde_json::from_str(cache_json).unwrap_or_default();
     collect_discord_cache_guild_name_fallbacks(&entries)
 }

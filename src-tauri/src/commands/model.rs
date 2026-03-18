@@ -145,7 +145,10 @@ pub(crate) fn read_model_catalog_cache(path: &Path) -> Option<ModelCatalogProvid
     serde_json::from_str::<ModelCatalogProviderCache>(&text).ok()
 }
 
-pub(crate) fn save_model_catalog_cache(path: &Path, cache: &ModelCatalogProviderCache) -> Result<(), String> {
+pub(crate) fn save_model_catalog_cache(
+    path: &Path,
+    cache: &ModelCatalogProviderCache,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -157,7 +160,10 @@ pub(crate) fn model_catalog_cache_path(paths: &crate::models::OpenClawPaths) -> 
     paths.clawpal_dir.join("model-catalog-cache.json")
 }
 
-pub(crate) fn remote_model_catalog_cache_path(paths: &crate::models::OpenClawPaths, host_id: &str) -> PathBuf {
+pub(crate) fn remote_model_catalog_cache_path(
+    paths: &crate::models::OpenClawPaths,
+    host_id: &str,
+) -> PathBuf {
     let safe_host_id: String = host_id
         .chars()
         .map(|ch| {
@@ -570,7 +576,10 @@ pub(crate) fn collect_model_bindings(cfg: &Value, profiles: &[ModelProfile]) -> 
     out
 }
 
-pub(crate) fn find_profile_by_model(profiles: &[ModelProfile], value: Option<&str>) -> Option<String> {
+pub(crate) fn find_profile_by_model(
+    profiles: &[ModelProfile],
+    value: Option<&str>,
+) -> Option<String> {
     let value = value?;
     let normalized = normalize_model_ref(value);
     for profile in profiles {
@@ -634,4 +643,3 @@ pub(crate) fn resolve_model_provider_base_url(cfg: &Value, provider: &str) -> Op
                 })
         })
 }
-

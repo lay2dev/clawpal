@@ -1230,4 +1230,3 @@ impl RemoteAuthCache {
         None
     }
 }
-

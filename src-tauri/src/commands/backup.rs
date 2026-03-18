@@ -426,7 +426,11 @@ pub(crate) fn dir_size(path: &Path) -> u64 {
     total
 }
 
-pub(crate) fn restore_dir_recursive(src: &Path, dst: &Path, skip_dirs: &HashSet<&str>) -> Result<(), String> {
+pub(crate) fn restore_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    skip_dirs: &HashSet<&str>,
+) -> Result<(), String> {
     let entries = fs::read_dir(src).map_err(|e| format!("Failed to read backup dir: {e}"))?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -453,4 +457,3 @@ pub(crate) fn restore_dir_recursive(src: &Path, dst: &Path, skip_dirs: &HashSet<
     }
     Ok(())
 }
-

@@ -720,7 +720,9 @@ pub(crate) fn section_item_status_from_issue(issue: &RescuePrimaryIssue) -> Stri
     }
 }
 
-pub(crate) fn classify_rescue_check_section(check: &RescuePrimaryCheckItem) -> Option<&'static str> {
+pub(crate) fn classify_rescue_check_section(
+    check: &RescuePrimaryCheckItem,
+) -> Option<&'static str> {
     let id = check.id.to_ascii_lowercase();
     if id.contains("gateway") || id.contains("rescue.profile") || id == "field.port" {
         return Some("gateway");
@@ -801,7 +803,12 @@ pub(crate) fn has_unreadable_primary_config_issue(issues: &[RescuePrimaryIssue])
         .any(|issue| issue.code == "primary.config.unreadable")
 }
 
-pub(crate) fn config_item(id: &str, label: &str, status: &str, detail: String) -> RescuePrimarySectionItem {
+pub(crate) fn config_item(
+    id: &str,
+    label: &str,
+    status: &str,
+    detail: String,
+) -> RescuePrimarySectionItem {
     RescuePrimarySectionItem {
         id: id.to_string(),
         label: label.to_string(),
@@ -1280,7 +1287,9 @@ pub(crate) fn apply_doc_guidance_to_diagnosis(
     diagnosis
 }
 
-pub(crate) fn collect_local_rescue_runtime_checks(config: Option<&Value>) -> Vec<RescuePrimaryCheckItem> {
+pub(crate) fn collect_local_rescue_runtime_checks(
+    config: Option<&Value>,
+) -> Vec<RescuePrimaryCheckItem> {
     let mut checks = Vec::new();
     if let Ok(output) = run_openclaw_raw(&["agents", "list", "--json"]) {
         if let Some(json) = parse_json_from_openclaw_output(&output) {
@@ -2257,7 +2266,9 @@ pub(crate) async fn repair_primary_via_rescue_remote(
     })
 }
 
-pub(crate) fn resolve_local_rescue_profile_state(profile: &str) -> Result<(bool, Option<u16>), String> {
+pub(crate) fn resolve_local_rescue_profile_state(
+    profile: &str,
+) -> Result<(bool, Option<u16>), String> {
     let output = crate::cli_runner::run_openclaw(&[
         "--profile",
         profile,
@@ -2289,7 +2300,10 @@ pub(crate) fn build_rescue_bot_command_plan(
     )
 }
 
-pub(crate) fn command_failure_message(command: &[String], output: &OpenclawCommandOutput) -> String {
+pub(crate) fn command_failure_message(
+    command: &[String],
+    output: &OpenclawCommandOutput,
+) -> String {
     clawpal_core::doctor::command_failure_message(
         command,
         output.exit_code,
@@ -2320,7 +2334,9 @@ pub(crate) fn is_rescue_cleanup_noop(
     )
 }
 
-pub(crate) fn run_local_rescue_bot_command(command: Vec<String>) -> Result<RescueBotCommandResult, String> {
+pub(crate) fn run_local_rescue_bot_command(
+    command: Vec<String>,
+) -> Result<RescueBotCommandResult, String> {
     let output = run_openclaw_dynamic(&command)?;
     if is_gateway_status_command_output_incompatible(&output, &command) {
         let fallback = strip_gateway_status_json_flag(&command);
@@ -2356,7 +2372,9 @@ pub(crate) fn strip_gateway_status_json_flag(command: &[String]) -> Vec<String> 
         .collect()
 }
 
-pub(crate) fn run_local_primary_doctor_with_fallback(profile: &str) -> Result<OpenclawCommandOutput, String> {
+pub(crate) fn run_local_primary_doctor_with_fallback(
+    profile: &str,
+) -> Result<OpenclawCommandOutput, String> {
     let json_command = build_profile_command(profile, &["doctor", "--json", "--yes"]);
     let output = run_openclaw_dynamic(&json_command)?;
     if output.exit_code != 0
