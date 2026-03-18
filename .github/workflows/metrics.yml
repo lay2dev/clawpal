@@ -92,7 +92,7 @@ jobs:
           done
           GZIP_KB=$(( GZIP_BYTES / 1024 ))
 
-          LIMIT_KB=512
+          LIMIT_KB=350
           if [ "$GZIP_KB" -gt "$LIMIT_KB" ]; then
             PASS="false"
           else
