@@ -77,6 +77,7 @@ pub mod cli_runner;
 pub mod commands;
 pub mod config_io;
 pub mod doctor;
+pub mod doctor_temp_store;
 pub mod history;
 pub mod install;
 pub mod json5_extract;

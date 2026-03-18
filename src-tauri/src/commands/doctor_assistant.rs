@@ -1,4 +1,8 @@
 use super::*;
+
+use crate::doctor_temp_store::{
+    self, DoctorTempGatewaySessionRecord, DoctorTempGatewaySessionStore,
+};
 use crate::json5_extract::extract_json5_top_level_value;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -26,25 +30,6 @@ struct DoctorAssistantProgressEvent {
     attempt: usize,
     resolved_issue_id: Option<String>,
     resolved_issue_label: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DoctorTempGatewaySessionRecord {
-    instance_id: String,
-    profile: String,
-    port: u16,
-    created_at: String,
-    status: String,
-    main_profile: String,
-    main_port: u16,
-    last_step: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DoctorTempGatewaySessionStore {
-    sessions: Vec<DoctorTempGatewaySessionRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,67 +75,6 @@ fn emit_doctor_assistant_progress(
         resolved_issue_label,
     };
     let _ = app.emit("doctor:assistant-progress", payload);
-}
-
-fn doctor_temp_gateway_store_path(paths: &crate::models::OpenClawPaths) -> std::path::PathBuf {
-    paths.clawpal_dir.join("doctor-temp-gateways.json")
-}
-
-fn load_doctor_temp_gateway_store(
-    paths: &crate::models::OpenClawPaths,
-) -> DoctorTempGatewaySessionStore {
-    crate::config_io::read_json(&doctor_temp_gateway_store_path(paths)).unwrap_or_default()
-}
-
-fn save_doctor_temp_gateway_store(
-    paths: &crate::models::OpenClawPaths,
-    store: &DoctorTempGatewaySessionStore,
-) -> Result<(), String> {
-    let path = doctor_temp_gateway_store_path(paths);
-    if store.sessions.is_empty() {
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
-    } else {
-        crate::config_io::write_json(&path, store)
-    }
-}
-
-fn upsert_doctor_temp_gateway_record(
-    paths: &crate::models::OpenClawPaths,
-    record: DoctorTempGatewaySessionRecord,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| !(item.instance_id == record.instance_id && item.profile == record.profile));
-    store.sessions.push(record);
-    save_doctor_temp_gateway_store(paths, &store)
-}
-
-fn remove_doctor_temp_gateway_record(
-    paths: &crate::models::OpenClawPaths,
-    instance_id: &str,
-    profile: &str,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| !(item.instance_id == instance_id && item.profile == profile));
-    save_doctor_temp_gateway_store(paths, &store)
-}
-
-fn remove_doctor_temp_gateway_records_for_instance(
-    paths: &crate::models::OpenClawPaths,
-    instance_id: &str,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| item.instance_id != instance_id);
-    save_doctor_temp_gateway_store(paths, &store)
 }
 
 fn doctor_assistant_issue_label(issue: &RescuePrimaryIssue) -> String {
@@ -2369,8 +2293,7 @@ fn cleanup_local_stale_temp_gateways(
         );
     }
     let _ = prune_local_temp_gateway_profile_roots(&paths.openclaw_dir)?;
-    let _ =
-        remove_doctor_temp_gateway_records_for_instance(paths, DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL);
+    let _ = doctor_temp_store::remove_for_instance(paths, DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL);
     Ok(profiles.len())
 }
 
@@ -2396,7 +2319,7 @@ async fn cleanup_remote_stale_temp_gateways(
         .await;
     }
     let _ = prune_remote_temp_gateway_profile_roots(pool, host_id, &main_root).await?;
-    let _ = remove_doctor_temp_gateway_records_for_instance(paths, host_id);
+    let _ = doctor_temp_store::remove_for_instance(paths, host_id);
     Ok(profiles.len())
 }
 
@@ -4232,7 +4155,7 @@ pub async fn repair_doctor_assistant(
                         None,
                         None,
                     );
-                    upsert_doctor_temp_gateway_record(
+                    doctor_temp_store::upsert(
                         &paths,
                         build_temp_gateway_record(
                             DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
@@ -4283,7 +4206,7 @@ pub async fn repair_doctor_assistant(
                             None,
                             None,
                         );
-                        upsert_doctor_temp_gateway_record(
+                        doctor_temp_store::upsert(
                             &paths,
                             build_temp_gateway_record(
                                 DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
@@ -4355,7 +4278,7 @@ pub async fn repair_doctor_assistant(
                         &mut steps,
                         "temp.cleanup",
                     );
-                    let _ = remove_doctor_temp_gateway_record(
+                    let _ = doctor_temp_store::remove_record(
                         &paths,
                         DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
                         &temp_profile,
@@ -4584,7 +4507,7 @@ pub async fn remote_repair_doctor_assistant(
                 None,
                 None,
             );
-            upsert_doctor_temp_gateway_record(
+            doctor_temp_store::upsert(
                 &paths,
                 build_temp_gateway_record(
                     &host_id,
@@ -4711,7 +4634,7 @@ pub async fn remote_repair_doctor_assistant(
                         None,
                     );
                 }
-                upsert_doctor_temp_gateway_record(
+                doctor_temp_store::upsert(
                     &paths,
                     build_temp_gateway_record(
                         &host_id,
@@ -4817,7 +4740,7 @@ pub async fn remote_repair_doctor_assistant(
                 "temp.cleanup",
             )
             .await;
-            let _ = remove_doctor_temp_gateway_record(&paths, &host_id, &temp_profile);
+            let _ = doctor_temp_store::remove_record(&paths, &host_id, &temp_profile);
             if let Err(error) = cleanup_result {
                 append_step(
                     &mut steps,
@@ -4996,6 +4919,10 @@ fn resolve_main_port_from_diagnosis(diagnosis: &RescuePrimaryDiagnosisResult) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::doctor_temp_store::{
+        self, DoctorTempGatewaySessionRecord, DoctorTempGatewaySessionStore,
+    };
     use crate::models::OpenClawPaths;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -5467,9 +5394,9 @@ mod tests {
     fn save_doctor_temp_gateway_store_deletes_file_when_empty() {
         let temp = TempDirGuard::new("store-empty");
         let paths = make_paths(&temp);
-        let store_path = doctor_temp_gateway_store_path(&paths);
+        let store_path = doctor_temp_store::store_path(&paths);
 
-        save_doctor_temp_gateway_store(&paths, &DoctorTempGatewaySessionStore::default()).unwrap();
+        doctor_temp_store::save(&paths, &DoctorTempGatewaySessionStore::default()).unwrap();
 
         assert!(!store_path.exists());
     }
@@ -5478,13 +5405,13 @@ mod tests {
     fn remove_doctor_temp_gateway_record_deletes_store_when_last_record_removed() {
         let temp = TempDirGuard::new("store-remove-last");
         let paths = make_paths(&temp);
-        let store_path = doctor_temp_gateway_store_path(&paths);
+        let store_path = doctor_temp_store::store_path(&paths);
         let record = sample_record("ssh:hetzner", &temp_profile("owned"));
 
-        upsert_doctor_temp_gateway_record(&paths, record.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, record.clone()).unwrap();
         assert!(store_path.exists());
 
-        remove_doctor_temp_gateway_record(&paths, &record.instance_id, &record.profile).unwrap();
+        doctor_temp_store::remove_record(&paths, &record.instance_id, &record.profile).unwrap();
 
         assert!(!store_path.exists());
     }
@@ -5496,12 +5423,12 @@ mod tests {
         let owned = sample_record("ssh:hetzner", &temp_profile("owned"));
         let other = sample_record("ssh:other", &temp_profile("other"));
 
-        upsert_doctor_temp_gateway_record(&paths, owned.clone()).unwrap();
-        upsert_doctor_temp_gateway_record(&paths, other.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, owned.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, other.clone()).unwrap();
 
-        remove_doctor_temp_gateway_records_for_instance(&paths, "ssh:hetzner").unwrap();
+        doctor_temp_store::remove_for_instance(&paths, "ssh:hetzner").unwrap();
 
-        let store = load_doctor_temp_gateway_store(&paths);
+        let store = doctor_temp_store::load(&paths);
         assert_eq!(store.sessions.len(), 1);
         assert_eq!(store.sessions[0].instance_id, "ssh:other");
         assert_eq!(store.sessions[0].profile, other.profile);
