@@ -34,9 +34,18 @@
 
 | 指标 | 基线值 | 目标 | 量化方式 | CI Gate |
 |------|--------|------|----------|---------|
-| commands/mod.rs 行数 | 8,842 | ≤ 2,000 | `wc -l` | — |
-| App.tsx 行数 | 1,787 | ≤ 500 | `wc -l` | — |
-| 单文件 > 500 行数量 | 未统计 | 趋势下降 | 脚本统计 | — |
+| commands/mod.rs 行数 | 230 | ≤ 2,000 | `wc -l` | ✅ |
+| App.tsx 行数 | 686 | ≤ 500 | `wc -l` | ✅ |
+| doctor_assistant.rs 行数 | 5,863 | ≤ 3,000 | `wc -l` | ✅ |
+| rescue.rs 行数 | 3,402 | ≤ 2,000 | `wc -l` | ✅ |
+| profiles.rs 行数 | 2,477 | ≤ 1,500 | `wc -l` | ✅ |
+| cli_runner.rs 行数 | 1,915 | ≤ 1,200 | `wc -l` | ✅ |
+| credentials.rs 行数 | 1,629 | ≤ 1,000 | `wc -l` | ✅ |
+| Settings.tsx 行数 | 1,107 | ≤ 800 | `wc -l` | ✅ |
+| use-api.ts 行数 | 1,043 | ≤ 800 | `wc -l` | ✅ |
+| Home.tsx 行数 | 963 | ≤ 700 | `wc -l` | ✅ |
+| StartPage.tsx 行数 | 946 | ≤ 700 | `wc -l` | ✅ |
+| 单文件 > 500 行数量 | 28 | ≤ 28 (不得增加) | 脚本统计 | ✅ |
 
 ## 2. 运行时性能
 
@@ -95,6 +104,7 @@ pub fn get_process_metrics() -> Result<ProcessMetrics, String> {
 | Windows x64 包体积 | 16.3 MB | ≤ 20 MB | CI build artifact | ✅ |
 | Linux x64 包体积 | 103.8 MB | ≤ 110 MB | CI build artifact | ✅ |
 | 前端 JS bundle 大小 (gzip) | 待统计 | ≤ 500 KB | `vite build` + `gzip -k` | ✅ |
+| 前端 JS initial load (gzip) | 待统计 | ≤ 200 KB | `vite build` 初始加载 chunks | ✅ |
 
 **CI Gate 方案**:
 
@@ -133,7 +143,9 @@ pub fn get_process_metrics() -> Result<ProcessMetrics, String> {
 
 | 指标 | 基线值 | 目标 | 量化方式 | CI Gate |
 |------|--------|------|----------|---------|
-| 本地 command P95 耗时 | 待埋点 | ≤ 100ms | Rust `Instant::now()` | ✅ |
+| 本地 command P50 耗时 | 待埋点 | ≤ 50ms (50,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
+| 本地 command P95 耗时 | 待埋点 | ≤ 100ms (100,000µs) | Rust `Instant::now()` (微秒精度) | ✅ |
+| 本地 command Max 耗时 | 待埋点 | ≤ 200ms (200,000µs) | Rust `Instant::now()` (微秒精度) | ℹ️ |
 | SSH command P95 耗时 | 待埋点 | ≤ 2s | 含网络 RTT | — |
 | Doctor 全量诊断耗时 | 待埋点 | ≤ 5s | 端到端计时 | — |
 | 配置文件读写耗时 | 待埋点 | ≤ 50ms | `Instant::now()` | — |
