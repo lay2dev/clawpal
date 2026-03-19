@@ -11,7 +11,8 @@ RUN apt-get update && \
 RUN echo "root:clawpal-perf-e2e" | chpasswd && \
     sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "Port 2299" >> /etc/ssh/sshd_config
 
 # Install Node.js + openclaw
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -27,5 +28,5 @@ COPY tests/e2e/perf/seed/auth-profiles.json /root/.openclaw/agents/main/agent/au
 COPY tests/e2e/perf/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22
+EXPOSE 2299 18789
 CMD ["/entrypoint.sh"]
