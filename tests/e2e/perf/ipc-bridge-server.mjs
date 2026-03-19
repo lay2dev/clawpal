@@ -63,8 +63,8 @@ const agents = (cfg.agents?.list ?? []).map((a) => ({
 }));
 
 const configSnapshot = {
-  globalDefaultModel: cfg.agents?.defaults?.model ?? cfg.defaults?.model ?? null,
-  fallbackModels: cfg.agents?.defaults?.fallbackModels ?? cfg.defaults?.fallbackModels ?? [],
+  globalDefaultModel: cfg.agents?.defaults?.model?.primary ?? cfg.agents?.defaults?.model ?? null,
+  fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? cfg.agents?.defaults?.fallbackModels ?? [],
   agents,
 };
 
@@ -85,10 +85,19 @@ const runtimeSnapshot = {
 const statusExtra = { openclawVersion: versionRaw };
 
 // Build model profiles from CLI output, falling back to raw config
-const modelsSource = (models && typeof models === "object") ? models : (cfg.models || {});
-const modelProfiles = Object.entries(modelsSource).map(([id, m]) => ({
-  id, provider: m.provider, model: m.model, enabled: true,
-}));
+const modelsSource = (models && typeof models === "object")
+  ? models
+  : (cfg.agents?.defaults?.models || cfg.models || {});
+const modelProfiles = Object.entries(modelsSource).map(([id, m]) => {
+  // Model id format is "provider/model" — extract parts
+  const parts = id.split("/");
+  return {
+    id,
+    provider: m?.provider || parts[0] || "unknown",
+    model: m?.model || parts.slice(1).join("/") || id,
+    enabled: true,
+  };
+});
 
 const channelsConfig = { channels: channels?.list ?? [], bindings: channels?.bindings ?? [] };
 const cronConfig = { jobs: cron?.jobs ?? [] };
