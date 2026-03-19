@@ -387,9 +387,7 @@ jobs:
         run: |
           node tests/e2e/perf/ipc-bridge-server.mjs &
           for i in $(seq 1 60); do
-            RESP=$(curl -s http://localhost:3399/invoke -X POST \
-              -H 'Content-Type: application/json' \
-              -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null)
+            RESP=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null || true)
             if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
             sleep 1
           done
