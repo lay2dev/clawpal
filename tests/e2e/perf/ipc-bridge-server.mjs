@@ -19,13 +19,25 @@ const SSH_PORT = process.env.CLAWPAL_PERF_SSH_PORT || "2299";
 const SSH_PREFIX = `sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p ${SSH_PORT} root@localhost`;
 const MODE = process.env.BRIDGE_MODE || "live";
 
+// Establish a persistent SSH ControlMaster connection to avoid per-call overhead
+const CONTROL_PATH = "/tmp/oc-perf-ssh-ctl";
+try {
+  execSync(
+    `${SSH_PREFIX} -o ControlMaster=yes -o ControlPath=${CONTROL_PATH} -o ControlPersist=300 -fN`,
+    { timeout: 10_000 },
+  );
+  console.log("SSH ControlMaster established");
+} catch (e) {
+  console.warn("ControlMaster setup failed, falling back to per-call SSH:", e.message);
+}
+
 function ssh(cmd, timeoutMs = 10_000) {
   try {
-    const escaped = cmd.replace(/'/g, "'\\''");
-    return execSync(`${SSH_PREFIX} '${escaped}'`, {
-      encoding: "utf-8",
-      timeout: timeoutMs,
-    }).trim();
+    const escaped = cmd.replace(/\'/g, "'\\''");
+    return execSync(
+      `${SSH_PREFIX} -o ControlPath=${CONTROL_PATH} '${escaped}'`,
+      { encoding: "utf-8", timeout: timeoutMs },
+    ).trim();
   } catch {
     return null;
   }

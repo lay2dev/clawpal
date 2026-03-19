@@ -410,6 +410,7 @@ jobs:
           echo "$VERIFY" | jq -e '.ok == true and .result != null' || { echo "Bridge readiness failed"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
+          PERF_SETTLED_GATE_MS: "15000"
 
       - name: Start Vite dev server
         run: |
