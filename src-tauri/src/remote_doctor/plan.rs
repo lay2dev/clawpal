@@ -91,7 +91,11 @@ pub(crate) async fn execute_clawpal_doctor_command<R: Runtime>(
                 pool,
                 target_location,
                 instance_id,
-                &["sh".into(), "-lc".into(), "command -v openclaw || true".into()],
+                &[
+                    "sh".into(),
+                    "-lc".into(),
+                    "command -v openclaw || true".into(),
+                ],
             )
             .await?;
             Ok(json!({
@@ -267,7 +271,11 @@ pub(crate) async fn execute_command(
     let result = match target_location {
         TargetLocation::LocalOpenclaw => {
             if argv[0] == "openclaw" {
-                let arg_refs = argv.iter().skip(1).map(String::as_str).collect::<Vec<&str>>();
+                let arg_refs = argv
+                    .iter()
+                    .skip(1)
+                    .map(String::as_str)
+                    .collect::<Vec<&str>>();
                 let output = run_openclaw(&arg_refs)?;
                 CommandResult {
                     argv: argv.to_vec(),
@@ -299,7 +307,11 @@ pub(crate) async fn execute_command(
         TargetLocation::RemoteOpenclaw => {
             let host_id = primary_remote_target_host_id(instance_id)?;
             if argv[0] == "openclaw" {
-                let arg_refs = argv.iter().skip(1).map(String::as_str).collect::<Vec<&str>>();
+                let arg_refs = argv
+                    .iter()
+                    .skip(1)
+                    .map(String::as_str)
+                    .collect::<Vec<&str>>();
                 let output = run_openclaw_remote(pool, &host_id, &arg_refs).await?;
                 CommandResult {
                     argv: argv.to_vec(),
@@ -310,7 +322,9 @@ pub(crate) async fn execute_command(
                     timed_out: false,
                 }
             } else {
-                let output = pool.exec_login(&host_id, &build_shell_command(argv)).await?;
+                let output = pool
+                    .exec_login(&host_id, &build_shell_command(argv))
+                    .await?;
                 CommandResult {
                     argv: argv.to_vec(),
                     exit_code: Some(output.exit_code as i32),
@@ -365,7 +379,10 @@ pub(crate) fn validate_plan_command_argv(argv: &[String]) -> Result<(), String> 
     if supported {
         Ok(())
     } else {
-        Err(format!("Unsupported openclaw plan command: {}", argv.join(" ")))
+        Err(format!(
+            "Unsupported openclaw plan command: {}",
+            argv.join(" ")
+        ))
     }
 }
 
@@ -391,7 +408,9 @@ pub(crate) fn command_result_stdout(value: &Value) -> String {
         .get("stdout")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+        .unwrap_or_else(|| {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        })
 }
 
 pub(crate) async fn execute_plan_command<R: Runtime>(

@@ -4,8 +4,12 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::config::diagnosis_context;
-use super::types::{CommandResult, ConfigExcerptContext, PlanKind, RemoteDoctorProtocol, TargetLocation};
-use crate::commands::{agent::create_agent, agent::setup_agent_identity, RescuePrimaryDiagnosisResult};
+use super::types::{
+    CommandResult, ConfigExcerptContext, PlanKind, RemoteDoctorProtocol, TargetLocation,
+};
+use crate::commands::{
+    agent::create_agent, agent::setup_agent_identity, RescuePrimaryDiagnosisResult,
+};
 use crate::config_io::read_openclaw_config;
 use crate::models::resolve_paths;
 
@@ -318,7 +322,9 @@ mod tests {
             &ConfigExcerptContext {
                 config_excerpt: serde_json::Value::Null,
                 config_excerpt_raw: Some("{\n  ddd\n}".into()),
-                config_parse_error: Some("Failed to parse target config: key must be a string".into()),
+                config_parse_error: Some(
+                    "Failed to parse target config: key must be a string".into(),
+                ),
             },
             &[],
         );
@@ -376,8 +382,7 @@ mod tests {
         assert_eq!(remote_doctor_agent_id(), "clawpal-remote-doctor");
         assert!(!remote_doctor_agent_session_key("sess-1").contains("main"));
         assert!(
-            remote_doctor_agent_session_key("sess-1")
-                .starts_with("agent:clawpal-remote-doctor:")
+            remote_doctor_agent_session_key("sess-1").starts_with("agent:clawpal-remote-doctor:")
         );
     }
 
@@ -437,7 +442,10 @@ mod tests {
         for file_name in ["IDENTITY.md", "USER.md", "BOOTSTRAP.md", "AGENTS.md"] {
             let content = std::fs::read_to_string(std::path::Path::new(&workspace).join(file_name))
                 .unwrap_or_else(|error| panic!("read {file_name}: {error}"));
-            assert!(!content.trim().is_empty(), "{file_name} should not be empty");
+            assert!(
+                !content.trim().is_empty(),
+                "{file_name} should not be empty"
+            );
         }
         let _ = std::fs::remove_dir_all(&temp_root);
     }
@@ -445,8 +453,12 @@ mod tests {
     #[test]
     fn only_agent_planner_protocol_requires_bridge() {
         assert!(protocol_requires_bridge(RemoteDoctorProtocol::AgentPlanner));
-        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::ClawpalServer));
-        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::LegacyDoctor));
+        assert!(!protocol_requires_bridge(
+            RemoteDoctorProtocol::ClawpalServer
+        ));
+        assert!(!protocol_requires_bridge(
+            RemoteDoctorProtocol::LegacyDoctor
+        ));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use super::session::append_session_log;
 use super::types::{
-    diagnosis_issue_summaries, ConfigExcerptContext, TargetLocation, StoredRemoteDoctorIdentity,
+    diagnosis_issue_summaries, ConfigExcerptContext, StoredRemoteDoctorIdentity, TargetLocation,
 };
 use crate::commands::preferences::load_app_preferences_from_paths;
 use crate::commands::{
@@ -77,7 +77,8 @@ pub(crate) fn remote_doctor_identity_path() -> PathBuf {
         .join("device-identity.json")
 }
 
-pub(crate) fn load_or_create_remote_doctor_identity() -> Result<StoredRemoteDoctorIdentity, String> {
+pub(crate) fn load_or_create_remote_doctor_identity() -> Result<StoredRemoteDoctorIdentity, String>
+{
     let path = remote_doctor_identity_path();
     if let Ok(text) = std::fs::read_to_string(&path) {
         if let Ok(identity) = serde_json::from_str::<StoredRemoteDoctorIdentity>(&text) {
@@ -212,9 +213,7 @@ pub(crate) fn diagnosis_missing_rescue_profile(diagnosis: &RescuePrimaryDiagnosi
         .any(|issue| issue.code == "rescue.profile.missing")
 }
 
-pub(crate) fn diagnosis_unhealthy_rescue_gateway(
-    diagnosis: &RescuePrimaryDiagnosisResult,
-) -> bool {
+pub(crate) fn diagnosis_unhealthy_rescue_gateway(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
     diagnosis
         .issues
         .iter()
@@ -384,9 +383,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::*;
-    use crate::cli_runner::{
-        set_active_clawpal_data_override, set_active_openclaw_home_override,
-    };
+    use crate::cli_runner::{set_active_clawpal_data_override, set_active_openclaw_home_override};
 
     fn override_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

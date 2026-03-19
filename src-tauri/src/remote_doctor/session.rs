@@ -125,7 +125,10 @@ mod tests {
 
         set_active_clawpal_data_override(None).expect("clear clawpal override");
 
-        let log_path = clawpal_dir.join("doctor").join("remote").join("sess-1.jsonl");
+        let log_path = clawpal_dir
+            .join("doctor")
+            .join("remote")
+            .join("sess-1.jsonl");
         let log_text = std::fs::read_to_string(&log_path).expect("read session log");
         assert!(log_text.contains("\"event\":\"hello\""));
 
@@ -156,13 +159,8 @@ mod tests {
         assert_eq!(completed.last_command, last_command);
         assert!(completed.latest_diagnosis_healthy);
 
-        let warning = result_for_completion_with_warnings(
-            "sess-2",
-            5,
-            PlanKind::Repair,
-            None,
-            "warning",
-        );
+        let warning =
+            result_for_completion_with_warnings("sess-2", 5, PlanKind::Repair, None, "warning");
         assert_eq!(warning.session_id, "sess-2");
         assert_eq!(warning.round, 5);
         assert_eq!(warning.last_plan_kind, "repair");

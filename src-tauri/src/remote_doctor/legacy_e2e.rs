@@ -18,8 +18,7 @@ use super::config::{
 use super::legacy::ensure_rescue_profile_ready;
 use super::plan::request_plan;
 use super::repair_loops::{
-    run_clawpal_server_repair_loop, run_remote_doctor_repair_loop,
-    start_remote_doctor_repair_impl,
+    run_clawpal_server_repair_loop, run_remote_doctor_repair_loop, start_remote_doctor_repair_impl,
 };
 use super::types::{PlanCommand, PlanKind, PlanResponse, TargetLocation};
 use crate::cli_runner::{set_active_clawpal_data_override, set_active_openclaw_home_override};
@@ -223,7 +222,14 @@ fn cleanup_e2e_container() {
 fn build_e2e_image() -> Result<(), String> {
     let dockerfile = E2E_DOCKERFILE.replace("ROOTPASS", E2E_ROOT_PASSWORD);
     let output = Command::new("docker")
-        .args(["build", "-t", &format!("{E2E_CONTAINER_NAME}:latest"), "-f", "-", "."])
+        .args([
+            "build",
+            "-t",
+            &format!("{E2E_CONTAINER_NAME}:latest"),
+            "-f",
+            "-",
+            ".",
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -321,7 +327,8 @@ async fn remote_doctor_docker_e2e_loop_completes() {
     let _cleanup = Cleanup;
     wait_for_ssh(30).expect("ssh should become available");
 
-    let temp_root = std::env::temp_dir().join(format!("clawpal-remote-doctor-e2e-{}", Uuid::new_v4()));
+    let temp_root =
+        std::env::temp_dir().join(format!("clawpal-remote-doctor-e2e-{}", Uuid::new_v4()));
     let clawpal_dir = temp_root.join(".clawpal");
     create_dir_all(&clawpal_dir).expect("create clawpal dir");
     set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
@@ -390,7 +397,10 @@ async fn remote_doctor_docker_e2e_loop_completes() {
                         success: true,
                     })
                 }
-                _ => Err(format!("unexpected planner request: {:?} round {}", kind, round)),
+                _ => Err(format!(
+                    "unexpected planner request: {:?} round {}",
+                    kind, round
+                )),
             }
         },
     )
@@ -401,10 +411,16 @@ async fn remote_doctor_docker_e2e_loop_completes() {
     assert!(result.latest_diagnosis_healthy);
     assert_eq!(result.round, 2);
 
-    let marker_result = pool.exec(&cfg.id, &format!("test -f {marker}")).await.expect("marker check");
+    let marker_result = pool
+        .exec(&cfg.id, &format!("test -f {marker}"))
+        .await
+        .expect("marker check");
     assert_eq!(marker_result.exit_code, 0);
 
-    let log_path = clawpal_dir.join("doctor").join("remote").join(format!("{session_id}.jsonl"));
+    let log_path = clawpal_dir
+        .join("doctor")
+        .join("remote")
+        .join(format!("{session_id}.jsonl"));
     let log_text = std::fs::read_to_string(&log_path).expect("read remote doctor log");
     assert!(log_text.contains("\"planKind\":\"detect\""));
     assert!(log_text.contains("\"planKind\":\"repair\""));
@@ -472,7 +488,8 @@ async fn remote_doctor_live_gateway_uses_configured_url_and_token() {
     let app = mock_app();
     let app_handle = app.handle().clone();
     app_handle.manage(SshConnectionPool::new());
-    let temp_root = std::env::temp_dir().join(format!("clawpal-remote-doctor-live-{}", Uuid::new_v4()));
+    let temp_root =
+        std::env::temp_dir().join(format!("clawpal-remote-doctor-live-{}", Uuid::new_v4()));
     let clawpal_dir = temp_root.join(".clawpal");
     create_dir_all(&clawpal_dir).expect("create clawpal dir");
     set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
@@ -525,7 +542,10 @@ async fn remote_doctor_live_gateway_uses_configured_url_and_token() {
                 )
                 .await
                 .expect("request clawpal-server remote repair plan");
-            let plan_id = response.get("planId").and_then(|value| value.as_str()).unwrap_or_default();
+            let plan_id = response
+                .get("planId")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
             assert!(!plan_id.trim().is_empty());
             let steps = response
                 .get("steps")
@@ -770,9 +790,12 @@ async fn remote_doctor_live_gateway_repairs_unreadable_remote_config() {
     let cfg = crate::commands::ssh::upsert_ssh_host(e2e_host_config()).expect("save ssh host");
     let pool = app_handle.state::<SshConnectionPool>();
     pool.connect(&cfg).await.expect("ssh connect");
-    pool.exec_login(&cfg.id, "cat > ~/.openclaw/openclaw.json <<'EOF'\n{\n  ddd\n}\nEOF")
-        .await
-        .expect("corrupt remote config");
+    pool.exec_login(
+        &cfg.id,
+        "cat > ~/.openclaw/openclaw.json <<'EOF'\n{\n  ddd\n}\nEOF",
+    )
+    .await
+    .expect("corrupt remote config");
 
     let result = start_remote_doctor_repair_impl(
         app_handle.clone(),
@@ -790,7 +813,11 @@ async fn remote_doctor_live_gateway_repairs_unreadable_remote_config() {
         .exec_login(&cfg.id, "python3 - <<'PY'\nimport json, pathlib\njson.load(open(pathlib.Path.home()/'.openclaw'/'openclaw.json'))\nprint('ok')\nPY")
         .await
         .expect("read repaired config");
-    assert_eq!(repaired.exit_code, 0, "repaired config should be valid JSON: {}", repaired.stderr);
+    assert_eq!(
+        repaired.exit_code, 0,
+        "repaired config should be valid JSON: {}",
+        repaired.stderr
+    );
     assert_eq!(repaired.stdout.trim(), "ok");
 
     set_active_clawpal_data_override(None).expect("clear clawpal data");

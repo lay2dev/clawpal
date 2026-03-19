@@ -3,22 +3,19 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::config::{
-    append_diagnosis_log,
-    build_gateway_credentials as remote_doctor_gateway_credentials,
-    diagnosis_missing_rescue_profile, diagnosis_unhealthy_rescue_gateway,
-    primary_remote_target_host_id, remote_target_host_id_candidates, run_rescue_diagnosis,
-};
 use super::agent::{
     build_agent_plan_prompt, remote_doctor_agent_id, remote_doctor_agent_session_key,
 };
-use super::plan::{
-    execute_command, execute_invoke_payload, parse_plan_response,
+use super::config::{
+    append_diagnosis_log, build_gateway_credentials as remote_doctor_gateway_credentials,
+    diagnosis_missing_rescue_profile, diagnosis_unhealthy_rescue_gateway,
+    primary_remote_target_host_id, remote_target_host_id_candidates, run_rescue_diagnosis,
 };
-use super::session::{append_session_log as append_remote_doctor_log, emit_session_progress as emit_progress};
-use super::types::{
-    CommandResult, ConfigExcerptContext, PlanKind, PlanResponse, TargetLocation,
+use super::plan::{execute_command, execute_invoke_payload, parse_plan_response};
+use super::session::{
+    append_session_log as append_remote_doctor_log, emit_session_progress as emit_progress,
 };
+use super::types::{CommandResult, ConfigExcerptContext, PlanKind, PlanResponse, TargetLocation};
 use crate::bridge_client::BridgeClient;
 use crate::commands::{manage_rescue_bot, remote_manage_rescue_bot, RescuePrimaryDiagnosisResult};
 use crate::node_client::NodeClient;
@@ -424,7 +421,10 @@ fn extract_json_block(text: &str) -> Option<&str> {
     clawpal_core::doctor::extract_json_from_output(text)
 }
 
-pub(crate) fn parse_agent_plan_response(kind: PlanKind, text: &str) -> Result<PlanResponse, String> {
+pub(crate) fn parse_agent_plan_response(
+    kind: PlanKind,
+    text: &str,
+) -> Result<PlanResponse, String> {
     let json_block = extract_json_block(text)
         .ok_or_else(|| format!("Remote doctor agent did not return JSON: {text}"))?;
     let value: Value = serde_json::from_str(json_block)
@@ -585,5 +585,4 @@ mod tests {
         assert!(rendered
             .contains(&"openclaw --profile rescue config get gateway.port --json".to_string()));
     }
-
 }

@@ -10,9 +10,8 @@ use super::agent::{
 };
 use super::config::{
     append_diagnosis_log, build_gateway_credentials, config_excerpt_log_summary,
-    diagnosis_has_only_non_auto_fixable_issues, diagnosis_is_healthy,
-    empty_config_excerpt_context, empty_diagnosis, load_gateway_config, read_target_config_raw,
-    run_rescue_diagnosis,
+    diagnosis_has_only_non_auto_fixable_issues, diagnosis_is_healthy, empty_config_excerpt_context,
+    empty_diagnosis, load_gateway_config, read_target_config_raw, run_rescue_diagnosis,
 };
 use super::legacy::{
     ensure_agent_bridge_connected, ensure_remote_target_connected, parse_agent_plan_response,
@@ -20,9 +19,8 @@ use super::legacy::{
 };
 use super::plan::{
     agent_plan_step_types, apply_config_set, apply_config_unset, execute_command,
-    execute_plan_command, plan_command_failure_message,
-    report_clawpal_server_final_result, report_clawpal_server_step_result,
-    request_clawpal_server_plan, request_plan,
+    execute_plan_command, plan_command_failure_message, report_clawpal_server_final_result,
+    report_clawpal_server_step_result, request_clawpal_server_plan, request_plan,
 };
 use super::session::{
     append_session_log, emit_session_progress, result_for_completion,
@@ -397,13 +395,23 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
                         None,
                     );
                     apply_config_set(&mut current_config, path, value)?;
-                    super::config::write_target_config(app, target_location, instance_id, &current_config).await?;
-                    super::config::restart_target_gateway(app, target_location, instance_id).await?;
+                    super::config::write_target_config(
+                        app,
+                        target_location,
+                        instance_id,
+                        &current_config,
+                    )
+                    .await?;
+                    super::config::restart_target_gateway(app, target_location, instance_id)
+                        .await?;
                     result.argv = vec!["configSet".into(), path.into()];
                     result.stdout = format!("Updated {path}");
                 }
                 "configUnset" => {
-                    let path = step.path.as_deref().ok_or("configUnset step missing path")?;
+                    let path = step
+                        .path
+                        .as_deref()
+                        .ok_or("configUnset step missing path")?;
                     emit_session_progress(
                         Some(app),
                         session_id,
@@ -414,8 +422,15 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
                         None,
                     );
                     apply_config_unset(&mut current_config, path)?;
-                    super::config::write_target_config(app, target_location, instance_id, &current_config).await?;
-                    super::config::restart_target_gateway(app, target_location, instance_id).await?;
+                    super::config::write_target_config(
+                        app,
+                        target_location,
+                        instance_id,
+                        &current_config,
+                    )
+                    .await?;
+                    super::config::restart_target_gateway(app, target_location, instance_id)
+                        .await?;
                     result.argv = vec!["configUnset".into(), path.into()];
                     result.stdout = format!("Removed {path}");
                 }
