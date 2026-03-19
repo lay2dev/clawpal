@@ -15,8 +15,9 @@ use crate::commands::preferences::load_app_preferences_from_paths;
 use crate::commands::{
     diagnose_primary_via_rescue, read_raw_config, remote_diagnose_primary_via_rescue,
     remote_read_raw_config, remote_restart_gateway, remote_write_raw_config, restart_gateway,
-    RescuePrimaryDiagnosisResult,
+    RescuePrimaryDiagnosisResult, RescuePrimarySummary,
 };
+use crate::commands::version::{format_timestamp_from_unix, unix_timestamp_secs};
 use crate::models::resolve_paths;
 use crate::node_client::GatewayCredentials;
 use crate::ssh::SshConnectionPool;
@@ -161,22 +162,29 @@ pub(crate) fn empty_config_excerpt_context() -> ConfigExcerptContext {
 }
 
 pub(crate) fn empty_diagnosis() -> RescuePrimaryDiagnosisResult {
-    serde_json::from_value(json!({
-        "status": "healthy",
-        "checkedAt": "2026-03-18T00:00:00Z",
-        "targetProfile": "primary",
-        "rescueProfile": "rescue",
-        "summary": {
-            "status": "healthy",
-            "headline": "Healthy",
-            "recommendedAction": null,
-            "fixableIssueCount": 0,
-            "selectedFixIssueIds": []
+    RescuePrimaryDiagnosisResult {
+        status: "healthy".into(),
+        checked_at: format_timestamp_from_unix(unix_timestamp_secs()),
+        target_profile: "primary".into(),
+        rescue_profile: "rescue".into(),
+        rescue_configured: false,
+        rescue_port: None,
+        summary: RescuePrimarySummary {
+            status: "healthy".into(),
+            headline: "Healthy".into(),
+            recommended_action: "No action needed".into(),
+            fixable_issue_count: 0,
+            selected_fix_issue_ids: Vec::new(),
+            root_cause_hypotheses: Vec::new(),
+            fix_steps: Vec::new(),
+            confidence: None,
+            citations: Vec::new(),
+            version_awareness: None,
         },
-        "issues": [],
-        "sections": []
-    }))
-    .expect("empty diagnosis should deserialize")
+        sections: Vec::new(),
+        checks: Vec::new(),
+        issues: Vec::new(),
+    }
 }
 
 pub(crate) fn diagnosis_has_only_non_auto_fixable_issues(
@@ -472,6 +480,12 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("Failed to parse target config"));
+    }
+
+    #[test]
+    fn empty_diagnosis_checked_at_is_not_hardcoded() {
+        let diagnosis = empty_diagnosis();
+        assert_ne!(diagnosis.checked_at, "2026-03-18T00:00:00Z");
     }
 
     #[test]
