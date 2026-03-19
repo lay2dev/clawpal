@@ -347,7 +347,7 @@ async fn remote_doctor_docker_e2e_loop_completes() {
         &session_id,
         &format!("ssh:{}", cfg.id),
         TargetLocation::RemoteOpenclaw,
-        |kind, round, previous_results| async move {
+        |kind, round, previous_results: Vec<crate::remote_doctor::types::CommandResult>| async move {
             match (kind, round) {
                 (PlanKind::Detect, 1) => Ok(PlanResponse {
                     plan_id: "detect-1".into(),
