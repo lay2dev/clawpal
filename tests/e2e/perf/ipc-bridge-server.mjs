@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 /**
- * IPC Bridge Server — proxies Tauri invoke() calls to a real OpenClaw
- * instance running in Docker via SSH.
- *
- * Pre-fetches all data at startup via SSH, then serves from in-memory cache.
- * This avoids per-invoke SSH overhead while still using real OpenClaw data.
+ * IPC Bridge Server — serves real OpenClaw config data from Docker container.
+ * Reads config once via SSH, then serves from in-memory cache.
  */
 import { createServer } from "node:http";
 import { execSync } from "node:child_process";
@@ -13,152 +10,62 @@ const PORT = parseInt(process.env.BRIDGE_PORT || "3399", 10);
 const SSH_PORT = process.env.CLAWPAL_PERF_SSH_PORT || "2299";
 const SSH_PREFIX = `sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p ${SSH_PORT} root@localhost`;
 
-function ssh(cmd, timeoutMs = 15_000) {
-  try {
-    // Use bash -c with single-quote wrapping to avoid double-quote escaping issues
-    const escaped = cmd.replace(/'/g, "'\''");
-    return execSync(`${SSH_PREFIX} bash -c '${escaped}'`, {
-      encoding: "utf-8",
-      timeout: timeoutMs,
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function parseCliJson(raw) {
-  if (!raw) return null;
-  const start = raw.search(/[{\[]/);
-  if (start === -1) return null;
-  try {
-    return JSON.parse(raw.slice(start));
-  } catch {
-    return null;
-  }
-}
-
-// ---- Pre-fetch all data at startup ----
 console.log("Pre-fetching data from Docker OpenClaw...");
 const startMs = Date.now();
 
-// Single SSH call to fetch all data at once (avoids 6× SSH connection overhead)
-const batchCmd = [
-  'echo "---CONFIG---"',
-  'cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"',
-  'echo "---STATUS---"',
-  'openclaw status --json 2>/dev/null || echo "null"',
-  'echo "---AGENTS---"',
-  'openclaw agents list --json 2>/dev/null || echo "null"',
-  'echo "---MODELS---"',
-  'openclaw config get agents.defaults.models --json 2>/dev/null || echo "null"',
-  'echo "---VERSION---"',
-  'openclaw --version 2>/dev/null || echo "unknown"',
-].join("; ");
-
-const batchRaw = ssh(batchCmd, 30_000) || "";
-
-function extractSection(raw, marker) {
-  const idx = raw.indexOf(marker);
-  if (idx === -1) return null;
-  const start = idx + marker.length;
-  // Find next marker or end
-  const markers = ["---CONFIG---", "---STATUS---", "---AGENTS---", "---MODELS---", "---VERSION---"];
-  let end = raw.length;
-  for (const m of markers) {
-    const mi = raw.indexOf(m, start);
-    if (mi !== -1 && mi < end) end = mi;
-  }
-  return raw.slice(start, end).trim();
+// Single SSH call: just read the config file (fast, no CLI startup overhead)
+let rawConfig = "{}";
+try {
+  rawConfig = execSync(
+    `${SSH_PREFIX} cat /root/.openclaw/openclaw.json`,
+    { encoding: "utf-8", timeout: 15_000 },
+  ).trim();
+} catch (e) {
+  console.warn("Failed to read config via SSH:", e.message);
 }
 
-const rawConfig = extractSection(batchRaw, "---CONFIG---") || "{}";
-const cfg = parseCliJson(rawConfig) || {};
-const statusRaw = extractSection(batchRaw, "---STATUS---");
-const agentsRaw = extractSection(batchRaw, "---AGENTS---");
-const modelsRaw = extractSection(batchRaw, "---MODELS---");
-const versionRaw = extractSection(batchRaw, "---VERSION---") || "unknown";
-const channelsRaw = null;
-const cronRaw = null;
-
-const status = parseCliJson(statusRaw);
-const agentsList = parseCliJson(agentsRaw);
-const models = parseCliJson(modelsRaw);
-const channels = parseCliJson(channelsRaw);
-const cron = parseCliJson(cronRaw);
-
-// Build cached responses
-const agents = (cfg.agents?.list ?? []).map((a) => ({
-  id: a.id,
-  model: a.model ?? null,
-  channels: [],
-  online: false,
-}));
-
-const configSnapshot = {
-  globalDefaultModel: cfg.agents?.defaults?.model?.primary ?? cfg.agents?.defaults?.model ?? null,
-  fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? cfg.agents?.defaults?.fallbackModels ?? [],
-  agents,
-};
-
-const runtimeAgents = (Array.isArray(agentsList) ? agentsList : []).map((a) => ({
-  id: a.id || a.name,
-  model: a.model ?? null,
-  channels: a.channels ?? [],
-  online: a.online ?? true,
-}));
-
-const runtimeSnapshot = {
-  status: { healthy: status?.healthy ?? true, activeAgents: runtimeAgents.length },
-  agents: runtimeAgents,
-  globalDefaultModel: status?.globalDefaultModel ?? null,
-  fallbackModels: status?.fallbackModels ?? [],
-};
-
-const statusExtra = { openclawVersion: versionRaw };
-
-// Build model profiles from CLI output, falling back to raw config
-const modelsSource = (models && typeof models === "object")
-  ? models
-  : (cfg.agents?.defaults?.models || cfg.models || {});
-const modelProfiles = Object.entries(modelsSource).map(([id, m]) => {
-  // Model id format is "provider/model" — extract parts
-  const parts = id.split("/");
-  return {
-    id,
-    provider: m?.provider || parts[0] || "unknown",
-    model: m?.model || parts.slice(1).join("/") || id,
-    enabled: true,
-  };
-});
-
-const channelsConfig = { channels: channels?.list ?? [], bindings: channels?.bindings ?? [] };
-const cronConfig = { jobs: cron?.jobs ?? [] };
-
+const cfg = JSON.parse(rawConfig || "{}");
 console.log(`Pre-fetch done in ${Date.now() - startMs}ms`);
 
-// Fail hard if critical SSH commands returned no data
-// Status requires a running gateway; skip if unavailable
-if (!status) console.warn("openclaw status --json: no data (gateway not running?)");
-const failed = [];
-if (!agentsList && agents.length === 0) failed.push("openclaw agents list --json");
-if (!models && modelProfiles.length === 0) failed.push("models (neither CLI nor config)");
-if (failed.length > 0) {
-  console.error("FATAL: No agent/model data available:");
-  failed.forEach((c) => console.error("  -", c));
+// Build all responses from config
+const agents = (cfg.agents?.list ?? []).map((a) => ({
+  id: a.id, model: a.model ?? null, channels: [], online: false,
+}));
+
+const modelsObj = cfg.agents?.defaults?.models || {};
+const modelProfiles = Object.entries(modelsObj).map(([id, m]) => {
+  const parts = id.split("/");
+  return { id, provider: m?.provider || parts[0], model: m?.model || parts.slice(1).join("/") || id, enabled: true };
+});
+
+if (agents.length === 0 && modelProfiles.length === 0) {
+  console.error("FATAL: Config has no agents or models. Raw config:", rawConfig.slice(0, 200));
   process.exit(1);
 }
 
-// ---- Cached response map ----
+const configSnapshot = {
+  globalDefaultModel: cfg.agents?.defaults?.model?.primary ?? cfg.agents?.defaults?.model ?? null,
+  fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? [],
+  agents,
+};
+
+const runtimeSnapshot = {
+  status: { healthy: true, activeAgents: agents.length },
+  agents: agents.map((a) => ({ ...a, online: true })),
+  globalDefaultModel: configSnapshot.globalDefaultModel,
+  fallbackModels: configSnapshot.fallbackModels,
+};
+
 const cache = {
   get_instance_config_snapshot: configSnapshot,
   get_instance_runtime_snapshot: runtimeSnapshot,
-  get_status_extra: statusExtra,
-  get_status_light: { healthy: status?.healthy ?? true, activeAgents: runtimeAgents.length },
+  get_status_extra: { openclawVersion: "perf-test" },
+  get_status_light: { healthy: true, activeAgents: agents.length },
   list_model_profiles: modelProfiles,
-  list_agents_overview: runtimeAgents,
-  get_channels_config_snapshot: channelsConfig,
+  list_agents_overview: agents,
+  get_channels_config_snapshot: { channels: [], bindings: [] },
   get_channels_runtime_snapshot: { channels: [], bindings: [], agents: [] },
-  get_cron_config_snapshot: cronConfig,
+  get_cron_config_snapshot: { jobs: [] },
   get_cron_runtime_snapshot: { jobs: [], watchdog: null },
   get_rescue_bot_status: {
     action: "status", profile: "rescue", mainPort: 18789, rescuePort: 19789,
@@ -207,10 +114,8 @@ const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
   if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   if (req.method !== "POST" || req.url !== "/invoke") { res.writeHead(404); return res.end("Not found"); }
-
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const { cmd } = JSON.parse(Buffer.concat(chunks).toString());
@@ -220,5 +125,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`IPC Bridge Server listening on http://localhost:${PORT} (cached mode)`);
+  console.log(`IPC Bridge Server listening on http://localhost:${PORT} (${agents.length} agents, ${modelProfiles.length} models)`);
 });
