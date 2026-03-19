@@ -27,15 +27,11 @@ try {
 }
 
 function ssh(cmd, timeoutMs = 10_000) {
-  try {
-    const escaped = cmd.replace(/'/g, "'\\''");
-    return execSync(
-      `${SSH_PREFIX} -o ControlPath=${CONTROL_PATH} '${escaped}'`,
-      { encoding: "utf-8", timeout: timeoutMs },
-    ).trim();
-  } catch {
-    return null;
-  }
+  const escaped = cmd.replace(/'/g, "'\\''");
+  return execSync(
+    `${SSH_PREFIX} -o ControlPath=${CONTROL_PATH} '${escaped}'`,
+    { encoding: "utf-8", timeout: timeoutMs },
+  ).trim();
 }
 
 function parseJson(raw) {
@@ -159,17 +155,23 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) chunks.push(chunk);
   const { cmd } = JSON.parse(Buffer.concat(chunks).toString());
 
-  let result;
-  if (cmd in COMMAND_HANDLERS) {
-    const t0 = Date.now();
-    result = await COMMAND_HANDLERS[cmd]();
-    console.log(`[gateway] ${cmd} → ${Date.now() - t0}ms`);
-  } else {
-    result = CACHED[cmd] ?? null;
-  }
+  try {
+    let result;
+    if (cmd in COMMAND_HANDLERS) {
+      const t0 = Date.now();
+      result = await COMMAND_HANDLERS[cmd]();
+      console.log(`[gateway] ${cmd} → ${Date.now() - t0}ms`);
+    } else {
+      result = CACHED[cmd] ?? null;
+    }
 
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true, result }));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, result }));
+  } catch (e) {
+    console.error(`[gateway] ${cmd} FAILED: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  }
 });
 
 server.listen(PORT, () => {

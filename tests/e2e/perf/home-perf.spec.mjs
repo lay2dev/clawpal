@@ -85,16 +85,16 @@ test("home page render timing with real IPC", async ({ page }) => {
     await page.goto("http://localhost:1420");
 
     // Wait for app to render the Start page, then click the local instance card
-    await page.waitForTimeout(2000);
+    await runPage.waitForTimeout(2000);
 
-    const instanceCard = page.locator('text=local').first();
+    const instanceCard = runPage.locator('text=local').first();
     if (await instanceCard.isVisible({ timeout: 5000 }).catch(() => false)) {
       await instanceCard.click();
     }
 
     // Wait for settled probe
     try {
-      await page.waitForFunction(
+      await runPage.waitForFunction(
         () => window.__RENDER_PROBES__?.home?.settled != null,
         { timeout: 30_000 },
       );
@@ -102,10 +102,13 @@ test("home page render timing with real IPC", async ({ page }) => {
       console.warn(`Run ${i}: settled probe did not fire within timeout`);
     }
 
-    const probes = await page.evaluate(() => window.__RENDER_PROBES__?.home || {});
+    const probes = await runPage.evaluate(() => window.__RENDER_PROBES__?.home || {});
     if (Object.keys(probes).length > 0) {
       allRuns.push(probes);
     }
+
+    // Close the context to release resources
+    await ctx.close();
   }
 
   expect(allRuns.length).toBeGreaterThan(0);

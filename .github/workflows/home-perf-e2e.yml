@@ -63,9 +63,9 @@ jobs:
             if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
             sleep 1
           done
-          # Verify an SSH-backed command returned real data
-          VERIFY=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' || true)
-          echo "$VERIFY" | jq -e '.ok == true and .result != null' || { echo "Bridge readiness check failed: SSH-backed data missing"; exit 1; }
+          # Verify an SSH-backed command returned real data (get_status_extra calls openclaw --version via SSH)
+          VERIFY=$(curl -sf http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_status_extra","args":{}}') || { echo "Bridge readiness check failed: SSH-backed command errored"; exit 1; }
+          echo "$VERIFY" | jq -e '.ok == true and .result.openclawVersion != null and .result.openclawVersion != "unknown"' || { echo "Bridge readiness check failed: SSH did not return a valid openclaw version"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
           PERF_SETTLED_GATE_MS: "500"
