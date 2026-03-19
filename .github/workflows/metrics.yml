@@ -386,7 +386,7 @@ jobs:
       - name: Start IPC bridge server
         run: |
           node tests/e2e/perf/ipc-bridge-server.mjs &
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             RESP=$(curl -s http://localhost:3399/invoke -X POST \
               -H 'Content-Type: application/json' \
               -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null)

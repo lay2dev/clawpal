@@ -39,14 +39,44 @@ function parseCliJson(raw) {
 console.log("Pre-fetching data from Docker OpenClaw...");
 const startMs = Date.now();
 
-const rawConfig = ssh("cat /root/.openclaw/openclaw.json") || "{}";
+// Single SSH call to fetch all data at once (avoids 6× SSH connection overhead)
+const batchCmd = [
+  'echo "---CONFIG---"',
+  'cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"',
+  'echo "---STATUS---"',
+  'openclaw status --json 2>/dev/null || echo "null"',
+  'echo "---AGENTS---"',
+  'openclaw agents list --json 2>/dev/null || echo "null"',
+  'echo "---MODELS---"',
+  'openclaw config get agents.defaults.models --json 2>/dev/null || echo "null"',
+  'echo "---VERSION---"',
+  'openclaw --version 2>/dev/null || echo "unknown"',
+].join("; ");
+
+const batchRaw = ssh(batchCmd, 30_000) || "";
+
+function extractSection(raw, marker) {
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return null;
+  const start = idx + marker.length;
+  // Find next marker or end
+  const markers = ["---CONFIG---", "---STATUS---", "---AGENTS---", "---MODELS---", "---VERSION---"];
+  let end = raw.length;
+  for (const m of markers) {
+    const mi = raw.indexOf(m, start);
+    if (mi !== -1 && mi < end) end = mi;
+  }
+  return raw.slice(start, end).trim();
+}
+
+const rawConfig = extractSection(batchRaw, "---CONFIG---") || "{}";
 const cfg = parseCliJson(rawConfig) || {};
-const statusRaw = ssh("openclaw status --json");
-const agentsRaw = ssh("openclaw agents list --json");
-const modelsRaw = ssh("openclaw config get agents.defaults.models --json");
-const versionRaw = ssh("openclaw --version 2>/dev/null") || "unknown";
-const channelsRaw = ssh("openclaw config get channels --json") || ssh("cat /root/.openclaw/openclaw.json 2>/dev/null | python3 -c \"import sys,json; print(json.dumps(json.load(sys.stdin).get('channels',{})))\"");
-const cronRaw = ssh("openclaw config get cron --json") || null;
+const statusRaw = extractSection(batchRaw, "---STATUS---");
+const agentsRaw = extractSection(batchRaw, "---AGENTS---");
+const modelsRaw = extractSection(batchRaw, "---MODELS---");
+const versionRaw = extractSection(batchRaw, "---VERSION---") || "unknown";
+const channelsRaw = null;
+const cronRaw = null;
 
 const status = parseCliJson(statusRaw);
 const agentsList = parseCliJson(agentsRaw);
