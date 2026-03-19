@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::super::types::{diagnosis_issue_summaries, ClawpalServerPlanStep, RepairRoundObservation};
 
-pub(crate) const MAX_REMOTE_DOCTOR_ROUNDS: usize = 50;
+pub(crate) const MAX_REMOTE_DOCTOR_ROUNDS: usize = 10;
 pub(crate) const REPAIR_PLAN_STALL_THRESHOLD: usize = 3;
 
 pub(crate) fn is_unknown_method_error(error: &str) -> bool {
