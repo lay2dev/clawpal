@@ -46,7 +46,7 @@ jobs:
         run: |
           node tests/e2e/perf/ipc-bridge-server.mjs &
           # Wait for bridge to be ready
-          for i in $(seq 1 10); do
+          for i in $(seq 1 30); do
             curl -s http://localhost:3399/invoke -X POST \
               -H 'Content-Type: application/json' \
               -d '{"cmd":"get_app_preferences","args":{}}' > /dev/null 2>&1 && break
