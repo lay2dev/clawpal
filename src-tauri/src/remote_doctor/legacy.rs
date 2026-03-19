@@ -14,10 +14,19 @@ use super::config::{
     build_gateway_credentials as remote_doctor_gateway_credentials,
     config_excerpt_log_summary, diagnosis_context,
     diagnosis_has_only_non_auto_fixable_issues, diagnosis_is_healthy,
-    diagnosis_missing_rescue_profile, diagnosis_unhealthy_rescue_gateway, empty_config_excerpt_context,
-    empty_diagnosis, load_gateway_config as remote_doctor_gateway_config,
-    load_or_create_remote_doctor_identity, remote_doctor_identity_path,
-    RemoteDoctorGatewayConfig,
+    diagnosis_missing_rescue_profile, diagnosis_unhealthy_rescue_gateway,
+    empty_config_excerpt_context, empty_diagnosis,
+    load_gateway_config as remote_doctor_gateway_config, primary_remote_target_host_id,
+    read_target_config, read_target_config_raw, remote_target_host_id_candidates,
+    restart_target_gateway, run_rescue_diagnosis, write_target_config,
+    write_target_config_raw, RemoteDoctorGatewayConfig,
+};
+use super::agent::{
+    build_agent_plan_prompt, configured_remote_doctor_protocol, default_remote_doctor_protocol,
+    detect_method_name, ensure_agent_workspace_ready as ensure_local_remote_doctor_agent_ready,
+    gateway_url_is_local, next_agent_plan_kind, next_agent_plan_kind_for_round,
+    protocol_requires_bridge, protocol_runs_rescue_preflight, remote_doctor_agent_id,
+    remote_doctor_agent_session_key, repair_method_name,
 };
 use super::session::{
     append_session_log as append_remote_doctor_log,
@@ -33,147 +42,12 @@ use super::types::{
 use crate::bridge_client::BridgeClient;
 use crate::cli_runner::{get_active_openclaw_home_override, run_openclaw, run_openclaw_remote};
 use crate::commands::logs::log_dev;
-use crate::commands::{agent::create_agent, agent::setup_agent_identity};
-use crate::commands::{
-    diagnose_primary_via_rescue, manage_rescue_bot, read_raw_config,
-    remote_diagnose_primary_via_rescue, remote_manage_rescue_bot, remote_read_raw_config,
-    remote_restart_gateway, remote_write_raw_config, restart_gateway, RescuePrimaryDiagnosisResult,
-};
-use crate::config_io::read_openclaw_config;
-use crate::models::resolve_paths;
+use crate::commands::{manage_rescue_bot, remote_manage_rescue_bot, RescuePrimaryDiagnosisResult};
 use crate::node_client::NodeClient;
 use crate::ssh::SshConnectionPool;
 
-const DEFAULT_DETECT_METHOD: &str = "doctor.get_detection_plan";
-const DEFAULT_REPAIR_METHOD: &str = "doctor.get_repair_plan";
 const MAX_REMOTE_DOCTOR_ROUNDS: usize = 50;
 const REPAIR_PLAN_STALL_THRESHOLD: usize = 3;
-const REMOTE_DOCTOR_AGENT_ID: &str = "clawpal-remote-doctor";
-
-fn detect_method_name() -> String {
-    std::env::var("CLAWPAL_REMOTE_DOCTOR_DETECT_METHOD")
-        .unwrap_or_else(|_| DEFAULT_DETECT_METHOD.to_string())
-}
-
-fn repair_method_name() -> String {
-    std::env::var("CLAWPAL_REMOTE_DOCTOR_REPAIR_METHOD")
-        .unwrap_or_else(|_| DEFAULT_REPAIR_METHOD.to_string())
-}
-
-fn configured_remote_doctor_protocol() -> Option<RemoteDoctorProtocol> {
-    match std::env::var("CLAWPAL_REMOTE_DOCTOR_PROTOCOL")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-    {
-        Some("agent") => Some(RemoteDoctorProtocol::AgentPlanner),
-        Some("legacy") | Some("legacy_doctor") => Some(RemoteDoctorProtocol::LegacyDoctor),
-        Some("clawpal_server") => Some(RemoteDoctorProtocol::ClawpalServer),
-        _ => None,
-    }
-}
-
-fn default_remote_doctor_protocol() -> RemoteDoctorProtocol {
-    RemoteDoctorProtocol::AgentPlanner
-}
-
-fn protocol_requires_bridge(protocol: RemoteDoctorProtocol) -> bool {
-    matches!(protocol, RemoteDoctorProtocol::AgentPlanner)
-}
-
-fn protocol_runs_rescue_preflight(protocol: RemoteDoctorProtocol) -> bool {
-    matches!(protocol, RemoteDoctorProtocol::LegacyDoctor)
-}
-
-fn next_agent_plan_kind(diagnosis: &RescuePrimaryDiagnosisResult) -> PlanKind {
-    next_agent_plan_kind_for_round(diagnosis, &[])
-}
-
-fn next_agent_plan_kind_for_round(
-    diagnosis: &RescuePrimaryDiagnosisResult,
-    previous_results: &[CommandResult],
-) -> PlanKind {
-    if diagnosis
-        .issues
-        .iter()
-        .any(|issue| issue.code == "primary.config.unreadable")
-    {
-        if !previous_results.is_empty() {
-            return PlanKind::Repair;
-        }
-        PlanKind::Investigate
-    } else {
-        PlanKind::Repair
-    }
-}
-
-fn remote_doctor_agent_id() -> &'static str {
-    REMOTE_DOCTOR_AGENT_ID
-}
-
-fn remote_doctor_agent_session_key(session_id: &str) -> String {
-    format!("agent:{}:{session_id}", remote_doctor_agent_id())
-}
-
-fn remote_doctor_agent_workspace_files() -> [(&'static str, &'static str); 4] {
-    [
-        (
-            "AGENTS.md",
-            "# Remote Doctor\nUse this workspace only for ClawPal remote doctor planning sessions.\nReturn structured, operational answers.\n",
-        ),
-        (
-            "BOOTSTRAP.md",
-            "Bootstrap is already complete for this workspace.\nDo not ask who you are or who the user is.\nUse IDENTITY.md and USER.md as the canonical identity context.\n",
-        ),
-        (
-            "USER.md",
-            "- Name: ClawPal Desktop\n- Role: desktop repair orchestrator\n- Preferences: concise, operational, no bootstrap chatter\n",
-        ),
-        (
-            "HEARTBEAT.md",
-            "Status: active remote-doctor planning workspace.\n",
-        ),
-    ]
-}
-
-fn gateway_url_is_local(url: &str) -> bool {
-    let rest = url
-        .split_once("://")
-        .map(|(_, remainder)| remainder)
-        .unwrap_or(url);
-    let host_port = rest.split('/').next().unwrap_or(rest);
-    let host = host_port
-        .strip_prefix('[')
-        .and_then(|value| value.split_once(']').map(|(host, _)| host))
-        .unwrap_or_else(|| host_port.split(':').next().unwrap_or(host_port));
-    matches!(host, "127.0.0.1" | "localhost")
-}
-
-fn ensure_local_remote_doctor_agent_ready() -> Result<(), String> {
-    let agent_id = remote_doctor_agent_id().to_string();
-    if let Err(error) = create_agent(agent_id.clone(), None, Some(true)) {
-        if !error.contains("already exists") {
-            return Err(format!("Failed to create remote doctor agent: {error}"));
-        }
-    }
-
-    setup_agent_identity(agent_id.clone(), "ClawPal Remote Doctor".to_string(), None)?;
-
-    let paths = resolve_paths();
-    let cfg = read_openclaw_config(&paths)?;
-    let workspace =
-        clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
-            .map(|path| shellexpand::tilde(&path).to_string())?;
-    create_dir_all(&workspace)
-        .map_err(|error| format!("Failed to create remote doctor workspace: {error}"))?;
-
-    for (file_name, content) in remote_doctor_agent_workspace_files() {
-        std::fs::write(PathBuf::from(&workspace).join(file_name), content)
-            .map_err(|error| format!("Failed to write remote doctor {file_name}: {error}"))?;
-    }
-
-    Ok(())
-}
 
 async fn ensure_agent_bridge_connected<R: Runtime>(
     app: &AppHandle<R>,
@@ -232,147 +106,10 @@ async fn ensure_remote_target_connected(
     }
 }
 
-fn remote_target_host_id_candidates(instance_id: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let trimmed = instance_id.trim();
-    if !trimmed.is_empty() {
-        candidates.push(trimmed.to_string());
-    }
-    if let Some(stripped) = trimmed.strip_prefix("ssh:").map(str::trim) {
-        if !stripped.is_empty() && !candidates.iter().any(|value| value == stripped) {
-            candidates.push(stripped.to_string());
-        }
-    }
-    candidates
-}
-
-fn primary_remote_target_host_id(instance_id: &str) -> Result<String, String> {
-    remote_target_host_id_candidates(instance_id)
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Remote Doctor repair requires an ssh instance id".to_string())
-}
-
 fn is_unknown_method_error(error: &str) -> bool {
     error.contains("unknown method")
         || error.contains("\"code\":\"INVALID_REQUEST\"")
         || error.contains("\"code\": \"INVALID_REQUEST\"")
-}
-
-async fn run_rescue_diagnosis<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-) -> Result<RescuePrimaryDiagnosisResult, String> {
-    match target_location {
-        TargetLocation::LocalOpenclaw => diagnose_primary_via_rescue(None, None).await,
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_diagnose_primary_via_rescue(
-                app.state::<SshConnectionPool>(),
-                host_id,
-                None,
-                None,
-            )
-            .await
-        }
-    }
-}
-
-async fn read_target_config<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-) -> Result<Value, String> {
-    let raw = match target_location {
-        TargetLocation::LocalOpenclaw => read_raw_config()?,
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await?
-        }
-    };
-    serde_json::from_str::<Value>(&raw)
-        .map_err(|error| format!("Failed to parse target config: {error}"))
-}
-
-async fn read_target_config_raw<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-) -> Result<String, String> {
-    match target_location {
-        TargetLocation::LocalOpenclaw => read_raw_config(),
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await
-        }
-    }
-}
-
-async fn write_target_config<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-    config: &Value,
-) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
-    let validated = clawpal_core::config::validate_config_json(&text)
-        .map_err(|error| format!("Invalid config after remote doctor patch: {error}"))?;
-    let validated_text =
-        serde_json::to_string_pretty(&validated).map_err(|error| error.to_string())?;
-    match target_location {
-        TargetLocation::LocalOpenclaw => {
-            let paths = resolve_paths();
-            crate::config_io::write_text(&paths.config_path, &validated_text)?;
-        }
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_write_raw_config(app.state::<SshConnectionPool>(), host_id, validated_text)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-async fn write_target_config_raw<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    let validated = clawpal_core::config::validate_config_json(text)
-        .map_err(|error| format!("Invalid raw config payload: {error}"))?;
-    let validated_text =
-        serde_json::to_string_pretty(&validated).map_err(|error| error.to_string())?;
-    match target_location {
-        TargetLocation::LocalOpenclaw => {
-            let paths = resolve_paths();
-            crate::config_io::write_text(&paths.config_path, &validated_text)?;
-        }
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_write_raw_config(app.state::<SshConnectionPool>(), host_id, validated_text)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-async fn restart_target_gateway<R: Runtime>(
-    app: &AppHandle<R>,
-    target_location: TargetLocation,
-    instance_id: &str,
-) -> Result<(), String> {
-    match target_location {
-        TargetLocation::LocalOpenclaw => {
-            restart_gateway().await?;
-        }
-        TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_restart_gateway(app.state::<SshConnectionPool>(), host_id).await?;
-        }
-    }
-    Ok(())
 }
 
 fn rescue_setup_command_result(
@@ -827,90 +564,6 @@ fn apply_config_unset(root: &mut Value, path: &str) -> Result<(), String> {
 
 fn extract_json_block(text: &str) -> Option<&str> {
     clawpal_core::doctor::extract_json_from_output(text)
-}
-
-fn build_agent_plan_prompt(
-    kind: PlanKind,
-    session_id: &str,
-    round: usize,
-    target_location: TargetLocation,
-    instance_id: &str,
-    diagnosis: &RescuePrimaryDiagnosisResult,
-    config_context: &ConfigExcerptContext,
-    previous_results: &[CommandResult],
-) -> String {
-    let kind_label = match kind {
-        PlanKind::Detect => "detection",
-        PlanKind::Investigate => "investigation",
-        PlanKind::Repair => "repair",
-    };
-    let target_label = match target_location {
-        TargetLocation::LocalOpenclaw => "local_openclaw",
-        TargetLocation::RemoteOpenclaw => "remote_openclaw",
-    };
-    let diagnosis_json =
-        serde_json::to_string_pretty(&diagnosis_context(diagnosis)).unwrap_or_else(|_| "{}".into());
-    let config_context_json = serde_json::to_string_pretty(&json!({
-        "configExcerpt": config_context.config_excerpt,
-        "configExcerptRaw": config_context.config_excerpt_raw,
-        "configParseError": config_context.config_parse_error,
-    }))
-    .unwrap_or_else(|_| "{}".into());
-    let previous_results_json =
-        serde_json::to_string_pretty(previous_results).unwrap_or_else(|_| "[]".into());
-    let phase_rules = match kind {
-        PlanKind::Detect => "For detection plans, gather only the commands needed to confirm current state. Set healthy=true and done=true only when no issue remains.",
-        PlanKind::Investigate => "For investigation plans, return read-only diagnosis steps only. Do not modify files, delete files, overwrite config, or restart services. Prefer commands that inspect, validate, backup, or print evidence for why the config is unreadable. Do not run follow/tail commands, streaming log readers, or any unbounded command; every investigation command must be bounded and return promptly. Do not use heredocs, multiline scripts, or commands that wait on stdin. Prefer single-line commands over shell scripting.",
-        PlanKind::Repair => "For repair plans, return the minimal safe repair commands. Reference prior investigation evidence when config is unreadable. Back up the file before changing it and include validation/rediagnosis steps as needed. Do not invent OpenClaw subcommands. Use only the verified OpenClaw commands listed below or the `clawpal doctor ...` tools. Do not use `openclaw auth ...` commands. Do not use `openclaw doctor --json`; use `clawpal doctor probe-openclaw` or `clawpal doctor exec --tool doctor` instead. Do not use heredocs, multiline scripts, or commands that wait on stdin.",
-    };
-    format!(
-        "Identity bootstrap for this session:\n\
-- Your name: ClawPal Remote Doctor\n\
-- Your creature: maintenance daemon\n\
-- Your vibe: direct, terse, operational\n\
-- Your emoji: none\n\
-- The user is: ClawPal desktop app\n\
-- The user timezone is: Asia/Shanghai\n\
-- Do not ask identity/bootstrap questions.\n\
-- Do not ask who you are or who the user is.\n\
-- Do not modify IDENTITY.md, USER.md, or workspace bootstrap files.\n\
-\n\
-You are ClawPal Remote Doctor planner.\n\
-Return ONLY one JSON object and no markdown.\n\
-Task: produce the next {kind_label} plan for OpenClaw.\n\
-Session: {session_id}\n\
-Round: {round}\n\
-Target location: {target_label}\n\
-Instance id: {instance_id}\n\
-Diagnosis JSON:\n{diagnosis_json}\n\n\
-Config context JSON:\n{config_context_json}\n\n\
-Previous command results JSON:\n{previous_results_json}\n\n\
-Available gateway tools:\n\
-- `clawpal doctor probe-openclaw`\n\
-- `clawpal doctor config-read [path]`\n\
-- `clawpal doctor config-read-raw`\n\
-- `clawpal doctor config-upsert <path> <json>`\n\
-- `clawpal doctor config-delete <path>`\n\
-- `clawpal doctor config-write-raw-base64 <base64-utf8-json>`\n\
-- `clawpal doctor exec --tool <command> [--args <shell-escaped-args>]`\n\
-- Verified direct OpenClaw commands only:\n\
-  - `openclaw --version`\n\
-  - `openclaw gateway status`\n\
-You may invoke these tools before answering when you need fresh diagnostics or config state.\n\
-If you already have enough information, return the JSON plan directly.\n\n\
-Return this exact JSON schema:\n\
-{{\n  \"planId\": \"string\",\n  \"planKind\": \"{kind}\",\n  \"summary\": \"string\",\n  \"commands\": [{{\"argv\": [\"cmd\"], \"timeoutSec\": 60, \"purpose\": \"why\", \"continueOnFailure\": false}}],\n  \"healthy\": false,\n  \"done\": false,\n  \"success\": false\n}}\n\
-Rules:\n\
-- {phase_rules}\n\
-- For repair plans, return shell/openclaw commands in commands.\n\
-- Keep commands empty when no command is needed.\n\
-- Output valid JSON only.",
-        kind = match kind {
-            PlanKind::Detect => "detect",
-            PlanKind::Investigate => "investigate",
-            PlanKind::Repair => "repair",
-        }
-    )
 }
 
 fn parse_agent_plan_response(kind: PlanKind, text: &str) -> Result<PlanResponse, String> {

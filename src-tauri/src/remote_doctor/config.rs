@@ -5,15 +5,21 @@ use ed25519_dalek::pkcs8::EncodePrivateKey;
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Manager, Runtime};
 
 use super::session::append_session_log;
 use super::types::{
-    diagnosis_issue_summaries, ConfigExcerptContext, PlanKind, StoredRemoteDoctorIdentity,
+    diagnosis_issue_summaries, ConfigExcerptContext, TargetLocation, StoredRemoteDoctorIdentity,
 };
 use crate::commands::preferences::load_app_preferences_from_paths;
-use crate::commands::RescuePrimaryDiagnosisResult;
+use crate::commands::{
+    diagnose_primary_via_rescue, read_raw_config, remote_diagnose_primary_via_rescue,
+    remote_read_raw_config, remote_restart_gateway, remote_write_raw_config, restart_gateway,
+    RescuePrimaryDiagnosisResult,
+};
 use crate::models::resolve_paths;
 use crate::node_client::GatewayCredentials;
+use crate::ssh::SshConnectionPool;
 
 const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 18789;
@@ -237,12 +243,150 @@ pub(crate) fn append_diagnosis_log(
     );
 }
 
+pub(crate) fn remote_target_host_id_candidates(instance_id: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let trimmed = instance_id.trim();
+    if !trimmed.is_empty() {
+        candidates.push(trimmed.to_string());
+    }
+    if let Some(stripped) = trimmed.strip_prefix("ssh:").map(str::trim) {
+        if !stripped.is_empty() && !candidates.iter().any(|value| value == stripped) {
+            candidates.push(stripped.to_string());
+        }
+    }
+    candidates
+}
+
+pub(crate) fn primary_remote_target_host_id(instance_id: &str) -> Result<String, String> {
+    remote_target_host_id_candidates(instance_id)
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Remote Doctor repair requires an ssh instance id".to_string())
+}
+
+pub(crate) async fn run_rescue_diagnosis<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+) -> Result<RescuePrimaryDiagnosisResult, String> {
+    match target_location {
+        TargetLocation::LocalOpenclaw => diagnose_primary_via_rescue(None, None).await,
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_diagnose_primary_via_rescue(
+                app.state::<SshConnectionPool>(),
+                host_id,
+                None,
+                None,
+            )
+            .await
+        }
+    }
+}
+
+pub(crate) async fn read_target_config<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+) -> Result<Value, String> {
+    let raw = match target_location {
+        TargetLocation::LocalOpenclaw => read_raw_config()?,
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await?
+        }
+    };
+    serde_json::from_str::<Value>(&raw)
+        .map_err(|error| format!("Failed to parse target config: {error}"))
+}
+
+pub(crate) async fn read_target_config_raw<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+) -> Result<String, String> {
+    match target_location {
+        TargetLocation::LocalOpenclaw => read_raw_config(),
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await
+        }
+    }
+}
+
+pub(crate) async fn write_target_config<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+    config: &Value,
+) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
+    let validated = clawpal_core::config::validate_config_json(&text)
+        .map_err(|error| format!("Invalid config after remote doctor patch: {error}"))?;
+    let validated_text =
+        serde_json::to_string_pretty(&validated).map_err(|error| error.to_string())?;
+    match target_location {
+        TargetLocation::LocalOpenclaw => {
+            let paths = resolve_paths();
+            crate::config_io::write_text(&paths.config_path, &validated_text)?;
+        }
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_write_raw_config(app.state::<SshConnectionPool>(), host_id, validated_text)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn write_target_config_raw<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    let validated = clawpal_core::config::validate_config_json(text)
+        .map_err(|error| format!("Invalid raw config payload: {error}"))?;
+    let validated_text =
+        serde_json::to_string_pretty(&validated).map_err(|error| error.to_string())?;
+    match target_location {
+        TargetLocation::LocalOpenclaw => {
+            let paths = resolve_paths();
+            crate::config_io::write_text(&paths.config_path, &validated_text)?;
+        }
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_write_raw_config(app.state::<SshConnectionPool>(), host_id, validated_text)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn restart_target_gateway<R: Runtime>(
+    app: &AppHandle<R>,
+    target_location: TargetLocation,
+    instance_id: &str,
+) -> Result<(), String> {
+    match target_location {
+        TargetLocation::LocalOpenclaw => restart_gateway().await.map(|_| ()),
+        TargetLocation::RemoteOpenclaw => {
+            let host_id = primary_remote_target_host_id(instance_id)?;
+            remote_restart_gateway(app.state::<SshConnectionPool>(), host_id)
+                .await
+                .map(|_| ())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::*;
-    use crate::cli_runner::set_active_clawpal_data_override;
+    use crate::cli_runner::{
+        set_active_clawpal_data_override, set_active_openclaw_home_override,
+    };
 
     fn override_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -319,5 +463,52 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("Failed to parse target config"));
+    }
+
+    #[test]
+    fn remote_target_host_id_candidates_include_exact_and_stripped_ids() {
+        assert_eq!(
+            remote_target_host_id_candidates("ssh:15-235-214-81"),
+            vec!["ssh:15-235-214-81".to_string(), "15-235-214-81".to_string()]
+        );
+        assert_eq!(
+            remote_target_host_id_candidates("e2e-remote-doctor"),
+            vec!["e2e-remote-doctor".to_string()]
+        );
+    }
+
+    #[test]
+    fn primary_remote_target_host_id_prefers_exact_instance_id() {
+        assert_eq!(
+            primary_remote_target_host_id("ssh:15-235-214-81").unwrap(),
+            "ssh:15-235-214-81"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_target_config_raw_returns_current_file_contents() {
+        let _guard = override_lock().lock().expect("lock override state");
+        let app = tauri::test::mock_app();
+        let temp_root = std::env::temp_dir().join(format!(
+            "clawpal-remote-doctor-read-config-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let openclaw_home = temp_root.join("home");
+        let openclaw_dir = openclaw_home.join(".openclaw");
+        std::fs::create_dir_all(&openclaw_dir).expect("create openclaw dir");
+        set_active_openclaw_home_override(Some(openclaw_home.to_string_lossy().to_string()))
+            .expect("set openclaw override");
+        let raw = "{\n  \"ok\": true\n}";
+        std::fs::write(openclaw_dir.join("openclaw.json"), raw).expect("write config");
+
+        let result =
+            read_target_config_raw(&app.handle().clone(), TargetLocation::LocalOpenclaw, "")
+                .await
+                .expect("read raw config");
+
+        set_active_openclaw_home_override(None).expect("clear openclaw override");
+        let _ = std::fs::remove_dir_all(&temp_root);
+
+        assert!(result.contains("\"ok\": true"));
     }
 }
