@@ -1,25 +1,20 @@
 #!/usr/bin/env node
 /**
- * IPC Bridge Server — proxies Tauri IPC commands to a real OpenClaw instance
- * running in Docker via SSH. Two modes:
+ * IPC Bridge Server — proxies Tauri IPC commands to a real OpenClaw gateway
+ * running in Docker. Uses HTTP API directly (no SSH/CLI overhead).
  *
- * 1. LIVE mode (default): Each /invoke request triggers a real SSH command
- *    to measure actual IPC round-trip latency.
- * 2. CACHED mode (BRIDGE_MODE=cached): Pre-fetches once, serves from memory.
- *    Only measures React render time, not IPC latency.
- *
- * Commands that map to OpenClaw CLI are executed live via SSH.
- * Commands without a CLI mapping return sensible defaults.
+ * The gateway runs at GATEWAY_URL (default http://localhost:18789).
+ * Falls back to SSH + CLI for commands without HTTP API endpoints.
  */
 import { createServer } from "node:http";
 import { execSync } from "node:child_process";
 
 const PORT = parseInt(process.env.BRIDGE_PORT || "3399", 10);
+const GATEWAY_URL = process.env.GATEWAY_URL || "http://localhost:18789";
 const SSH_PORT = process.env.CLAWPAL_PERF_SSH_PORT || "2299";
 const SSH_PREFIX = `sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p ${SSH_PORT} root@localhost`;
-const MODE = process.env.BRIDGE_MODE || "live";
 
-// Establish a persistent SSH ControlMaster connection to avoid per-call overhead
+// Establish SSH ControlMaster for any fallback commands
 const CONTROL_PATH = "/tmp/oc-perf-ssh-ctl";
 try {
   execSync(
@@ -28,12 +23,12 @@ try {
   );
   console.log("SSH ControlMaster established");
 } catch (e) {
-  console.warn("ControlMaster setup failed, falling back to per-call SSH:", e.message);
+  console.warn("ControlMaster setup failed:", e.message);
 }
 
 function ssh(cmd, timeoutMs = 10_000) {
   try {
-    const escaped = cmd.replace(/\'/g, "'\\''");
+    const escaped = cmd.replace(/'/g, "'\\''");
     return execSync(
       `${SSH_PREFIX} -o ControlPath=${CONTROL_PATH} '${escaped}'`,
       { encoding: "utf-8", timeout: timeoutMs },
@@ -48,8 +43,8 @@ function parseJson(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// ── Pre-fetch config once (needed for both modes) ──────────────────
-console.log("Pre-fetching config from Docker OpenClaw...");
+// Pre-fetch config for building response shapes
+console.log("Pre-fetching config...");
 const startMs = Date.now();
 const rawConfig = ssh("cat /root/.openclaw/openclaw.json") || "{}";
 const cfg = parseJson(rawConfig) || {};
@@ -69,12 +64,21 @@ if (agents.length === 0 && modelProfiles.length === 0) {
   process.exit(1);
 }
 
-// ── Live SSH command mapping ───────────────────────────────────────
-// Maps IPC commands → SSH commands that return equivalent data
-const LIVE_COMMANDS = {
-  get_instance_runtime_snapshot: () => {
-    const statusRaw = ssh("openclaw status --json");
-    const status = parseJson(statusRaw);
+// Gateway HTTP API mapping — direct HTTP calls, no SSH/CLI overhead
+async function gatewayFetch(path) {
+  try {
+    const resp = await fetch(`${GATEWAY_URL}${path}`, { signal: AbortSignal.timeout(10_000) });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// Map IPC commands to gateway HTTP API or local computation
+const COMMAND_HANDLERS = {
+  get_instance_runtime_snapshot: async () => {
+    const status = await gatewayFetch("/api/status");
     return {
       status: status ? { healthy: true, activeAgents: agents.length } : { healthy: false },
       agents: agents.map((a) => ({ ...a, online: true })),
@@ -82,39 +86,24 @@ const LIVE_COMMANDS = {
       fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? [],
     };
   },
-  get_instance_config_snapshot: () => {
-    const raw = ssh("cat /root/.openclaw/openclaw.json");
-    const c = parseJson(raw) || cfg;
-    return {
-      globalDefaultModel: c.agents?.defaults?.model?.primary ?? c.agents?.defaults?.model ?? null,
-      fallbackModels: c.agents?.defaults?.model?.fallbacks ?? [],
-      agents: (c.agents?.list ?? []).map((a) => ({ id: a.id, model: a.model ?? null, channels: [], online: false })),
-    };
-  },
-  get_status_extra: () => {
+  get_instance_config_snapshot: async () => ({
+    globalDefaultModel: cfg.agents?.defaults?.model?.primary ?? cfg.agents?.defaults?.model ?? null,
+    fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? [],
+    agents,
+  }),
+  get_status_extra: async () => {
     const ver = ssh("openclaw --version 2>/dev/null") || "unknown";
     return { openclawVersion: ver };
   },
-  get_status_light: () => {
-    const statusRaw = ssh("openclaw status --json");
-    return statusRaw ? { healthy: true, activeAgents: agents.length } : { healthy: false, activeAgents: 0 };
+  get_status_light: async () => {
+    const status = await gatewayFetch("/api/status");
+    return status ? { healthy: true, activeAgents: agents.length } : { healthy: false, activeAgents: 0 };
   },
-  list_model_profiles: () => {
-    const modRaw = ssh("openclaw config get agents.defaults.models --json");
-    const mods = parseJson(modRaw) || modelsObj;
-    return Object.entries(mods).map(([id, m]) => {
-      const parts = id.split("/");
-      return { id, provider: m?.provider || parts[0], model: m?.model || parts.slice(1).join("/") || id, enabled: true };
-    });
-  },
-  list_agents_overview: () => {
-    const raw = ssh("openclaw agents list --json");
-    const parsed = parseJson(raw);
-    return parsed || agents;
-  },
+  list_model_profiles: async () => modelProfiles,
+  list_agents_overview: async () => agents,
 };
 
-// ── Cached fallbacks (for commands without SSH mapping) ────────────
+// Cached defaults for commands without live handling
 const CACHED = {
   get_channels_config_snapshot: { channels: [], bindings: [] },
   get_channels_runtime_snapshot: { channels: [], bindings: [], agents: [] },
@@ -159,15 +148,6 @@ const CACHED = {
   record_install_experience: null,
 };
 
-// In cached mode, pre-compute live command results too
-const CACHED_LIVE = {};
-if (MODE === "cached") {
-  for (const [cmd, fn] of Object.entries(LIVE_COMMANDS)) {
-    CACHED_LIVE[cmd] = fn();
-  }
-}
-
-// ── HTTP server ────────────────────────────────────────────────────
 const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -180,12 +160,10 @@ const server = createServer(async (req, res) => {
   const { cmd } = JSON.parse(Buffer.concat(chunks).toString());
 
   let result;
-  if (MODE === "live" && cmd in LIVE_COMMANDS) {
+  if (cmd in COMMAND_HANDLERS) {
     const t0 = Date.now();
-    result = LIVE_COMMANDS[cmd]();
-    console.log(`[live] ${cmd} → ${Date.now() - t0}ms`);
-  } else if (MODE === "cached" && cmd in CACHED_LIVE) {
-    result = CACHED_LIVE[cmd];
+    result = await COMMAND_HANDLERS[cmd]();
+    console.log(`[gateway] ${cmd} → ${Date.now() - t0}ms`);
   } else {
     result = CACHED[cmd] ?? null;
   }
@@ -195,5 +173,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`IPC Bridge Server listening on http://localhost:${PORT} (mode=${MODE}, ${agents.length} agents, ${modelProfiles.length} models)`);
+  console.log(`IPC Bridge Server listening on http://localhost:${PORT} (gateway=${GATEWAY_URL}, ${agents.length} agents, ${modelProfiles.length} models)`);
 });

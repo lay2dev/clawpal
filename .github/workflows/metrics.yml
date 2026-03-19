@@ -383,7 +383,7 @@ jobs:
 
       - name: Start container (reuses image from remote perf step)
         run: |
-          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          docker run -d --name oc-perf -p 2299:22 -p 18789:18789 clawpal-perf-e2e
           for i in $(seq 1 15); do
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
             sleep 1
