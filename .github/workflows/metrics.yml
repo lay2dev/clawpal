@@ -274,9 +274,9 @@ jobs:
 
       - name: Start SSH container
         run: |
-          docker run -d --name oc-remote-perf -p 2299:22 clawpal-perf-e2e
+          docker run -d --name oc-remote-perf -p 2298:22 clawpal-perf-e2e
           for i in $(seq 1 15); do
-            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2298 root@localhost echo ok 2>/dev/null && break
             sleep 1
           done
           # Wait for OpenClaw gateway HTTP API (port 18789 exposed to host)
@@ -299,7 +299,7 @@ jobs:
           SSH_FAIL=0       # SSH transport failures (exit 255)
           CMD_FAIL_COUNT=0 # remote commands that ran but returned non-zero
           TOTAL_RUNS=0
-          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
+          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2298 root@localhost"
 
           # Exercise remote OpenClaw commands and measure timing
           CMDS=(
