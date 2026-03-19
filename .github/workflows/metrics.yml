@@ -387,11 +387,17 @@ jobs:
         run: |
           node tests/e2e/perf/ipc-bridge-server.mjs &
           for i in $(seq 1 30); do
-            curl -s http://localhost:3399/invoke -X POST \
+            RESP=$(curl -s http://localhost:3399/invoke -X POST \
               -H 'Content-Type: application/json' \
-              -d '{"cmd":"get_app_preferences","args":{}}' > /dev/null 2>&1 && break
+              -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null)
+            if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
             sleep 1
           done
+          # Verify SSH-backed data is available
+          VERIFY=$(curl -s http://localhost:3399/invoke -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"cmd":"get_instance_runtime_snapshot","args":{}}')
+          echo "$VERIFY" | jq -e '.ok == true and .result.status != null' || { echo "Bridge readiness failed"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
 

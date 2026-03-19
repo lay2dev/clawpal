@@ -29,9 +29,10 @@
       if (data.ok) return data.result;
       throw new Error(data.error || "Bridge error");
     } catch (e) {
-      // Silently return null for failed bridge calls to avoid app errors
-      console.warn(`[ipc-bridge] ${cmd} failed:`, e.message);
-      return null;
+      // Fail hard on bridge errors so CI catches real IPC failures
+      const msg = `[ipc-bridge] ${cmd} failed: ${e.message}`;
+      console.error(msg);
+      throw new Error(msg);
     }
   };
 

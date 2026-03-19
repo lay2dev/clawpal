@@ -67,12 +67,21 @@ test("home page render timing with real IPC", async ({ page }) => {
   });
 
   const allRuns = [];
-
   for (let i = 0; i < RUNS; i++) {
-    // Clear persisted read cache so each run is a true cold start
+    // Clear all storage so each run is a true cold IPC start (no warm cache)
+    await page.context().clearCookies();
     await page.evaluate(() => {
-      try { localStorage.clear(); sessionStorage.clear(); } catch {}
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+        if (window.indexedDB?.databases) {
+          window.indexedDB.databases().then(dbs => dbs.forEach(db => window.indexedDB.deleteDatabase(db.name)));
+        }
+      } catch {}
     }).catch(() => {});
+    // Navigate to blank first to ensure app bootstraps from scratch
+    await page.goto("about:blank");
+    await page.goto("http://localhost:1420");
     await page.goto("http://localhost:1420");
 
     // Wait for app to render the Start page, then click the local instance card
@@ -100,6 +109,13 @@ test("home page render timing with real IPC", async ({ page }) => {
   }
 
   expect(allRuns.length).toBeGreaterThan(0);
+
+  // Verify each run got real probe data (not null/zero from silent bridge failures)
+  for (const [idx, run] of allRuns.entries()) {
+    expect(run.settled, `Run ${idx}: settled probe missing`).toBeDefined();
+    expect(run.status, `Run ${idx}: status probe missing`).toBeDefined();
+    expect(run.status, `Run ${idx}: status probe was zero (likely silent failure)`).toBeGreaterThan(0);
+  }
 
   const labels = ["status", "version", "agents", "models", "settled"];
   const medianProbes = {};

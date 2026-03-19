@@ -104,14 +104,15 @@ const cronConfig = { jobs: cron?.jobs ?? [] };
 
 console.log(`Pre-fetch done in ${Date.now() - startMs}ms`);
 
-// Warn if SSH commands failed, but continue with defaults
+// Fail hard if critical SSH commands returned no data
 const failed = [];
 if (!status) failed.push("openclaw status --json");
 if (!agentsList) failed.push("openclaw agents list --json");
 if (!models) failed.push("openclaw config get models --json");
 if (failed.length > 0) {
-  console.warn("WARNING: Some SSH commands returned no data (using defaults):");
-  failed.forEach((c) => console.warn("  -", c));
+  console.error("FATAL: SSH-backed commands returned no data:");
+  failed.forEach((c) => console.error("  -", c));
+  process.exit(1);
 }
 
 // ---- Cached response map ----
