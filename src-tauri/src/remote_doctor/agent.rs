@@ -1,7 +1,7 @@
 use std::fs::create_dir_all;
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::config::diagnosis_context;
 use super::types::{CommandResult, ConfigExcerptContext, PlanKind, RemoteDoctorProtocol, TargetLocation};
