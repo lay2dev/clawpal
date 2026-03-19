@@ -27,5 +27,5 @@ COPY tests/e2e/perf/seed/auth-profiles.json /root/.openclaw/agents/main/agent/au
 COPY tests/e2e/perf/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22 18789
+EXPOSE 22 18790
 CMD ["/entrypoint.sh"]
