@@ -383,8 +383,15 @@ jobs:
             sleep 1
           done
 
-      - name: Extract fixtures from container
-        run: node tests/e2e/perf/extract-fixtures.mjs
+      - name: Start IPC bridge server
+        run: |
+          node tests/e2e/perf/ipc-bridge-server.mjs &
+          for i in $(seq 1 10); do
+            curl -s http://localhost:3399/invoke -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"cmd":"get_app_preferences","args":{}}' > /dev/null 2>&1 && break
+            sleep 1
+          done
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
 
@@ -426,7 +433,7 @@ jobs:
             echo "pass=true" >> "$GITHUB_OUTPUT"
           fi
         env:
-          PERF_MOCK_LATENCY_MS: "50"
+          PERF_BRIDGE_URL: "http://localhost:3399"
           PERF_SETTLED_GATE_MS: "5000"
 
       - name: Cleanup container
@@ -475,7 +482,7 @@ jobs:
           fi
 
           BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
-          MOCK_LATENCY="${{ env.PERF_MOCK_LATENCY_MS || '50' }}"
+          MOCK_LATENCY="N/A"
           COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
 
           cat > /tmp/metrics_comment.md << COMMENTEOF
@@ -542,7 +549,7 @@ jobs:
 
           </details>
 
-                    ### Home Page Render Probes (mock IPC ${MOCK_LATENCY}ms, cache-first render)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+                    ### Home Page Render Probes (real IPC via SSH bridge, cache-first render)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
