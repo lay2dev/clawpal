@@ -29,7 +29,7 @@
       if (data.ok) return data.result;
       throw new Error(data.error || "Bridge error");
     } catch (e) {
-      // Silently return null for failed bridge calls (same as mock fallback)
+      // Silently return null for failed bridge calls to avoid app errors
       console.warn(`[ipc-bridge] ${cmd} failed:`, e.message);
       return null;
     }
