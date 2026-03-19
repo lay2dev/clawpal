@@ -59,10 +59,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Save screenshots before clearing the worktree
+          cp -r screenshots /tmp/pr-screenshots
+
           # Create orphan branch with only screenshots
           git checkout --orphan "${REF_NAME}"
           git rm -rf . > /dev/null 2>&1 || true
-          cp -r screenshots/* .
+          cp -r /tmp/pr-screenshots/* .
           git add -A
           git commit -m "Screenshots for ${{ github.sha }}" --allow-empty
           git push origin "${REF_NAME}" --force
