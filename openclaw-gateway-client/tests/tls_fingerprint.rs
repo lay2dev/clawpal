@@ -3,14 +3,8 @@ use openclaw_gateway_client::tls::normalize_fingerprint;
 
 #[test]
 fn normalizes_sha256_fingerprint_variants() {
-    assert_eq!(
-        normalize_fingerprint("AA:bb:cc"),
-        Some("AA:BB:CC".into())
-    );
-    assert_eq!(
-        normalize_fingerprint("aabbcc"),
-        Some("AA:BB:CC".into())
-    );
+    assert_eq!(normalize_fingerprint("AA:bb:cc"), Some("AA:BB:CC".into()));
+    assert_eq!(normalize_fingerprint("aabbcc"), Some("AA:BB:CC".into()));
     assert_eq!(normalize_fingerprint(""), None);
 }
 

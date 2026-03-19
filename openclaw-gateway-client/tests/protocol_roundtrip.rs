@@ -34,7 +34,13 @@ fn deserializes_response_frame() {
 
     let frame: GatewayFrame = serde_json::from_value(raw).expect("deserialize response frame");
 
-    let GatewayFrame::Response(ResponseFrame { id, ok, payload, error }) = frame else {
+    let GatewayFrame::Response(ResponseFrame {
+        id,
+        ok,
+        payload,
+        error,
+    }) = frame
+    else {
         panic!("expected response frame");
     };
 
@@ -55,7 +61,13 @@ fn deserializes_event_frame() {
 
     let frame: GatewayFrame = serde_json::from_value(raw).expect("deserialize event frame");
 
-    let GatewayFrame::Event(EventFrame { event, payload, seq, state_version }) = frame else {
+    let GatewayFrame::Event(EventFrame {
+        event,
+        payload,
+        seq,
+        state_version,
+    }) = frame
+    else {
         panic!("expected event frame");
     };
 
@@ -76,5 +88,8 @@ fn omits_absent_optional_fields() {
 
     let encoded = serde_json::to_value(&frame).expect("serialize event frame");
 
-    assert_eq!(encoded, Value::from(json!({ "type": "event", "event": "tick" })));
+    assert_eq!(
+        encoded,
+        Value::from(json!({ "type": "event", "event": "tick" }))
+    );
 }
