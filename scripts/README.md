@@ -17,6 +17,8 @@ These scripts mirror the repository CI checks locally without installing system 
 - `scripts/install-hooks.sh`
   Installs the git pre-commit hook by symlinking `scripts/pre-commit` into the current repo's hooks directory.
 - `scripts/pre-commit`
+- `scripts/precommit.sh`
+  All-in-one script to run the pre-commit checks manually. Supports `--staged` flag.
   Runs frontend CI, Rust CI, and metrics CI before each commit.
 
 All scripts resolve the repo root from their own path and can be run from anywhere inside the worktree.
