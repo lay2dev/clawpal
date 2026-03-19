@@ -394,9 +394,7 @@ jobs:
             sleep 1
           done
           # Verify SSH-backed data is available
-          VERIFY=$(curl -s http://localhost:3399/invoke -X POST \
-            -H 'Content-Type: application/json' \
-            -d '{"cmd":"get_instance_runtime_snapshot","args":{}}')
+          VERIFY=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' || true)
           echo "$VERIFY" | jq -e '.ok == true and .result != null' || { echo "Bridge readiness failed"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
