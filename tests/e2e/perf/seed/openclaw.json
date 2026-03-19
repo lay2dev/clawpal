@@ -3,7 +3,8 @@
     "port": 18789,
     "auth": {
       "token": "perf-test-token"
-    }
+    },
+    "host": "0.0.0.0"
   },
   "agents": {
     "defaults": {
@@ -17,8 +18,14 @@
       }
     },
     "list": [
-      { "id": "main", "model": "anthropic/claude-sonnet-4-20250514" },
-      { "id": "worker-1", "model": "openai/gpt-4o" }
+      {
+        "id": "main",
+        "model": "anthropic/claude-sonnet-4-20250514"
+      },
+      {
+        "id": "worker-1",
+        "model": "openai/gpt-4o"
+      }
     ]
   }
 }

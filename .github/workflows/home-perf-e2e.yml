@@ -47,9 +47,12 @@ jobs:
             if [ -n "$GW" ]; then echo "Gateway HTTP ready after ${i}s"; break; fi
             sleep 1
           done
-          # Warm up gateway with initial status call
-          curl -sf http://localhost:18789/api/status > /dev/null 2>&1 || true
-          echo "Gateway warmed up" 
+          # Wait for gateway API to be fully ready (not just dashboard)
+          for j in $(seq 1 30); do
+            API=$(curl -sf http://localhost:18789/api/status 2>/dev/null || true)
+            if [ -n "$API" ]; then echo "Gateway API ready after additional ${j}s"; break; fi
+            sleep 1
+          done
 
       - name: Start IPC bridge server
         run: |
