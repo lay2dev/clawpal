@@ -1,4 +1,9 @@
 use super::*;
+
+use crate::doctor_temp_store::{
+    self, DoctorTempGatewaySessionRecord, DoctorTempGatewaySessionStore,
+};
+use crate::json5_extract::extract_json5_top_level_value;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::time::{sleep, Duration};
@@ -25,25 +30,6 @@ struct DoctorAssistantProgressEvent {
     attempt: usize,
     resolved_issue_id: Option<String>,
     resolved_issue_label: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DoctorTempGatewaySessionRecord {
-    instance_id: String,
-    profile: String,
-    port: u16,
-    created_at: String,
-    status: String,
-    main_profile: String,
-    main_port: u16,
-    last_step: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DoctorTempGatewaySessionStore {
-    sessions: Vec<DoctorTempGatewaySessionRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,67 +75,6 @@ fn emit_doctor_assistant_progress(
         resolved_issue_label,
     };
     let _ = app.emit("doctor:assistant-progress", payload);
-}
-
-fn doctor_temp_gateway_store_path(paths: &crate::models::OpenClawPaths) -> std::path::PathBuf {
-    paths.clawpal_dir.join("doctor-temp-gateways.json")
-}
-
-fn load_doctor_temp_gateway_store(
-    paths: &crate::models::OpenClawPaths,
-) -> DoctorTempGatewaySessionStore {
-    crate::config_io::read_json(&doctor_temp_gateway_store_path(paths)).unwrap_or_default()
-}
-
-fn save_doctor_temp_gateway_store(
-    paths: &crate::models::OpenClawPaths,
-    store: &DoctorTempGatewaySessionStore,
-) -> Result<(), String> {
-    let path = doctor_temp_gateway_store_path(paths);
-    if store.sessions.is_empty() {
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
-    } else {
-        crate::config_io::write_json(&path, store)
-    }
-}
-
-fn upsert_doctor_temp_gateway_record(
-    paths: &crate::models::OpenClawPaths,
-    record: DoctorTempGatewaySessionRecord,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| !(item.instance_id == record.instance_id && item.profile == record.profile));
-    store.sessions.push(record);
-    save_doctor_temp_gateway_store(paths, &store)
-}
-
-fn remove_doctor_temp_gateway_record(
-    paths: &crate::models::OpenClawPaths,
-    instance_id: &str,
-    profile: &str,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| !(item.instance_id == instance_id && item.profile == profile));
-    save_doctor_temp_gateway_store(paths, &store)
-}
-
-fn remove_doctor_temp_gateway_records_for_instance(
-    paths: &crate::models::OpenClawPaths,
-    instance_id: &str,
-) -> Result<(), String> {
-    let mut store = load_doctor_temp_gateway_store(paths);
-    store
-        .sessions
-        .retain(|item| item.instance_id != instance_id);
-    save_doctor_temp_gateway_store(paths, &store)
 }
 
 fn doctor_assistant_issue_label(issue: &RescuePrimaryIssue) -> String {
@@ -500,161 +425,6 @@ async fn read_remote_primary_config_text(
         .await
         .map(|output| output.stdout)
         .unwrap_or_default()
-}
-
-fn skip_json5_ws_and_comments(text: &str, mut index: usize) -> usize {
-    let bytes = text.as_bytes();
-    while index < bytes.len() {
-        match bytes[index] {
-            b' ' | b'\t' | b'\r' | b'\n' => {
-                index += 1;
-            }
-            b'/' if index + 1 < bytes.len() && bytes[index + 1] == b'/' => {
-                index += 2;
-                while index < bytes.len() && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            }
-            b'/' if index + 1 < bytes.len() && bytes[index + 1] == b'*' => {
-                index += 2;
-                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
-                {
-                    index += 1;
-                }
-                if index + 1 < bytes.len() {
-                    index += 2;
-                }
-            }
-            _ => break,
-        }
-    }
-    index
-}
-
-fn scan_json5_string_end(text: &str, start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let quote = *bytes.get(start)?;
-    if quote != b'"' && quote != b'\'' {
-        return None;
-    }
-    let mut index = start + 1;
-    let mut escaped = false;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if escaped {
-            escaped = false;
-        } else if byte == b'\\' {
-            escaped = true;
-        } else if byte == quote {
-            return Some(index + 1);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn scan_json5_value_end(text: &str, start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let start = skip_json5_ws_and_comments(text, start);
-    let first = *bytes.get(start)?;
-    if first == b'"' || first == b'\'' {
-        return scan_json5_string_end(text, start);
-    }
-    if first != b'{' && first != b'[' {
-        let mut index = start;
-        while index < bytes.len() {
-            index = skip_json5_ws_and_comments(text, index);
-            if index >= bytes.len() {
-                break;
-            }
-            match bytes[index] {
-                b',' | b'}' => break,
-                b'"' | b'\'' => {
-                    index = scan_json5_string_end(text, index)?;
-                }
-                _ => index += 1,
-            }
-        }
-        return Some(index);
-    }
-
-    let mut stack = vec![first];
-    let mut index = start + 1;
-    while index < bytes.len() {
-        index = skip_json5_ws_and_comments(text, index);
-        if index >= bytes.len() {
-            break;
-        }
-        match bytes[index] {
-            b'"' | b'\'' => {
-                index = scan_json5_string_end(text, index)?;
-            }
-            b'{' | b'[' => {
-                stack.push(bytes[index]);
-                index += 1;
-            }
-            b'}' => {
-                let open = stack.pop()?;
-                if open != b'{' {
-                    return None;
-                }
-                index += 1;
-                if stack.is_empty() {
-                    return Some(index);
-                }
-            }
-            b']' => {
-                let open = stack.pop()?;
-                if open != b'[' {
-                    return None;
-                }
-                index += 1;
-                if stack.is_empty() {
-                    return Some(index);
-                }
-            }
-            _ => index += 1,
-        }
-    }
-    None
-}
-
-fn extract_json5_top_level_value(text: &str, key: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut depth = 0usize;
-    let mut index = 0usize;
-    while index < bytes.len() {
-        index = skip_json5_ws_and_comments(text, index);
-        if index >= bytes.len() {
-            break;
-        }
-        match bytes[index] {
-            b'{' => {
-                depth += 1;
-                index += 1;
-            }
-            b'}' => {
-                depth = depth.saturating_sub(1);
-                index += 1;
-            }
-            b'"' | b'\'' if depth == 1 => {
-                let end = scan_json5_string_end(text, index)?;
-                let raw_key = &text[index + 1..end - 1];
-                let after_key = skip_json5_ws_and_comments(text, end);
-                if raw_key == key && bytes.get(after_key) == Some(&b':') {
-                    let value_start = skip_json5_ws_and_comments(text, after_key + 1);
-                    let value_end = scan_json5_value_end(text, value_start)?;
-                    return Some(text[value_start..value_end].trim().to_string());
-                }
-                index = end;
-            }
-            b'"' | b'\'' => {
-                index = scan_json5_string_end(text, index)?;
-            }
-            _ => index += 1,
-        }
-    }
-    None
 }
 
 fn salvage_donor_cfg_from_text(text: &str) -> serde_json::Value {
@@ -2523,8 +2293,7 @@ fn cleanup_local_stale_temp_gateways(
         );
     }
     let _ = prune_local_temp_gateway_profile_roots(&paths.openclaw_dir)?;
-    let _ =
-        remove_doctor_temp_gateway_records_for_instance(paths, DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL);
+    let _ = doctor_temp_store::remove_for_instance(paths, DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL);
     Ok(profiles.len())
 }
 
@@ -2550,7 +2319,7 @@ async fn cleanup_remote_stale_temp_gateways(
         .await;
     }
     let _ = prune_remote_temp_gateway_profile_roots(pool, host_id, &main_root).await?;
-    let _ = remove_doctor_temp_gateway_records_for_instance(paths, host_id);
+    let _ = doctor_temp_store::remove_for_instance(paths, host_id);
     Ok(profiles.len())
 }
 
@@ -4292,12 +4061,14 @@ fn build_temp_gateway_record(
 pub async fn diagnose_doctor_assistant(
     app: AppHandle,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
-    let run_id = Uuid::new_v4().to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        diagnose_doctor_assistant_local_impl(&app, &run_id, DOCTOR_ASSISTANT_TARGET_PROFILE)
+    timed_async!("diagnose_doctor_assistant", {
+        let run_id = Uuid::new_v4().to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            diagnose_doctor_assistant_local_impl(&app, &run_id, DOCTOR_ASSISTANT_TARGET_PROFILE)
+        })
+        .await
+        .map_err(|error| error.to_string())?
     })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4306,15 +4077,17 @@ pub async fn remote_diagnose_doctor_assistant(
     host_id: String,
     app: AppHandle,
 ) -> Result<RescuePrimaryDiagnosisResult, String> {
-    let run_id = Uuid::new_v4().to_string();
-    diagnose_doctor_assistant_remote_impl(
-        &pool,
-        &host_id,
-        &app,
-        &run_id,
-        DOCTOR_ASSISTANT_TARGET_PROFILE,
-    )
-    .await
+    timed_async!("remote_diagnose_doctor_assistant", {
+        let run_id = Uuid::new_v4().to_string();
+        diagnose_doctor_assistant_remote_impl(
+            &pool,
+            &host_id,
+            &app,
+            &run_id,
+            DOCTOR_ASSISTANT_TARGET_PROFILE,
+        )
+        .await
+    })
 }
 
 #[tauri::command]
@@ -4323,16 +4096,373 @@ pub async fn repair_doctor_assistant(
     temp_provider_profile_id: Option<String>,
     app: AppHandle,
 ) -> Result<RescuePrimaryRepairResult, String> {
-    let run_id = Uuid::new_v4().to_string();
-    tauri::async_runtime::spawn_blocking(move || -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("repair_doctor_assistant", {
+        let run_id = Uuid::new_v4().to_string();
+        tauri::async_runtime::spawn_blocking(
+            move || -> Result<RescuePrimaryRepairResult, String> {
+                let paths = resolve_paths();
+                let before = match current_diagnosis {
+                    Some(diagnosis) => diagnosis,
+                    None => diagnose_doctor_assistant_local_impl(
+                        &app,
+                        &run_id,
+                        DOCTOR_ASSISTANT_TARGET_PROFILE,
+                    )?,
+                };
+                let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
+                let (selected_issue_ids, skipped_issue_ids) = collect_repairable_primary_issue_ids(
+                    &before,
+                    &before.summary.selected_fix_issue_ids,
+                );
+                let mut applied_issue_ids = Vec::new();
+                let mut failed_issue_ids = Vec::new();
+                let mut steps = Vec::new();
+                let mut current = before.clone();
+
+                if diagnose_doctor_assistant_status(&before) {
+                    append_step(
+                        &mut steps,
+                        "repair.noop",
+                        "No automatic repairs needed",
+                        true,
+                        "The primary gateway is already healthy",
+                        None,
+                    );
+                    return Ok(doctor_assistant_completed_result(
+                        attempted_at,
+                        "temporary".into(),
+                        selected_issue_ids,
+                        applied_issue_ids,
+                        skipped_issue_ids,
+                        failed_issue_ids,
+                        steps,
+                        before.clone(),
+                        before,
+                    ));
+                }
+
+                if !diagnose_doctor_assistant_status(&current) {
+                    let temp_profile = choose_temp_gateway_profile_name();
+                    let temp_port =
+                        choose_temp_gateway_port(resolve_main_port_from_diagnosis(&current));
+                    emit_doctor_assistant_progress(
+                        &app,
+                        &run_id,
+                        "bootstrap_temp_gateway",
+                        "Bootstrapping temporary gateway",
+                        0.56,
+                        0,
+                        None,
+                        None,
+                    );
+                    doctor_temp_store::upsert(
+                        &paths,
+                        build_temp_gateway_record(
+                            DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                            &temp_profile,
+                            temp_port,
+                            "bootstrapping",
+                            resolve_main_port_from_diagnosis(&current),
+                            Some("bootstrap".into()),
+                        ),
+                    )?;
+
+                    let temp_flow = (|| -> Result<(), String> {
+                        run_local_temp_gateway_action(
+                            RescueBotAction::Set,
+                            &temp_profile,
+                            temp_port,
+                            true,
+                            &mut steps,
+                            "temp.setup",
+                        )?;
+                        write_local_temp_gateway_marker(
+                            &paths.openclaw_dir,
+                            DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                            &temp_profile,
+                        )?;
+                        emit_doctor_assistant_progress(
+                            &app,
+                            &run_id,
+                            "bootstrap_temp_gateway",
+                            "Syncing provider configuration into temporary gateway",
+                            0.58,
+                            0,
+                            None,
+                            None,
+                        );
+                        let (provider, model) = sync_local_temp_gateway_provider_context(
+                            &temp_profile,
+                            temp_provider_profile_id.as_deref(),
+                            &mut steps,
+                        )?;
+                        emit_doctor_assistant_progress(
+                            &app,
+                            &run_id,
+                            "bootstrap_temp_gateway",
+                            format!("Temporary gateway ready: {provider}/{model}"),
+                            0.64,
+                            0,
+                            None,
+                            None,
+                        );
+                        doctor_temp_store::upsert(
+                            &paths,
+                            build_temp_gateway_record(
+                                DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                                &temp_profile,
+                                temp_port,
+                                "repairing",
+                                resolve_main_port_from_diagnosis(&current),
+                                Some("repair".into()),
+                            ),
+                        )?;
+
+                        for round in 1..=DOCTOR_ASSISTANT_TEMP_REPAIR_ROUNDS {
+                            run_local_temp_gateway_agent_repair_round(
+                                &app,
+                                &run_id,
+                                &temp_profile,
+                                &current,
+                                round,
+                                &mut steps,
+                            )?;
+                            let next = diagnose_doctor_assistant_local_impl(
+                                &app,
+                                &run_id,
+                                DOCTOR_ASSISTANT_TARGET_PROFILE,
+                            )?;
+                            for (issue_id, label) in collect_resolved_issues(&current, &next) {
+                                merge_issue_lists(
+                                    &mut applied_issue_ids,
+                                    std::iter::once(issue_id.clone()),
+                                );
+                                emit_doctor_assistant_progress(
+                                    &app,
+                                    &run_id,
+                                    "agent_repair",
+                                    format!("{label} fixed"),
+                                    0.6 + (round as f32 * 0.03),
+                                    round,
+                                    Some(issue_id),
+                                    Some(label),
+                                );
+                            }
+                            current = next;
+                            if diagnose_doctor_assistant_status(&current) {
+                                break;
+                            }
+                        }
+                        Ok(())
+                    })();
+                    let temp_flow_error = temp_flow.as_ref().err().cloned();
+                    let pending_reason = temp_flow_error.as_ref().and_then(|error| {
+                        doctor_assistant_extract_temp_provider_setup_reason(error)
+                    });
+
+                    emit_doctor_assistant_progress(
+                        &app,
+                        &run_id,
+                        "cleanup",
+                        "Cleaning up temporary gateway",
+                        0.94,
+                        0,
+                        None,
+                        None,
+                    );
+                    let cleanup_result = run_local_temp_gateway_action(
+                        RescueBotAction::Unset,
+                        &temp_profile,
+                        temp_port,
+                        false,
+                        &mut steps,
+                        "temp.cleanup",
+                    );
+                    let _ = doctor_temp_store::remove_record(
+                        &paths,
+                        DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                        &temp_profile,
+                    );
+                    match cleanup_result {
+                        Ok(()) => match prune_local_temp_gateway_profile_roots(&paths.openclaw_dir)
+                        {
+                            Ok(removed) => append_step(
+                                &mut steps,
+                                "temp.cleanup.roots",
+                                "Delete temporary gateway profiles",
+                                true,
+                                if removed.is_empty() {
+                                    "No temporary gateway profiles remained on disk".into()
+                                } else {
+                                    format!(
+                                        "Removed {} temporary gateway profile directorie(s)",
+                                        removed.len()
+                                    )
+                                },
+                                None,
+                            ),
+                            Err(error) => append_step(
+                                &mut steps,
+                                "temp.cleanup.roots",
+                                "Delete temporary gateway profiles",
+                                false,
+                                error,
+                                None,
+                            ),
+                        },
+                        Err(error) => append_step(
+                            &mut steps,
+                            "temp.cleanup.error",
+                            "Cleanup temporary gateway",
+                            false,
+                            error,
+                            None,
+                        ),
+                    }
+                    if temp_flow_error.is_some() || !diagnose_doctor_assistant_status(&current) {
+                        let fallback_reason = pending_reason
+                            .clone()
+                            .or(temp_flow_error.clone())
+                            .unwrap_or_else(|| {
+                                "Temporary gateway repair finished with remaining issues".into()
+                            });
+                        match fallback_restore_local_primary_config(
+                            &app,
+                            &run_id,
+                            &mut steps,
+                            &fallback_reason,
+                        ) {
+                            Ok(Some(next)) => {
+                                for (issue_id, label) in collect_resolved_issues(&current, &next) {
+                                    merge_issue_lists(
+                                        &mut applied_issue_ids,
+                                        std::iter::once(issue_id.clone()),
+                                    );
+                                    emit_doctor_assistant_progress(
+                                        &app,
+                                        &run_id,
+                                        "cleanup",
+                                        format!("{label} fixed"),
+                                        0.94,
+                                        0,
+                                        Some(issue_id),
+                                        Some(label),
+                                    );
+                                }
+                                current = next
+                            }
+                            Ok(None) => {}
+                            Err(error) => append_step(
+                                &mut steps,
+                                "repair.fallback.error",
+                                "Fallback restore primary config",
+                                false,
+                                error,
+                                None,
+                            ),
+                        }
+                    }
+                    if let Some(reason) = pending_reason {
+                        if !diagnose_doctor_assistant_status(&current) {
+                            emit_doctor_assistant_progress(
+                                &app, &run_id, "cleanup", &reason, 0.96, 0, None, None,
+                            );
+                            return Ok(doctor_assistant_pending_temp_provider_result(
+                                attempted_at,
+                                temp_profile,
+                                selected_issue_ids.clone(),
+                                applied_issue_ids.clone(),
+                                skipped_issue_ids.clone(),
+                                selected_issue_ids
+                                    .iter()
+                                    .filter(|id| !applied_issue_ids.contains(id))
+                                    .cloned()
+                                    .collect(),
+                                steps,
+                                before,
+                                current,
+                                temp_provider_profile_id,
+                                reason,
+                            ));
+                        }
+                    }
+                }
+
+                let after = diagnose_doctor_assistant_local_impl(
+                    &app,
+                    &run_id,
+                    DOCTOR_ASSISTANT_TARGET_PROFILE,
+                )?;
+                for (issue_id, _label) in collect_resolved_issues(&current, &after) {
+                    merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id));
+                }
+                let remaining = after
+                    .issues
+                    .iter()
+                    .map(|issue| issue.id.clone())
+                    .collect::<Vec<_>>();
+                failed_issue_ids = selected_issue_ids
+                    .iter()
+                    .filter(|id| remaining.contains(id))
+                    .cloned()
+                    .collect();
+
+                emit_doctor_assistant_progress(
+                    &app,
+                    &run_id,
+                    "cleanup",
+                    if diagnose_doctor_assistant_status(&after) {
+                        "Repair complete"
+                    } else {
+                        "Repair finished with remaining issues"
+                    },
+                    1.0,
+                    0,
+                    None,
+                    None,
+                );
+
+                Ok(doctor_assistant_completed_result(
+                    attempted_at,
+                    current.rescue_profile.clone(),
+                    selected_issue_ids,
+                    applied_issue_ids,
+                    skipped_issue_ids,
+                    failed_issue_ids,
+                    steps,
+                    before,
+                    after,
+                ))
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?
+    })
+}
+
+#[tauri::command]
+pub async fn remote_repair_doctor_assistant(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    current_diagnosis: Option<RescuePrimaryDiagnosisResult>,
+    temp_provider_profile_id: Option<String>,
+    app: AppHandle,
+) -> Result<RescuePrimaryRepairResult, String> {
+    timed_async!("remote_repair_doctor_assistant", {
+        let run_id = Uuid::new_v4().to_string();
         let paths = resolve_paths();
         let before = match current_diagnosis {
             Some(diagnosis) => diagnosis,
-            None => diagnose_doctor_assistant_local_impl(
-                &app,
-                &run_id,
-                DOCTOR_ASSISTANT_TARGET_PROFILE,
-            )?,
+            None => {
+                diagnose_doctor_assistant_remote_impl(
+                    &pool,
+                    &host_id,
+                    &app,
+                    &run_id,
+                    DOCTOR_ASSISTANT_TARGET_PROFILE,
+                )
+                .await?
+            }
         };
         let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
         let (selected_issue_ids, skipped_issue_ids) =
@@ -4377,10 +4507,10 @@ pub async fn repair_doctor_assistant(
                 None,
                 None,
             );
-            upsert_doctor_temp_gateway_record(
+            doctor_temp_store::upsert(
                 &paths,
                 build_temp_gateway_record(
-                    DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                    &host_id,
                     &temp_profile,
                     temp_port,
                     "bootstrapping",
@@ -4389,20 +4519,37 @@ pub async fn repair_doctor_assistant(
                 ),
             )?;
 
-            let temp_flow = (|| -> Result<(), String> {
-                run_local_temp_gateway_action(
+            let mut temp_flow = async {
+                run_remote_temp_gateway_action(
+                    &pool,
+                    &host_id,
                     RescueBotAction::Set,
                     &temp_profile,
                     temp_port,
                     true,
                     &mut steps,
                     "temp.setup",
-                )?;
-                write_local_temp_gateway_marker(
-                    &paths.openclaw_dir,
-                    DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                )
+                .await?;
+                let main_root = resolve_remote_main_root(&pool, &host_id).await;
+                if let Err(error) = write_remote_temp_gateway_marker(
+                    &pool,
+                    &host_id,
+                    &main_root,
+                    &host_id,
                     &temp_profile,
-                )?;
+                )
+                .await
+                {
+                    append_step(
+                        &mut steps,
+                        "temp.marker",
+                        "Mark temporary gateway ownership",
+                        false,
+                        error,
+                        None,
+                    );
+                }
                 emit_doctor_assistant_progress(
                     &app,
                     &run_id,
@@ -4413,25 +4560,84 @@ pub async fn repair_doctor_assistant(
                     None,
                     None,
                 );
-                let (provider, model) = sync_local_temp_gateway_provider_context(
+                let (main_root, temp_root, donor_cfg) = sync_remote_temp_gateway_provider_context(
+                    &pool,
+                    &host_id,
                     &temp_profile,
                     temp_provider_profile_id.as_deref(),
                     &mut steps,
-                )?;
-                emit_doctor_assistant_progress(
-                    &app,
-                    &run_id,
-                    "bootstrap_temp_gateway",
-                    format!("Temporary gateway ready: {provider}/{model}"),
-                    0.64,
-                    0,
-                    None,
-                    None,
-                );
-                upsert_doctor_temp_gateway_record(
+                )
+                .await?;
+                let mut provider_identity = None;
+                if let Err(error) = probe_remote_temp_gateway_agent_smoke(
+                    &pool,
+                    &host_id,
+                    &temp_profile,
+                    &mut steps,
+                )
+                .await
+                {
+                    let should_retry_from_remote_auth_store = temp_provider_profile_id.is_none()
+                        && doctor_assistant_extract_temp_provider_setup_reason(&error).is_some();
+                    if !should_retry_from_remote_auth_store {
+                        return Err(error);
+                    }
+                    emit_doctor_assistant_progress(
+                        &app,
+                        &run_id,
+                        "bootstrap_temp_gateway",
+                        "Rebuilding temporary gateway provider from remote auth store",
+                        0.62,
+                        0,
+                        None,
+                        None,
+                    );
+                    rebuild_remote_temp_gateway_provider_context_from_auth_store(
+                        &pool,
+                        &host_id,
+                        &main_root,
+                        &temp_root,
+                        &donor_cfg,
+                        &mut steps,
+                    )
+                    .await?;
+                    probe_remote_temp_gateway_agent_smoke(
+                        &pool,
+                        &host_id,
+                        &temp_profile,
+                        &mut steps,
+                    )
+                    .await
+                    .map(|identity| provider_identity = Some(identity))?;
+                } else {
+                    provider_identity = steps
+                        .iter()
+                        .rev()
+                        .find(|step| step.id == "temp.probe.agent.identity")
+                        .and_then(|step| {
+                            let detail = step.detail.trim();
+                            detail
+                                .strip_prefix("Temporary gateway replied using ")
+                                .and_then(|value| value.split_once('/'))
+                                .map(|(provider, model)| (provider.to_string(), model.to_string()))
+                        });
+                }
+                if let Some((provider, model)) = provider_identity.as_ref() {
+                    emit_doctor_assistant_progress(
+                        &app,
+                        &run_id,
+                        "bootstrap_temp_gateway",
+                        format!("Temporary gateway ready: {provider}/{model}"),
+                        0.64,
+                        0,
+                        None,
+                        None,
+                    );
+                }
+                doctor_temp_store::upsert(
                     &paths,
                     build_temp_gateway_record(
-                        DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
+                        &host_id,
                         &temp_profile,
                         temp_port,
                         "repairing",
@@ -4440,43 +4646,74 @@ pub async fn repair_doctor_assistant(
                     ),
                 )?;
 
-                for round in 1..=DOCTOR_ASSISTANT_TEMP_REPAIR_ROUNDS {
-                    run_local_temp_gateway_agent_repair_round(
-                        &app,
-                        &run_id,
-                        &temp_profile,
-                        &current,
-                        round,
+                if DOCTOR_ASSISTANT_REMOTE_SKIP_AGENT_REPAIR {
+                    append_step(
                         &mut steps,
-                    )?;
-                    let next = diagnose_doctor_assistant_local_impl(
-                        &app,
-                        &run_id,
-                        DOCTOR_ASSISTANT_TARGET_PROFILE,
-                    )?;
-                    for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                        merge_issue_lists(
-                            &mut applied_issue_ids,
-                            std::iter::once(issue_id.clone()),
-                        );
-                        emit_doctor_assistant_progress(
+                        "temp.debug.skip_agent_repair",
+                        "Skip temporary gateway repair loop",
+                        true,
+                        "Remote Doctor debug mode leaves the primary gateway unchanged after temp bootstrap so the temporary gateway configuration can be inspected in isolation.",
+                        None,
+                    );
+                } else {
+                    for round in 1..=DOCTOR_ASSISTANT_TEMP_REPAIR_ROUNDS {
+                        run_remote_temp_gateway_agent_repair_round(
+                            &pool,
+                            &host_id,
                             &app,
                             &run_id,
-                            "agent_repair",
-                            format!("{label} fixed"),
-                            0.6 + (round as f32 * 0.03),
+                            &temp_profile,
+                            &current,
                             round,
-                            Some(issue_id),
-                            Some(label),
-                        );
-                    }
-                    current = next;
-                    if diagnose_doctor_assistant_status(&current) {
-                        break;
+                            &mut steps,
+                        )
+                        .await?;
+                        let next = diagnose_doctor_assistant_remote_impl(
+                            &pool,
+                            &host_id,
+                            &app,
+                            &run_id,
+                            DOCTOR_ASSISTANT_TARGET_PROFILE,
+                        )
+                        .await?;
+                        for (issue_id, label) in collect_resolved_issues(&current, &next) {
+                            merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
+                            emit_doctor_assistant_progress(
+                                &app,
+                                &run_id,
+                                "agent_repair",
+                                format!("{label} fixed"),
+                                0.6 + (round as f32 * 0.03),
+                                round,
+                                Some(issue_id),
+                                Some(label),
+                            );
+                        }
+                        current = next;
+                        if diagnose_doctor_assistant_status(&current) {
+                            break;
+                        }
                     }
                 }
-                Ok(())
-            })();
+                Ok::<(), String>(())
+            }
+            .await;
+            if let Err(error) = temp_flow.as_ref() {
+                if doctor_assistant_is_remote_exec_timeout(error) {
+                    let recovered = remote_wait_for_primary_gateway_recovery_after_timeout(
+                        &pool, &host_id, &app, &run_id, &mut steps,
+                    )
+                    .await?;
+                    if recovered {
+                        temp_flow = Ok(());
+                    } else {
+                        temp_flow = Err(
+                            "Temporary gateway repair timed out before health could be confirmed. Open Gateway Logs and inspect the latest repair output."
+                                .into(),
+                        );
+                    }
+                }
+            }
             let temp_flow_error = temp_flow.as_ref().err().cloned();
             let pending_reason = temp_flow_error
                 .as_ref()
@@ -4492,49 +4729,49 @@ pub async fn repair_doctor_assistant(
                 None,
                 None,
             );
-            let cleanup_result = run_local_temp_gateway_action(
+            let cleanup_result = run_remote_temp_gateway_action(
+                &pool,
+                &host_id,
                 RescueBotAction::Unset,
                 &temp_profile,
                 temp_port,
                 false,
                 &mut steps,
                 "temp.cleanup",
-            );
-            let _ = remove_doctor_temp_gateway_record(
-                &paths,
-                DOCTOR_ASSISTANT_TEMP_SCOPE_LOCAL,
-                &temp_profile,
-            );
-            match cleanup_result {
-                Ok(()) => match prune_local_temp_gateway_profile_roots(&paths.openclaw_dir) {
-                    Ok(removed) => append_step(
-                        &mut steps,
-                        "temp.cleanup.roots",
-                        "Delete temporary gateway profiles",
-                        true,
-                        if removed.is_empty() {
-                            "No temporary gateway profiles remained on disk".into()
-                        } else {
-                            format!(
-                                "Removed {} temporary gateway profile directorie(s)",
-                                removed.len()
-                            )
-                        },
-                        None,
-                    ),
-                    Err(error) => append_step(
-                        &mut steps,
-                        "temp.cleanup.roots",
-                        "Delete temporary gateway profiles",
-                        false,
-                        error,
-                        None,
-                    ),
-                },
-                Err(error) => append_step(
+            )
+            .await;
+            let _ = doctor_temp_store::remove_record(&paths, &host_id, &temp_profile);
+            if let Err(error) = cleanup_result {
+                append_step(
                     &mut steps,
                     "temp.cleanup.error",
                     "Cleanup temporary gateway",
+                    false,
+                    error,
+                    None,
+                );
+            }
+            let main_root = resolve_remote_main_root(&pool, &host_id).await;
+            match prune_remote_temp_gateway_profile_roots(&pool, &host_id, &main_root).await {
+                Ok(removed) => append_step(
+                    &mut steps,
+                    "temp.cleanup.roots",
+                    "Delete temporary gateway profiles",
+                    true,
+                    if removed.is_empty() {
+                        "No temporary gateway profiles remained on disk".into()
+                    } else {
+                        format!(
+                            "Removed {} temporary gateway profile directorie(s)",
+                            removed.len()
+                        )
+                    },
+                    None,
+                ),
+                Err(error) => append_step(
+                    &mut steps,
+                    "temp.cleanup.roots",
+                    "Delete temporary gateway profiles",
                     false,
                     error,
                     None,
@@ -4547,12 +4784,16 @@ pub async fn repair_doctor_assistant(
                     .unwrap_or_else(|| {
                         "Temporary gateway repair finished with remaining issues".into()
                     });
-                match fallback_restore_local_primary_config(
+                match fallback_restore_remote_primary_config(
+                    &pool,
+                    &host_id,
                     &app,
                     &run_id,
                     &mut steps,
                     &fallback_reason,
-                ) {
+                )
+                .await
+                {
                     Ok(Some(next)) => {
                         for (issue_id, label) in collect_resolved_issues(&current, &next) {
                             merge_issue_lists(
@@ -4609,8 +4850,14 @@ pub async fn repair_doctor_assistant(
             }
         }
 
-        let after =
-            diagnose_doctor_assistant_local_impl(&app, &run_id, DOCTOR_ASSISTANT_TARGET_PROFILE)?;
+        let after = diagnose_doctor_assistant_remote_impl(
+            &pool,
+            &host_id,
+            &app,
+            &run_id,
+            DOCTOR_ASSISTANT_TARGET_PROFILE,
+        )
+        .await?;
         for (issue_id, _label) in collect_resolved_issues(&current, &after) {
             merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id));
         }
@@ -4652,467 +4899,6 @@ pub async fn repair_doctor_assistant(
             after,
         ))
     })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-pub async fn remote_repair_doctor_assistant(
-    pool: State<'_, SshConnectionPool>,
-    host_id: String,
-    current_diagnosis: Option<RescuePrimaryDiagnosisResult>,
-    temp_provider_profile_id: Option<String>,
-    app: AppHandle,
-) -> Result<RescuePrimaryRepairResult, String> {
-    let run_id = Uuid::new_v4().to_string();
-    let paths = resolve_paths();
-    let before = match current_diagnosis {
-        Some(diagnosis) => diagnosis,
-        None => {
-            diagnose_doctor_assistant_remote_impl(
-                &pool,
-                &host_id,
-                &app,
-                &run_id,
-                DOCTOR_ASSISTANT_TARGET_PROFILE,
-            )
-            .await?
-        }
-    };
-    let attempted_at = format_timestamp_from_unix(unix_timestamp_secs());
-    let (selected_issue_ids, skipped_issue_ids) =
-        collect_repairable_primary_issue_ids(&before, &before.summary.selected_fix_issue_ids);
-    let mut applied_issue_ids = Vec::new();
-    let mut failed_issue_ids = Vec::new();
-    let mut steps = Vec::new();
-    let mut current = before.clone();
-
-    if diagnose_doctor_assistant_status(&before) {
-        append_step(
-            &mut steps,
-            "repair.noop",
-            "No automatic repairs needed",
-            true,
-            "The primary gateway is already healthy",
-            None,
-        );
-        return Ok(doctor_assistant_completed_result(
-            attempted_at,
-            "temporary".into(),
-            selected_issue_ids,
-            applied_issue_ids,
-            skipped_issue_ids,
-            failed_issue_ids,
-            steps,
-            before.clone(),
-            before,
-        ));
-    }
-
-    if !diagnose_doctor_assistant_status(&current) {
-        let temp_profile = choose_temp_gateway_profile_name();
-        let temp_port = choose_temp_gateway_port(resolve_main_port_from_diagnosis(&current));
-        emit_doctor_assistant_progress(
-            &app,
-            &run_id,
-            "bootstrap_temp_gateway",
-            "Bootstrapping temporary gateway",
-            0.56,
-            0,
-            None,
-            None,
-        );
-        upsert_doctor_temp_gateway_record(
-            &paths,
-            build_temp_gateway_record(
-                &host_id,
-                &temp_profile,
-                temp_port,
-                "bootstrapping",
-                resolve_main_port_from_diagnosis(&current),
-                Some("bootstrap".into()),
-            ),
-        )?;
-
-        let mut temp_flow = async {
-            run_remote_temp_gateway_action(
-                &pool,
-                &host_id,
-                RescueBotAction::Set,
-                &temp_profile,
-                temp_port,
-                true,
-                &mut steps,
-                "temp.setup",
-            )
-            .await?;
-            let main_root = resolve_remote_main_root(&pool, &host_id).await;
-            if let Err(error) = write_remote_temp_gateway_marker(
-                &pool,
-                &host_id,
-                &main_root,
-                &host_id,
-                &temp_profile,
-            )
-            .await
-            {
-                append_step(
-                    &mut steps,
-                    "temp.marker",
-                    "Mark temporary gateway ownership",
-                    false,
-                    error,
-                    None,
-                );
-            }
-            emit_doctor_assistant_progress(
-                &app,
-                &run_id,
-                "bootstrap_temp_gateway",
-                "Syncing provider configuration into temporary gateway",
-                0.58,
-                0,
-                None,
-                None,
-            );
-            let (main_root, temp_root, donor_cfg) = sync_remote_temp_gateway_provider_context(
-                &pool,
-                &host_id,
-                &temp_profile,
-                temp_provider_profile_id.as_deref(),
-                &mut steps,
-            )
-            .await?;
-            let mut provider_identity = None;
-            if let Err(error) = probe_remote_temp_gateway_agent_smoke(
-                &pool,
-                &host_id,
-                &temp_profile,
-                &mut steps,
-            )
-            .await
-            {
-                let should_retry_from_remote_auth_store = temp_provider_profile_id.is_none()
-                    && doctor_assistant_extract_temp_provider_setup_reason(&error).is_some();
-                if !should_retry_from_remote_auth_store {
-                    return Err(error);
-                }
-                emit_doctor_assistant_progress(
-                    &app,
-                    &run_id,
-                    "bootstrap_temp_gateway",
-                    "Rebuilding temporary gateway provider from remote auth store",
-                    0.62,
-                    0,
-                    None,
-                    None,
-                );
-                rebuild_remote_temp_gateway_provider_context_from_auth_store(
-                    &pool,
-                    &host_id,
-                    &main_root,
-                    &temp_root,
-                    &donor_cfg,
-                    &mut steps,
-                )
-                .await?;
-                probe_remote_temp_gateway_agent_smoke(
-                    &pool,
-                    &host_id,
-                    &temp_profile,
-                    &mut steps,
-                )
-                .await
-                .map(|identity| provider_identity = Some(identity))?;
-            } else {
-                provider_identity = steps
-                    .iter()
-                    .rev()
-                    .find(|step| step.id == "temp.probe.agent.identity")
-                    .and_then(|step| {
-                        let detail = step.detail.trim();
-                        detail
-                            .strip_prefix("Temporary gateway replied using ")
-                            .and_then(|value| value.split_once('/'))
-                            .map(|(provider, model)| (provider.to_string(), model.to_string()))
-                    });
-            }
-            if let Some((provider, model)) = provider_identity.as_ref() {
-                emit_doctor_assistant_progress(
-                    &app,
-                    &run_id,
-                    "bootstrap_temp_gateway",
-                    format!("Temporary gateway ready: {provider}/{model}"),
-                    0.64,
-                    0,
-                    None,
-                    None,
-                );
-            }
-            upsert_doctor_temp_gateway_record(
-                &paths,
-                build_temp_gateway_record(
-                    &host_id,
-                    &temp_profile,
-                    temp_port,
-                    "repairing",
-                    resolve_main_port_from_diagnosis(&current),
-                    Some("repair".into()),
-                ),
-            )?;
-
-            if DOCTOR_ASSISTANT_REMOTE_SKIP_AGENT_REPAIR {
-                append_step(
-                    &mut steps,
-                    "temp.debug.skip_agent_repair",
-                    "Skip temporary gateway repair loop",
-                    true,
-                    "Remote Doctor debug mode leaves the primary gateway unchanged after temp bootstrap so the temporary gateway configuration can be inspected in isolation.",
-                    None,
-                );
-            } else {
-                for round in 1..=DOCTOR_ASSISTANT_TEMP_REPAIR_ROUNDS {
-                    run_remote_temp_gateway_agent_repair_round(
-                        &pool,
-                        &host_id,
-                        &app,
-                        &run_id,
-                        &temp_profile,
-                        &current,
-                        round,
-                        &mut steps,
-                    )
-                    .await?;
-                    let next = diagnose_doctor_assistant_remote_impl(
-                        &pool,
-                        &host_id,
-                        &app,
-                        &run_id,
-                        DOCTOR_ASSISTANT_TARGET_PROFILE,
-                    )
-                    .await?;
-                    for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                        merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id.clone()));
-                        emit_doctor_assistant_progress(
-                            &app,
-                            &run_id,
-                            "agent_repair",
-                            format!("{label} fixed"),
-                            0.6 + (round as f32 * 0.03),
-                            round,
-                            Some(issue_id),
-                            Some(label),
-                        );
-                    }
-                    current = next;
-                    if diagnose_doctor_assistant_status(&current) {
-                        break;
-                    }
-                }
-            }
-            Ok::<(), String>(())
-        }
-        .await;
-        if let Err(error) = temp_flow.as_ref() {
-            if doctor_assistant_is_remote_exec_timeout(error) {
-                let recovered = remote_wait_for_primary_gateway_recovery_after_timeout(
-                    &pool, &host_id, &app, &run_id, &mut steps,
-                )
-                .await?;
-                if recovered {
-                    temp_flow = Ok(());
-                } else {
-                    temp_flow = Err(
-                        "Temporary gateway repair timed out before health could be confirmed. Open Gateway Logs and inspect the latest repair output."
-                            .into(),
-                    );
-                }
-            }
-        }
-        let temp_flow_error = temp_flow.as_ref().err().cloned();
-        let pending_reason = temp_flow_error
-            .as_ref()
-            .and_then(|error| doctor_assistant_extract_temp_provider_setup_reason(error));
-
-        emit_doctor_assistant_progress(
-            &app,
-            &run_id,
-            "cleanup",
-            "Cleaning up temporary gateway",
-            0.94,
-            0,
-            None,
-            None,
-        );
-        let cleanup_result = run_remote_temp_gateway_action(
-            &pool,
-            &host_id,
-            RescueBotAction::Unset,
-            &temp_profile,
-            temp_port,
-            false,
-            &mut steps,
-            "temp.cleanup",
-        )
-        .await;
-        let _ = remove_doctor_temp_gateway_record(&paths, &host_id, &temp_profile);
-        if let Err(error) = cleanup_result {
-            append_step(
-                &mut steps,
-                "temp.cleanup.error",
-                "Cleanup temporary gateway",
-                false,
-                error,
-                None,
-            );
-        }
-        let main_root = resolve_remote_main_root(&pool, &host_id).await;
-        match prune_remote_temp_gateway_profile_roots(&pool, &host_id, &main_root).await {
-            Ok(removed) => append_step(
-                &mut steps,
-                "temp.cleanup.roots",
-                "Delete temporary gateway profiles",
-                true,
-                if removed.is_empty() {
-                    "No temporary gateway profiles remained on disk".into()
-                } else {
-                    format!(
-                        "Removed {} temporary gateway profile directorie(s)",
-                        removed.len()
-                    )
-                },
-                None,
-            ),
-            Err(error) => append_step(
-                &mut steps,
-                "temp.cleanup.roots",
-                "Delete temporary gateway profiles",
-                false,
-                error,
-                None,
-            ),
-        }
-        if temp_flow_error.is_some() || !diagnose_doctor_assistant_status(&current) {
-            let fallback_reason = pending_reason
-                .clone()
-                .or(temp_flow_error.clone())
-                .unwrap_or_else(|| {
-                    "Temporary gateway repair finished with remaining issues".into()
-                });
-            match fallback_restore_remote_primary_config(
-                &pool,
-                &host_id,
-                &app,
-                &run_id,
-                &mut steps,
-                &fallback_reason,
-            )
-            .await
-            {
-                Ok(Some(next)) => {
-                    for (issue_id, label) in collect_resolved_issues(&current, &next) {
-                        merge_issue_lists(
-                            &mut applied_issue_ids,
-                            std::iter::once(issue_id.clone()),
-                        );
-                        emit_doctor_assistant_progress(
-                            &app,
-                            &run_id,
-                            "cleanup",
-                            format!("{label} fixed"),
-                            0.94,
-                            0,
-                            Some(issue_id),
-                            Some(label),
-                        );
-                    }
-                    current = next
-                }
-                Ok(None) => {}
-                Err(error) => append_step(
-                    &mut steps,
-                    "repair.fallback.error",
-                    "Fallback restore primary config",
-                    false,
-                    error,
-                    None,
-                ),
-            }
-        }
-        if let Some(reason) = pending_reason {
-            if !diagnose_doctor_assistant_status(&current) {
-                emit_doctor_assistant_progress(
-                    &app, &run_id, "cleanup", &reason, 0.96, 0, None, None,
-                );
-                return Ok(doctor_assistant_pending_temp_provider_result(
-                    attempted_at,
-                    temp_profile,
-                    selected_issue_ids.clone(),
-                    applied_issue_ids.clone(),
-                    skipped_issue_ids.clone(),
-                    selected_issue_ids
-                        .iter()
-                        .filter(|id| !applied_issue_ids.contains(id))
-                        .cloned()
-                        .collect(),
-                    steps,
-                    before,
-                    current,
-                    temp_provider_profile_id,
-                    reason,
-                ));
-            }
-        }
-    }
-
-    let after = diagnose_doctor_assistant_remote_impl(
-        &pool,
-        &host_id,
-        &app,
-        &run_id,
-        DOCTOR_ASSISTANT_TARGET_PROFILE,
-    )
-    .await?;
-    for (issue_id, _label) in collect_resolved_issues(&current, &after) {
-        merge_issue_lists(&mut applied_issue_ids, std::iter::once(issue_id));
-    }
-    let remaining = after
-        .issues
-        .iter()
-        .map(|issue| issue.id.clone())
-        .collect::<Vec<_>>();
-    failed_issue_ids = selected_issue_ids
-        .iter()
-        .filter(|id| remaining.contains(id))
-        .cloned()
-        .collect();
-
-    emit_doctor_assistant_progress(
-        &app,
-        &run_id,
-        "cleanup",
-        if diagnose_doctor_assistant_status(&after) {
-            "Repair complete"
-        } else {
-            "Repair finished with remaining issues"
-        },
-        1.0,
-        0,
-        None,
-        None,
-    );
-
-    Ok(doctor_assistant_completed_result(
-        attempted_at,
-        current.rescue_profile.clone(),
-        selected_issue_ids,
-        applied_issue_ids,
-        skipped_issue_ids,
-        failed_issue_ids,
-        steps,
-        before,
-        after,
-    ))
 }
 
 fn resolve_main_port_from_diagnosis(diagnosis: &RescuePrimaryDiagnosisResult) -> u16 {
@@ -5133,6 +4919,10 @@ fn resolve_main_port_from_diagnosis(diagnosis: &RescuePrimaryDiagnosisResult) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::doctor_temp_store::{
+        self, DoctorTempGatewaySessionRecord, DoctorTempGatewaySessionStore,
+    };
     use crate::models::OpenClawPaths;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -5604,9 +5394,9 @@ mod tests {
     fn save_doctor_temp_gateway_store_deletes_file_when_empty() {
         let temp = TempDirGuard::new("store-empty");
         let paths = make_paths(&temp);
-        let store_path = doctor_temp_gateway_store_path(&paths);
+        let store_path = doctor_temp_store::store_path(&paths);
 
-        save_doctor_temp_gateway_store(&paths, &DoctorTempGatewaySessionStore::default()).unwrap();
+        doctor_temp_store::save(&paths, &DoctorTempGatewaySessionStore::default()).unwrap();
 
         assert!(!store_path.exists());
     }
@@ -5615,13 +5405,13 @@ mod tests {
     fn remove_doctor_temp_gateway_record_deletes_store_when_last_record_removed() {
         let temp = TempDirGuard::new("store-remove-last");
         let paths = make_paths(&temp);
-        let store_path = doctor_temp_gateway_store_path(&paths);
+        let store_path = doctor_temp_store::store_path(&paths);
         let record = sample_record("ssh:hetzner", &temp_profile("owned"));
 
-        upsert_doctor_temp_gateway_record(&paths, record.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, record.clone()).unwrap();
         assert!(store_path.exists());
 
-        remove_doctor_temp_gateway_record(&paths, &record.instance_id, &record.profile).unwrap();
+        doctor_temp_store::remove_record(&paths, &record.instance_id, &record.profile).unwrap();
 
         assert!(!store_path.exists());
     }
@@ -5633,12 +5423,12 @@ mod tests {
         let owned = sample_record("ssh:hetzner", &temp_profile("owned"));
         let other = sample_record("ssh:other", &temp_profile("other"));
 
-        upsert_doctor_temp_gateway_record(&paths, owned.clone()).unwrap();
-        upsert_doctor_temp_gateway_record(&paths, other.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, owned.clone()).unwrap();
+        doctor_temp_store::upsert(&paths, other.clone()).unwrap();
 
-        remove_doctor_temp_gateway_records_for_instance(&paths, "ssh:hetzner").unwrap();
+        doctor_temp_store::remove_for_instance(&paths, "ssh:hetzner").unwrap();
 
-        let store = load_doctor_temp_gateway_store(&paths);
+        let store = doctor_temp_store::load(&paths);
         assert_eq!(store.sessions.len(), 1);
         assert_eq!(store.sessions[0].instance_id, "ssh:other");
         assert_eq!(store.sessions[0].profile, other.profile);

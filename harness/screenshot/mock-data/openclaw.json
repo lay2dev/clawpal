@@ -1,0 +1,9 @@
+{
+  "model": "anthropic/claude-sonnet-4-5",
+  "channels": {
+    "discord": {
+      "botToken": "mock-screenshot-harness",
+      "guildId": "123456789"
+    }
+  }
+}

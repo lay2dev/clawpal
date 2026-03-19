@@ -216,3 +216,103 @@ describe("overview-loading helpers", () => {
     ).toBe(false);
   });
 });
+
+import {
+  shouldSkipConfigSnapshot,
+  computePollIntervalMs,
+  shouldPollResource,
+} from "../overview-loading";
+
+describe("shouldSkipConfigSnapshot", () => {
+  test("skips when persisted runtime snapshot has model data", () => {
+    expect(shouldSkipConfigSnapshot({ globalDefaultModel: "anthropic/claude-sonnet-4-20250514" })).toBe(true);
+  });
+
+  test("does not skip when no persisted runtime snapshot", () => {
+    expect(shouldSkipConfigSnapshot(null)).toBe(false);
+  });
+
+  test("does not skip when persisted runtime snapshot has null model (remote SSH bug)", () => {
+    expect(shouldSkipConfigSnapshot({ globalDefaultModel: null })).toBe(false);
+  });
+
+  test("does not skip when persisted runtime snapshot has undefined model", () => {
+    expect(shouldSkipConfigSnapshot({})).toBe(false);
+  });
+});
+
+describe("computePollIntervalMs", () => {
+  test("remote always returns 30s", () => {
+    expect(computePollIntervalMs({ isRemote: true, statusSettled: false })).toBe(30_000);
+    expect(computePollIntervalMs({ isRemote: true, statusSettled: true })).toBe(30_000);
+  });
+
+  test("local unsettled returns 2s", () => {
+    expect(computePollIntervalMs({ isRemote: false, statusSettled: false })).toBe(2_000);
+  });
+
+  test("local settled returns 10s", () => {
+    expect(computePollIntervalMs({ isRemote: false, statusSettled: true })).toBe(10_000);
+  });
+});
+
+describe("shouldPollResource", () => {
+  test("runtimeSnapshot fires every tick", () => {
+    for (let tick = 0; tick < 10; tick++) {
+      expect(shouldPollResource("runtimeSnapshot", tick)).toBe(true);
+    }
+  });
+
+  test("queuedCommandsCount fires every tick", () => {
+    for (let tick = 0; tick < 10; tick++) {
+      expect(shouldPollResource("queuedCommandsCount", tick)).toBe(true);
+    }
+  });
+
+  test("statusExtra fires every 3rd tick only", () => {
+    expect(shouldPollResource("statusExtra", 0)).toBe(true);
+    expect(shouldPollResource("statusExtra", 1)).toBe(false);
+    expect(shouldPollResource("statusExtra", 2)).toBe(false);
+    expect(shouldPollResource("statusExtra", 3)).toBe(true);
+    expect(shouldPollResource("statusExtra", 6)).toBe(true);
+  });
+});
+
+describe("buildInitialHomeState with healthy: null", () => {
+  test("config-only initial state sets healthy to null (not false)", () => {
+    const initial = buildInitialHomeState(
+      {
+        globalDefaultModel: "model",
+        fallbackModels: [],
+        agents: [{ id: "main", model: null, channels: [], online: false }],
+      },
+      null,
+      null,
+    );
+    expect(initial.status).not.toBeNull();
+    expect(initial.status!.healthy).toBeNull();
+    expect(initial.statusSettled).toBe(false);
+  });
+
+  test("null persisted data returns null status", () => {
+    const initial = buildInitialHomeState(null, null, null);
+    expect(initial.status).toBeNull();
+    expect(initial.agents).toBeNull();
+    expect(initial.statusSettled).toBe(false);
+  });
+
+  test("runtime snapshot still sets healthy to actual boolean", () => {
+    const initial = buildInitialHomeState(
+      null,
+      {
+        status: { healthy: true, activeAgents: 2 },
+        agents: [{ id: "main", model: null, channels: [], online: true }],
+        globalDefaultModel: "model",
+        fallbackModels: [],
+      },
+      null,
+    );
+    expect(initial.status!.healthy).toBe(true);
+    expect(initial.statusSettled).toBe(true);
+  });
+});

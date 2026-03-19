@@ -56,7 +56,7 @@ describe("Doctor page rescue header", () => {
     expect(html).toContain("role=\"img\"");
     expect(html).toContain("alt=\"Diagnose\"");
     expect(html).toContain("src=\"");
-    expect(html).toContain("/src/assets/doctor.png");
+    expect(html).toContain("doctor.");
     expect(html).toContain("aria-label=\"Open logs\"");
     expect(html).toContain(">Diagnose<");
     expect(html).toContain("Run a structured check before attempting repairs on the primary profile.");

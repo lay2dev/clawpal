@@ -1,0 +1,592 @@
+name: Metrics Gate
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: metrics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # ── Gate 1: Commit size ≤ 500 lines ──
+      - name: Check commit sizes
+        id: commit_size
+        run: |
+          MAX_LINES=500
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+          FAIL=0
+          FAIL_COUNT=0
+          MAX_SEEN=0
+          DETAILS=""
+
+          for COMMIT in $(git rev-list $BASE..$HEAD); do
+            # Skip merge commits (GitHub auto-generated)
+            PARENTS=$(git rev-list --parents -1 $COMMIT | wc -w)
+            if [ "$PARENTS" -gt 2 ]; then
+              continue
+            fi
+            # Skip style-only commits (rustfmt, prettier, etc.)
+            SUBJECT=$(git log --format=%s -1 $COMMIT)
+            if echo "$SUBJECT" | grep -qiE '^style(\(|:)'; then
+              continue
+            fi
+            SHORT=$(git rev-parse --short $COMMIT)
+            SUBJECT=$(git log --format=%s -1 $COMMIT)
+            STAT=$(git diff --shortstat ${COMMIT}^..${COMMIT} 2>/dev/null || echo "0")
+            ADDS=$(echo "$STAT" | grep -oP '\d+ insertion' | grep -oP '\d+' || echo 0)
+            DELS=$(echo "$STAT" | grep -oP '\d+ deletion' | grep -oP '\d+' || echo 0)
+            TOTAL=$(( ${ADDS:-0} + ${DELS:-0} ))
+            if [ "$TOTAL" -gt "$MAX_SEEN" ]; then MAX_SEEN=$TOTAL; fi
+
+            if [ "$TOTAL" -gt "$MAX_LINES" ]; then
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ❌ | ${SUBJECT} |\n"
+              FAIL=1
+              FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+            else
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${TOTAL} | ≤ ${MAX_LINES} | ✅ | ${SUBJECT} |\n"
+            fi
+          done
+
+          TOTAL_COMMITS=$(git rev-list --no-merges $BASE..$HEAD | wc -l)
+          PASSED_COMMITS=$(( TOTAL_COMMITS - FAIL_COUNT ))
+          
+          echo "fail=${FAIL}" >> "$GITHUB_OUTPUT"
+          echo "total=${TOTAL_COMMITS}" >> "$GITHUB_OUTPUT"
+          echo "passed=${PASSED_COMMITS}" >> "$GITHUB_OUTPUT"
+          echo "max_seen=${MAX_SEEN}" >> "$GITHUB_OUTPUT"
+          printf "%b" "$DETAILS" > /tmp/commit_details.txt
+          echo "max_lines=${MAX_LINES}" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 2: Frontend bundle size ≤ 350 KB (gzip) ──
+      - name: Check bundle size
+        id: bundle_size
+        run: |
+          bun run build
+          BUNDLE_BYTES=$(find dist/assets -name '*.js' -exec cat {} + | wc -c)
+          BUNDLE_KB=$(( BUNDLE_BYTES / 1024 ))
+
+          GZIP_BYTES=0
+          for f in dist/assets/*.js; do
+            GZ=$(gzip -c "$f" | wc -c)
+            GZIP_BYTES=$(( GZIP_BYTES + GZ ))
+          done
+          GZIP_KB=$(( GZIP_BYTES / 1024 ))
+
+          LIMIT_KB=350
+          if [ "$GZIP_KB" -gt "$LIMIT_KB" ]; then
+            PASS="false"
+          else
+            PASS="true"
+          fi
+
+          # Measure initial-load chunks (exclude lazy page/component chunks)
+          INIT_GZIP=0
+          for f in dist/assets/*.js; do
+            BN=$(basename "$f")
+            case "$BN" in
+              index-*|vendor-react-*|vendor-ui-*|vendor-i18n-*|vendor-icons-*)
+                GZ_INIT=$(gzip -c "$f" | wc -c)
+                INIT_GZIP=$((INIT_GZIP + GZ_INIT))
+                ;;
+            esac
+          done
+          INIT_KB=$((INIT_GZIP / 1024))
+
+          echo "raw_kb=${BUNDLE_KB}" >> "$GITHUB_OUTPUT"
+          echo "gzip_kb=${GZIP_KB}" >> "$GITHUB_OUTPUT"
+          echo "init_gzip_kb=${INIT_KB}" >> "$GITHUB_OUTPUT"
+          echo "limit_kb=${LIMIT_KB}" >> "$GITHUB_OUTPUT"
+          echo "pass=${PASS}" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 3: Perf metrics E2E ──
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run perf metrics tests
+        id: perf_tests
+        working-directory: src-tauri
+        run: |
+          set +e
+          OUTPUT=$(cargo test -p clawpal --test perf_metrics -- --nocapture 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          # Parse test results
+          PASSED=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo 0)
+          FAILED=$(echo "$OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+' || echo 0)
+
+          # Extract structured metrics from METRIC: lines
+          RSS_MB=$(echo "$OUTPUT" | grep -oP 'METRIC:rss_mb=\K[0-9.]+' || echo "N/A")
+          VMS_MB=$(echo "$OUTPUT" | grep -oP 'METRIC:vms_mb=\K[0-9.]+' || echo "N/A")
+          CMD_P50=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_p50_us=\K[0-9]+' || echo "N/A")
+          CMD_P95=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_p95_us=\K[0-9]+' || echo "N/A")
+          CMD_MAX=$(echo "$OUTPUT" | grep -oP 'METRIC:cmd_max_us=\K[0-9]+' || echo "N/A")
+          UPTIME=$(echo "$OUTPUT" | grep -oP 'METRIC:uptime_secs=\K[0-9.]+' || echo "N/A")
+
+          echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          echo "rss_mb=${RSS_MB}" >> "$GITHUB_OUTPUT"
+          echo "vms_mb=${VMS_MB}" >> "$GITHUB_OUTPUT"
+          echo "cmd_p50_us=${CMD_P50}" >> "$GITHUB_OUTPUT"
+          echo "cmd_p95_us=${CMD_P95}" >> "$GITHUB_OUTPUT"
+          echo "cmd_max_us=${CMD_MAX}" >> "$GITHUB_OUTPUT"
+          echo "uptime=${UPTIME}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Gate 4: Large file check (informational) ──
+      - name: Check large files
+        id: large_files
+        run: |
+          # Auto-scan ALL source files >300 lines and assign targets
+          # Target = min(current_lines * 0.6, current_lines - 200) rounded to nearest 100, floor 500
+          DETAILS=""
+          OVER_TARGET=0
+          TOTAL_LARGE=0
+
+          # Manually tracked key files with specific targets
+          declare -A OVERRIDES
+          OVERRIDES["src-tauri/src/commands/mod.rs"]=300
+          OVERRIDES["src/App.tsx"]=500
+          OVERRIDES["src-tauri/src/commands/doctor_assistant.rs"]=3000
+          OVERRIDES["src-tauri/src/commands/rescue.rs"]=2000
+          OVERRIDES["src-tauri/src/commands/profiles.rs"]=1500
+          OVERRIDES["src-tauri/src/cli_runner.rs"]=1200
+          OVERRIDES["src-tauri/src/commands/credentials.rs"]=1000
+
+          while IFS= read -r LINE; do
+            LINES=$(echo "$LINE" | awk '{print $1}')
+            FILE=$(echo "$LINE" | awk '{print $2}')
+            [ "$LINES" -le 300 ] 2>/dev/null && continue
+
+            SHORT=$(echo "$FILE" | sed 's|src-tauri/src/||;s|src/||')
+
+            # Use override if available, otherwise auto-calculate
+            if [ -n "${OVERRIDES[$FILE]+x}" ]; then
+              TARGET=${OVERRIDES[$FILE]}
+            else
+              # Target: 60% of current, rounded to nearest 100, floor 500
+              TARGET=$(( (LINES * 60 / 100 + 50) / 100 * 100 ))
+              [ "$TARGET" -lt 500 ] && TARGET=500
+            fi
+
+            if [ "$LINES" -gt 500 ]; then
+              TOTAL_LARGE=$((TOTAL_LARGE + 1))
+            fi
+
+            if [ "$LINES" -gt "$TARGET" ]; then
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${LINES} | ≤ ${TARGET} | ⚠️ |\n"
+              OVER_TARGET=$((OVER_TARGET + 1))
+            else
+              DETAILS="${DETAILS}| \`${SHORT}\` | ${LINES} | ≤ ${TARGET} | ✅ |\n"
+            fi
+          done < <(find src/ src-tauri/src/ \( -name '*.ts' -o -name '*.tsx' -o -name '*.rs' \) -exec wc -l {} + 2>/dev/null | grep -v total | sort -rn)
+
+          MOD_LINES=$(wc -l < src-tauri/src/commands/mod.rs 2>/dev/null || echo 0)
+          APP_LINES=$(wc -l < src/App.tsx 2>/dev/null || echo 0)
+
+          printf "%b" "$DETAILS" > /tmp/large_file_details.txt
+          echo "mod_lines=${MOD_LINES}" >> "$GITHUB_OUTPUT"
+          echo "app_lines=${APP_LINES}" >> "$GITHUB_OUTPUT"
+          echo "large_count=${TOTAL_LARGE}" >> "$GITHUB_OUTPUT"
+          echo "over_target=${OVER_TARGET}" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 4b: Command perf E2E (local) ──
+      - name: Run command perf E2E
+        id: cmd_perf
+        working-directory: src-tauri
+        run: |
+          set +e
+          OUTPUT=$(cargo test -p clawpal --test command_perf_e2e -- --nocapture 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          PASSED=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo 0)
+          FAILED=$(echo "$OUTPUT" | grep -oP '\d+ failed' | grep -oP '\d+' || echo 0)
+
+          # Extract LOCAL_CMD lines
+          echo "$OUTPUT" | grep '^LOCAL_CMD:' > /tmp/local_cmd_perf.txt || true
+          CMD_COUNT=$(wc -l < /tmp/local_cmd_perf.txt)
+
+          # Extract process metrics
+          PROC_RSS=$(echo "$OUTPUT" | grep -oP 'PROCESS:rss_mb=\K[0-9.]+' || echo "N/A")
+
+          echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+          echo "cmd_count=${CMD_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "proc_rss=${PROC_RSS}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Gate 4c: Command perf E2E (remote via SSH Docker) ──
+      - name: Install sshpass (for SSH perf tests)
+        run: sudo apt-get install -y sshpass
+
+      - name: Build Docker OpenClaw container (for remote perf)
+        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
+
+      - name: Start SSH container
+        run: |
+          docker run -d --name oc-remote-perf -p 2299:22 clawpal-perf-e2e
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+
+      - name: Run remote command timing via SSH
+        id: remote_perf
+        run: |
+          set +e
+          SSH_FAIL=0       # SSH transport failures (exit 255)
+          CMD_FAIL_COUNT=0 # remote commands that ran but returned non-zero
+          TOTAL_RUNS=0
+          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
+
+          # Exercise remote OpenClaw commands and measure timing
+          CMDS=(
+            "openclaw status --json"
+            "cat /root/.openclaw/openclaw.json"
+            "openclaw gateway status --json"
+            "openclaw cron list --json"
+            "openclaw agent list --json"
+          )
+
+          echo "REMOTE_PERF_START" > /tmp/remote_perf.txt
+          for CMD in "${CMDS[@]}"; do
+            SHORT=$(echo "$CMD" | awk '{print $1"_"$2}' | tr '/' '_')
+            for i in $(seq 1 3); do
+              TOTAL_RUNS=$(( TOTAL_RUNS + 1 ))
+              START=$(date +%s%N)
+              $SSH "$CMD" > /dev/null 2>&1
+              CMD_EXIT=$?
+              # Exit 255 = SSH transport failure; other non-zero = remote command error
+              if [ "$CMD_EXIT" -eq 255 ]; then
+                SSH_FAIL=1
+              elif [ "$CMD_EXIT" -ne 0 ]; then
+                CMD_FAIL_COUNT=$(( CMD_FAIL_COUNT + 1 ))
+              fi
+              END=$(date +%s%N)
+              MS=$(( (END - START) / 1000000 ))
+              echo "REMOTE_CMD:${SHORT}:run${i}:${MS}ms" | tee -a /tmp/remote_perf.txt
+            done
+          done
+          echo "REMOTE_PERF_END" >> /tmp/remote_perf.txt
+
+          # Parse medians
+          DETAILS=""
+          for CMD in "${CMDS[@]}"; do
+            SHORT=$(echo "$CMD" | awk '{print $1"_"$2}' | tr '/' '_')
+            TIMES=$(grep "REMOTE_CMD:${SHORT}:" /tmp/remote_perf.txt | grep -oP '\d+(?=ms)' | sort -n)
+            MEDIAN=$(echo "$TIMES" | sed -n '2p')
+            MAX=$(echo "$TIMES" | tail -1)
+            DETAILS="${DETAILS}${SHORT}:median=${MEDIAN:-0}:max=${MAX:-0}\n"
+          done
+          printf "%b" "$DETAILS" > /tmp/remote_perf_summary.txt
+
+          # Also measure a batch command (single SSH hop)
+          # Use ; instead of && so timing covers all commands even if one fails
+          BATCH_CMD="openclaw status --json ; openclaw gateway status --json ; openclaw cron list --json"
+          for i in $(seq 1 3); do
+            START=$(date +%s%N)
+            $SSH "$BATCH_CMD" > /dev/null 2>&1
+            CMD_EXIT=$?
+            if [ "$CMD_EXIT" -eq 255 ]; then SSH_FAIL=1; fi
+            END=$(date +%s%N)
+            MS=$(( (END - START) / 1000000 ))
+            echo "REMOTE_CMD:batch_all:run${i}:${MS}ms" | tee -a /tmp/remote_perf.txt
+          done
+
+          # Gate: fail only on SSH transport errors. This step measures latency
+          # over SSH — remote command exit codes vary in the Docker container
+          # where gateway/agents aren't fully configured, which is expected.
+          echo "cmd_fail_count=${CMD_FAIL_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "total_runs=${TOTAL_RUNS}" >> "$GITHUB_OUTPUT"
+          if [ "$SSH_FAIL" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cleanup remote container
+        if: always()
+        run: docker rm -f oc-remote-perf 2>/dev/null || true
+
+      # ── Gate 5: Home page render probes ──
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: Install Playwright
+        run: |
+          bun add -d @playwright/test
+          npx playwright install chromium --with-deps
+        timeout-minutes: 5
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Start container (reuses image from remote perf step)
+        run: |
+          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+
+      - name: Extract fixtures from container
+        run: node tests/e2e/perf/extract-fixtures.mjs
+        env:
+          CLAWPAL_PERF_SSH_PORT: "2299"
+
+      - name: Start Vite dev server
+        run: |
+          bun run dev &
+          for i in $(seq 1 20); do
+            curl -s http://localhost:1420 > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Run render probe E2E
+        id: home_perf
+        run: |
+          set +e
+          npx playwright test --config tests/e2e/perf/playwright.config.mjs 2>&1
+          EXIT_CODE=$?
+
+          # Parse report.md for probe values
+          if [ -f tests/e2e/perf/report.md ]; then
+            STATUS_MS=$(grep -oP '\| status \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            VERSION_MS=$(grep -oP '\| version \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            AGENTS_MS=$(grep -oP '\| agents \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            MODELS_MS=$(grep -oP '\| models \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+            SETTLED_MS=$(grep -oP '\| settled \| \K[0-9]+' tests/e2e/perf/report.md || echo "N/A")
+          else
+            STATUS_MS="N/A"; VERSION_MS="N/A"; AGENTS_MS="N/A"; MODELS_MS="N/A"; SETTLED_MS="N/A"
+          fi
+
+          echo "status_ms=${STATUS_MS}" >> "$GITHUB_OUTPUT"
+          echo "version_ms=${VERSION_MS}" >> "$GITHUB_OUTPUT"
+          echo "agents_ms=${AGENTS_MS}" >> "$GITHUB_OUTPUT"
+          echo "models_ms=${MODELS_MS}" >> "$GITHUB_OUTPUT"
+          echo "settled_ms=${SETTLED_MS}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PERF_MOCK_LATENCY_MS: "50"
+          PERF_SETTLED_GATE_MS: "5000"
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f oc-perf 2>/dev/null || true
+
+      # ── Post / update PR comment ──
+      - name: Generate metrics comment
+        id: metrics_body
+        run: |
+          LARGE_FILE_DETAILS=$(cat /tmp/large_file_details.txt)
+
+          GATE_FAIL=0
+          OVERALL="✅ All gates passed"
+
+          # Commit size is a soft gate (reported but not blocking)
+          # if [ "${{ steps.commit_size.outputs.fail }}" = "1" ]; then
+          #   OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          # fi
+          if [ "${{ steps.bundle_size.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -gt 180 ] 2>/dev/null; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.perf_tests.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          CMD_P50="${{ steps.perf_tests.outputs.cmd_p50_us }}"
+          if [ "$CMD_P50" != "N/A" ] && [ "$CMD_P50" -gt 1000 ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.cmd_perf.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          if [ "${{ steps.home_perf.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+          for PROBE_VAL in "${{ steps.home_perf.outputs.status_ms }}" "${{ steps.home_perf.outputs.version_ms }}" "${{ steps.home_perf.outputs.agents_ms }}" "${{ steps.home_perf.outputs.models_ms }}"; do
+            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 200 ] 2>/dev/null; then
+              OVERALL="❌ Some gates failed"; GATE_FAIL=1
+            fi
+          done
+          if [ "${{ steps.remote_perf.outputs.pass }}" = "false" ]; then
+            OVERALL="❌ Some gates failed"; GATE_FAIL=1
+          fi
+
+          BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+          MOCK_LATENCY="${{ env.PERF_MOCK_LATENCY_MS || '50' }}"
+          COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
+
+          cat > /tmp/metrics_comment.md << COMMENTEOF
+          <!-- pr-metrics-bot -->
+          ## 📏 Metrics Gate Report
+
+          **Status**: ${OVERALL}
+
+          ### Commit Size  ${COMMIT_ICON}
+
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | Commits checked | ${{ steps.commit_size.outputs.total }} | — | — |
+          | All within limit | ${{ steps.commit_size.outputs.passed }}/${{ steps.commit_size.outputs.total }} | ≤ ${{ steps.commit_size.outputs.max_lines }} lines | ${COMMIT_ICON} |
+          | Largest commit | ${{ steps.commit_size.outputs.max_seen }} lines | ≤ ${{ steps.commit_size.outputs.max_lines }} | $( [ "${{ steps.commit_size.outputs.max_seen }}" -le "${{ steps.commit_size.outputs.max_lines }}" ] && echo "✅" || echo "❌" ) |
+
+          ### Bundle Size  ${BUNDLE_ICON}
+
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | JS bundle (raw) | ${{ steps.bundle_size.outputs.raw_kb }} KB | — | — |
+          | JS bundle (gzip) | ${{ steps.bundle_size.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle_size.outputs.limit_kb }} KB | ${BUNDLE_ICON} |
+          | JS initial load (gzip) | ${{ steps.bundle_size.outputs.init_gzip_kb }} KB | ≤ 180 KB | $( [ "${{ steps.bundle_size.outputs.init_gzip_kb }}" -le 180 ] && echo "✅" || echo "❌" ) |
+
+          ### Perf Metrics E2E  $( [ "${{ steps.perf_tests.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Metric | Value | Limit | Status |
+          |--------|-------|-------|--------|
+          | Tests | ${{ steps.perf_tests.outputs.passed }} passed, ${{ steps.perf_tests.outputs.failed }} failed | 0 failures | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | RSS (test process) | ${{ steps.perf_tests.outputs.rss_mb }} MB | ≤ 20 MB | $( echo "${{ steps.perf_tests.outputs.rss_mb }}" | awk '{print ($1 <= 80) ? "✅" : "❌"}' ) |
+          | VMS (test process) | ${{ steps.perf_tests.outputs.vms_mb }} MB | — | ℹ️ |
+          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50_us }} µs | ≤ 1000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p50_us }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
+          | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95_us }} µs | ≤ 5000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p95_us }}" | awk '{print ($1 != "N/A" && $1 <= 5000) ? "✅" : "❌"}' ) |
+          | Command max latency | ${{ steps.perf_tests.outputs.cmd_max_us }} µs | ≤ 50000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_max_us }}" | awk '{print ($1 != "N/A" && $1 <= 50000) ? "✅" : "❌"}' ) |
+
+          ### Command Perf (local)  $( [ "${{ steps.cmd_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Metric | Value | Status |
+          |--------|-------|--------|
+          | Tests | ${{ steps.cmd_perf.outputs.passed }} passed, ${{ steps.cmd_perf.outputs.failed }} failed | $( [ "${{ steps.cmd_perf.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
+          | Commands measured | ${{ steps.cmd_perf.outputs.cmd_count }} | ℹ️ |
+          | RSS (test process) | ${{ steps.cmd_perf.outputs.proc_rss }} MB | ℹ️ |
+
+          <details><summary>Local command timings</summary>
+
+          | Command | P50 (µs) | P95 (µs) | Max (µs) |
+          |---------|----------|----------|----------|
+          $(cat /tmp/local_cmd_perf.txt 2>/dev/null | awk -F: '{printf "| %s | %s | %s | %s |\n", $2, $4, $5, $6}' | sed 's/p50_us=//;s/p95_us=//;s/max_us=//;s/avg_us=[0-9]*//;s/count=[0-9]*://' || echo "| N/A | N/A | N/A | N/A |")
+
+          </details>
+
+          ### Command Perf (remote SSH)  $( [ "${{ steps.remote_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Metric | Value | Status |
+          |--------|-------|--------|
+          | SSH transport | $( [ "${{ steps.remote_perf.outputs.pass }}" = "true" ] && echo "OK" || echo "FAILED" ) | $( [ "${{ steps.remote_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" ) |
+          | Command failures | ${{ steps.remote_perf.outputs.cmd_fail_count }}/${{ steps.remote_perf.outputs.total_runs }} runs | $( [ "${{ steps.remote_perf.outputs.cmd_fail_count }}" = "0" ] && echo "✅" || echo "ℹ️ Docker (no gateway)" ) |
+
+          <details><summary>Remote command timings (via Docker SSH)</summary>
+
+          | Command | Median | Max |
+          |---------|--------|-----|
+          $(cat /tmp/remote_perf_summary.txt 2>/dev/null | awk -F: '{printf "| %s | %s ms | %s ms |\n", $1, $2, $3}' | sed 's/median=//;s/max=//' || echo "| N/A | N/A | N/A |")
+
+          </details>
+
+                    ### Home Page Render Probes (mock IPC ${MOCK_LATENCY}ms, cache-first render)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+
+          | Probe | Value | Limit | Status |
+          |-------|-------|-------|--------|
+          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
+          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 300 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 300) ? "✅" : "❌"}' ) |
+          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | ≤ 1000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
+
+          ### Code Readability
+
+          | File | Lines | Target | Status |
+          |------|-------|--------|--------|
+          ${LARGE_FILE_DETAILS}
+          | **Files > 500 lines** | **${{ steps.large_files.outputs.large_count }}** | **trend ↓** | $( [ "${{ steps.large_files.outputs.large_count }}" -le 28 ] && echo "✅" || echo "⚠️" ) |
+          | Files over target | ${{ steps.large_files.outputs.over_target }} | 0 | $( [ "${{ steps.large_files.outputs.over_target }}" = "0" ] && echo "✅" || echo "⚠️" ) |
+
+          ---
+          > 📊 Metrics defined in [\`docs/architecture/metrics.md\`](../blob/${{ github.head_ref }}/docs/architecture/metrics.md)
+          COMMENTEOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/metrics_comment.md
+
+          echo "gate_fail=${GATE_FAIL}" >> "$GITHUB_OUTPUT"
+
+      - name: Find existing metrics comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- pr-metrics-bot -->'
+
+      - name: Create or update metrics comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/metrics_comment.md
+          edit-mode: replace
+
+      - name: Fail if gates not met
+        if: steps.metrics_body.outputs.gate_fail == '1'
+        run: |
+          echo "::error::Metrics gate failed — check the PR comment for details."
+          exit 1

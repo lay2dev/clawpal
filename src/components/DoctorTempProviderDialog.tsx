@@ -6,6 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AutocompleteField } from "./AutocompleteField";
+import {
+  emptyForm, normalizeOauthProvider, providerUsesOAuthAuth,
+  defaultOauthAuthRef, isEnvVarLikeAuthRef, defaultEnvAuthRef,
+  inferCredentialSource, providerSupportsOptionalApiKey,
+  type ProfileForm, type CredentialSource,
+} from "../lib/profile-utils";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -17,18 +24,6 @@ import {
 import { useApi } from "@/lib/use-api";
 import type { ModelCatalogProvider, ModelProfile, ProviderAuthSuggestion } from "@/lib/types";
 
-type ProfileForm = {
-  id: string;
-  provider: string;
-  model: string;
-  authRef: string;
-  apiKey: string;
-  useCustomUrl: boolean;
-  baseUrl: string;
-  enabled: boolean;
-};
-
-type CredentialSource = "oauth" | "env" | "manual";
 
 const PROVIDER_FALLBACK_OPTIONS = [
   "openai",
@@ -41,155 +36,11 @@ const PROVIDER_FALLBACK_OPTIONS = [
   "vllm",
 ];
 
-function emptyForm(): ProfileForm {
-  return {
-    id: "",
-    provider: "",
-    model: "",
-    authRef: "",
-    apiKey: "",
-    useCustomUrl: false,
-    baseUrl: "",
-    enabled: true,
-  };
-}
-
-function normalizeOauthProvider(provider: string): string {
-  const lower = provider.trim().toLowerCase();
-  if (lower === "openai_codex" || lower === "github-copilot" || lower === "copilot") {
-    return "openai-codex";
-  }
-  return lower;
-}
-
-function providerUsesOAuthAuth(provider: string): boolean {
-  return normalizeOauthProvider(provider) === "openai-codex";
-}
-
-function defaultOauthAuthRef(provider: string): string {
-  return providerUsesOAuthAuth(provider) ? "openai-codex:default" : "";
-}
-
-function isEnvVarLikeAuthRef(authRef: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef.trim());
-}
-
-function defaultEnvAuthRef(provider: string): string {
-  const normalized = normalizeOauthProvider(provider);
-  if (!normalized) return "";
-  if (normalized === "openai-codex") {
-    return "OPENAI_CODEX_TOKEN";
-  }
-  const providerEnv = normalized
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  return providerEnv ? `${providerEnv}_API_KEY` : "";
-}
-
-function inferCredentialSource(provider: string, authRef: string): CredentialSource {
-  const trimmed = authRef.trim();
-  if (!trimmed) {
-    return providerUsesOAuthAuth(provider) ? "oauth" : "manual";
-  }
-  if (providerUsesOAuthAuth(provider) && trimmed.toLowerCase().startsWith("openai-codex:")) {
-    return "oauth";
-  }
-  return "env";
-}
-
-function providerSupportsOptionalApiKey(provider: string): boolean {
-  if (providerUsesOAuthAuth(provider)) {
-    return true;
-  }
-  const lower = provider.trim().toLowerCase();
-  return [
-    "ollama",
-    "lmstudio",
-    "lm-studio",
-    "localai",
-    "vllm",
-    "llamacpp",
-    "llama.cpp",
-  ].includes(lower);
-}
-
-function AutocompleteField({
-  value,
-  onChange,
-  onFocus,
-  options,
-  placeholder,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  onFocus?: () => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const filtered = options.filter((option) => {
-    if (!value) return true;
-    const query = value.toLowerCase();
-    return option.value.toLowerCase().includes(query) || option.label.toLowerCase().includes(query);
-  });
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  return (
-    <div ref={wrapperRef} className="relative">
-      <Input
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => {
-          setOpen(true);
-          onFocus?.();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            setOpen(false);
-          }
-        }}
-      />
-      {open && filtered.length > 0 ? (
-        <div className="absolute z-50 mt-1 max-h-[200px] w-full overflow-y-auto rounded-md border border-border bg-popover shadow-md">
-          {filtered.map((option) => (
-            <div
-              key={option.value}
-              className="cursor-pointer px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              {option.label}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 interface DoctorTempProviderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialProfileId?: string | null;
-  onSaved: (profile: ModelProfile) => void;
+  onSaved?: (profile: ModelProfile) => void;
 }
 
 export function DoctorTempProviderDialog({
@@ -200,7 +51,7 @@ export function DoctorTempProviderDialog({
 }: DoctorTempProviderDialogProps) {
   const { t } = useTranslation();
   const ua = useApi();
-  const [form, setForm] = useState<ProfileForm>(emptyForm);
+  const [form, setForm] = useState<ProfileForm>(emptyForm());
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [catalog, setCatalog] = useState<ModelCatalogProvider[]>([]);
   const [credentialSource, setCredentialSource] = useState<CredentialSource>("manual");
@@ -308,7 +159,7 @@ export function DoctorTempProviderDialog({
     setMessage(null);
     try {
       const saved = await ua.upsertModelProfile(payload);
-      onSaved(saved);
+      onSaved?.(saved);
       onOpenChange(false);
       setForm(emptyForm());
       setCredentialSource("manual");
