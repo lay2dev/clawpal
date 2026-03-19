@@ -284,9 +284,101 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_config_requires_investigate_plan_kind() {
+        let diagnosis = sample_diagnosis(vec![RescuePrimaryIssue {
+            id: "issue-1".into(),
+            code: "primary.config.unreadable".into(),
+            severity: "error".into(),
+            message: "Primary configuration could not be read".into(),
+            auto_fixable: false,
+            fix_hint: Some("Repair".into()),
+            source: "primary".into(),
+        }]);
+        assert_eq!(next_agent_plan_kind(&diagnosis), PlanKind::Investigate);
+    }
+
+    #[test]
+    fn investigate_prompt_requires_read_only_diagnosis_steps() {
+        let diagnosis = sample_diagnosis(vec![RescuePrimaryIssue {
+            id: "issue-1".into(),
+            code: "primary.config.unreadable".into(),
+            severity: "error".into(),
+            message: "Primary configuration could not be read".into(),
+            auto_fixable: false,
+            fix_hint: Some("Repair".into()),
+            source: "primary".into(),
+        }]);
+        let prompt = build_agent_plan_prompt(
+            PlanKind::Investigate,
+            "sess-1",
+            1,
+            TargetLocation::RemoteOpenclaw,
+            "ssh:vm1",
+            &diagnosis,
+            &ConfigExcerptContext {
+                config_excerpt: serde_json::Value::Null,
+                config_excerpt_raw: Some("{\n  ddd\n}".into()),
+                config_parse_error: Some("Failed to parse target config: key must be a string".into()),
+            },
+            &[],
+        );
+        assert!(prompt.contains("read-only"));
+        assert!(prompt.contains("Do not modify files"));
+        assert!(prompt.contains("\"planKind\": \"investigate\""));
+        assert!(prompt.contains("configParseError"));
+    }
+
+    #[test]
+    fn investigate_prompt_discourages_long_running_log_commands() {
+        let prompt = build_agent_plan_prompt(
+            PlanKind::Investigate,
+            "sess-1",
+            1,
+            TargetLocation::RemoteOpenclaw,
+            "ssh:vm1",
+            &sample_diagnosis(Vec::new()),
+            &ConfigExcerptContext {
+                config_excerpt: serde_json::Value::Null,
+                config_excerpt_raw: None,
+                config_parse_error: None,
+            },
+            &[],
+        );
+        assert!(prompt.contains("Do not run follow/tail commands"));
+        assert!(prompt.contains("bounded"));
+        assert!(prompt.contains("Do not use heredocs"));
+    }
+
+    #[test]
+    fn repair_prompt_discourages_unverified_openclaw_subcommands() {
+        let prompt = build_agent_plan_prompt(
+            PlanKind::Repair,
+            "sess-1",
+            2,
+            TargetLocation::RemoteOpenclaw,
+            "ssh:vm1",
+            &sample_diagnosis(Vec::new()),
+            &ConfigExcerptContext {
+                config_excerpt: serde_json::Value::Null,
+                config_excerpt_raw: None,
+                config_parse_error: None,
+            },
+            &[],
+        );
+        assert!(prompt.contains("Do not invent OpenClaw subcommands"));
+        assert!(prompt.contains("Do not use `openclaw auth"));
+        assert!(prompt.contains("Do not use `openclaw doctor --json`"));
+        assert!(!prompt.contains("- `openclaw doctor --json`"));
+    }
+
+    #[test]
     fn remote_doctor_agent_id_is_dedicated() {
         assert_eq!(remote_doctor_agent_id(), "clawpal-remote-doctor");
         assert!(!remote_doctor_agent_session_key("sess-1").contains("main"));
+        assert!(
+            remote_doctor_agent_session_key("sess-1")
+                .starts_with("agent:clawpal-remote-doctor:")
+        );
     }
 
     #[test]
@@ -325,7 +417,46 @@ mod tests {
             let _ = std::fs::remove_dir_all(&temp_root);
             panic!("ensure agent ready: {error}");
         }
+        let cfg: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(openclaw_dir.join("openclaw.json")).expect("read config"),
+        )
+        .expect("parse config");
+        let agent = cfg["agents"]["list"]
+            .as_array()
+            .and_then(|agents| {
+                agents.iter().find(|agent| {
+                    agent.get("id").and_then(serde_json::Value::as_str)
+                        == Some(remote_doctor_agent_id())
+                })
+            })
+            .expect("dedicated agent entry");
+        let workspace = agent["workspace"]
+            .as_str()
+            .expect("agent workspace")
+            .replace("~/", &format!("{}/", home_dir.to_string_lossy()));
+        for file_name in ["IDENTITY.md", "USER.md", "BOOTSTRAP.md", "AGENTS.md"] {
+            let content = std::fs::read_to_string(std::path::Path::new(&workspace).join(file_name))
+                .unwrap_or_else(|error| panic!("read {file_name}: {error}"));
+            assert!(!content.trim().is_empty(), "{file_name} should not be empty");
+        }
         let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn only_agent_planner_protocol_requires_bridge() {
+        assert!(protocol_requires_bridge(RemoteDoctorProtocol::AgentPlanner));
+        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::ClawpalServer));
+        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::LegacyDoctor));
+    }
+
+    #[test]
+    fn clawpal_server_protocol_skips_local_rescue_preflight() {
+        assert!(!protocol_runs_rescue_preflight(
+            RemoteDoctorProtocol::ClawpalServer
+        ));
+        assert!(!protocol_runs_rescue_preflight(
+            RemoteDoctorProtocol::AgentPlanner
+        ));
     }
 
     fn sample_diagnosis(issues: Vec<RescuePrimaryIssue>) -> RescuePrimaryDiagnosisResult {

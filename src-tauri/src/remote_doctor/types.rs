@@ -215,6 +215,38 @@ mod tests {
         assert_eq!(first.issue_summaries, second.issue_summaries);
     }
 
+    #[test]
+    fn diagnosis_issue_summaries_capture_code_severity_and_message() {
+        let diagnosis = sample_diagnosis(vec![
+            RescuePrimaryIssue {
+                id: "issue-1".to_string(),
+                code: "gateway.unhealthy".to_string(),
+                severity: "high".to_string(),
+                message: "Gateway is unhealthy".to_string(),
+                auto_fixable: true,
+                fix_hint: Some("Restart gateway".to_string()),
+                source: "gateway".to_string(),
+            },
+            RescuePrimaryIssue {
+                id: "issue-2".to_string(),
+                code: "invalid.base_url".to_string(),
+                severity: "medium".to_string(),
+                message: "Provider base URL is invalid".to_string(),
+                auto_fixable: true,
+                fix_hint: Some("Reset baseUrl".to_string()),
+                source: "config".to_string(),
+            },
+        ]);
+
+        let summary = diagnosis_issue_summaries(&diagnosis);
+        assert_eq!(summary.len(), 2);
+        assert_eq!(summary[0]["code"], "gateway.unhealthy");
+        assert_eq!(summary[0]["severity"], "high");
+        assert_eq!(summary[0]["title"], "Gateway is unhealthy");
+        assert_eq!(summary[0]["target"], "gateway");
+        assert_eq!(summary[1]["code"], "invalid.base_url");
+    }
+
     fn sample_diagnosis(issues: Vec<RescuePrimaryIssue>) -> RescuePrimaryDiagnosisResult {
         RescuePrimaryDiagnosisResult {
             status: "degraded".to_string(),

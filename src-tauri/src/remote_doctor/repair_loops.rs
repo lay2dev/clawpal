@@ -1106,3 +1106,82 @@ pub async fn start_remote_doctor_repair(
 ) -> Result<RemoteDoctorRepairResult, String> {
     start_remote_doctor_repair_impl(app, &pool, instance_id, target_location).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{RescuePrimaryDiagnosisResult, RescuePrimaryIssue, RescuePrimarySummary};
+
+    #[test]
+    fn repeated_rediagnose_only_rounds_are_detected_as_stalled() {
+        let diagnosis = sample_diagnosis(vec![RescuePrimaryIssue {
+            id: "issue-1".to_string(),
+            code: "invalid.base_url".to_string(),
+            severity: "medium".to_string(),
+            message: "Provider base URL is invalid".to_string(),
+            auto_fixable: true,
+            fix_hint: Some("Reset baseUrl".to_string()),
+            source: "config".to_string(),
+        }]);
+        let step_types = vec!["doctorRediagnose".to_string()];
+
+        assert!(!repair_plan_stalled(
+            &[
+                RepairRoundObservation::new(1, &step_types, &diagnosis),
+                RepairRoundObservation::new(2, &step_types, &diagnosis),
+            ],
+            3,
+        ));
+        assert!(repair_plan_stalled(
+            &[
+                RepairRoundObservation::new(1, &step_types, &diagnosis),
+                RepairRoundObservation::new(2, &step_types, &diagnosis),
+                RepairRoundObservation::new(3, &step_types, &diagnosis),
+            ],
+            3,
+        ));
+    }
+
+    #[test]
+    fn round_limit_error_message_includes_latest_issues_and_step_types() {
+        let diagnosis = sample_diagnosis(vec![RescuePrimaryIssue {
+            id: "issue-1".to_string(),
+            code: "invalid.base_url".to_string(),
+            severity: "medium".to_string(),
+            message: "Provider base URL is invalid".to_string(),
+            auto_fixable: true,
+            fix_hint: Some("Reset baseUrl".to_string()),
+            source: "config".to_string(),
+        }]);
+        let error = round_limit_error_message(&diagnosis, &["doctorRediagnose".to_string()]);
+        assert!(error.contains("invalid.base_url"));
+        assert!(error.contains("doctorRediagnose"));
+        assert!(error.contains("Provider base URL is invalid"));
+    }
+
+    fn sample_diagnosis(issues: Vec<RescuePrimaryIssue>) -> RescuePrimaryDiagnosisResult {
+        RescuePrimaryDiagnosisResult {
+            status: "degraded".to_string(),
+            checked_at: "2026-03-19T00:00:00Z".to_string(),
+            target_profile: "primary".to_string(),
+            rescue_profile: "rescue".to_string(),
+            rescue_configured: true,
+            rescue_port: Some(18789),
+            summary: RescuePrimarySummary {
+                status: "degraded".to_string(),
+                headline: "Issues found".to_string(),
+                recommended_action: "Repair".to_string(),
+                fixable_issue_count: 0,
+                selected_fix_issue_ids: Vec::new(),
+                root_cause_hypotheses: Vec::new(),
+                fix_steps: Vec::new(),
+                confidence: None,
+                citations: Vec::new(),
+                version_awareness: None,
+            },
+            sections: Vec::new(),
+            checks: Vec::new(),
+            issues,
+        }
+    }
+}

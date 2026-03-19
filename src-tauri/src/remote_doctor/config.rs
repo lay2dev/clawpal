@@ -466,6 +466,60 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_config_context_summary_marks_excerpt_missing() {
+        let context = build_config_excerpt_context("{\n  ddd\n}");
+        let summary = config_excerpt_log_summary(&context);
+        assert_eq!(summary["configExcerptPresent"], json!(false));
+        assert_eq!(summary["configExcerptRawPresent"], json!(true));
+        assert!(summary["configParseError"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Failed to parse target config"));
+    }
+
+    #[test]
+    fn diagnosis_missing_rescue_profile_is_detected() {
+        let diagnosis = empty_diagnosis_with_issues(vec![json!({
+            "id": "rescue.profile.missing",
+            "code": "rescue.profile.missing",
+            "severity": "error",
+            "message": "Rescue profile missing",
+            "autoFixable": false,
+            "fixHint": "Activate Rescue Bot first",
+            "source": "rescue"
+        })]);
+        assert!(diagnosis_missing_rescue_profile(&diagnosis));
+    }
+
+    #[test]
+    fn diagnosis_unhealthy_rescue_gateway_is_detected() {
+        let diagnosis = empty_diagnosis_with_issues(vec![json!({
+            "id": "rescue.gateway.unhealthy",
+            "code": "rescue.gateway.unhealthy",
+            "severity": "warn",
+            "message": "Rescue gateway unhealthy",
+            "autoFixable": false,
+            "fixHint": "Inspect rescue gateway",
+            "source": "rescue"
+        })]);
+        assert!(diagnosis_unhealthy_rescue_gateway(&diagnosis));
+    }
+
+    #[test]
+    fn non_auto_fixable_warning_only_diagnosis_is_terminal() {
+        let diagnosis = empty_diagnosis_with_issues(vec![json!({
+            "id": "rescue.gateway.unhealthy",
+            "code": "rescue.gateway.unhealthy",
+            "severity": "warn",
+            "message": "Rescue gateway unhealthy",
+            "autoFixable": false,
+            "fixHint": "Inspect rescue gateway",
+            "source": "rescue"
+        })]);
+        assert!(diagnosis_has_only_non_auto_fixable_issues(&diagnosis));
+    }
+
+    #[test]
     fn remote_target_host_id_candidates_include_exact_and_stripped_ids() {
         assert_eq!(
             remote_target_host_id_candidates("ssh:15-235-214-81"),
@@ -510,5 +564,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_root);
 
         assert!(result.contains("\"ok\": true"));
+    }
+
+    fn empty_diagnosis_with_issues(issues: Vec<Value>) -> RescuePrimaryDiagnosisResult {
+        serde_json::from_value(json!({
+            "status": if issues.is_empty() { "healthy" } else { "broken" },
+            "checkedAt": "2026-03-18T00:00:00Z",
+            "targetProfile": "primary",
+            "rescueProfile": "rescue",
+            "rescueConfigured": true,
+            "rescuePort": 18789,
+            "summary": {
+                "status": if issues.is_empty() { "healthy" } else { "broken" },
+                "headline": if issues.is_empty() { "Healthy" } else { "Broken" },
+                "recommendedAction": if issues.is_empty() { "No action needed" } else { "Repair issues" },
+                "fixableIssueCount": issues.len(),
+                "selectedFixIssueIds": issues.iter().filter_map(|issue| issue.get("id").and_then(Value::as_str)).collect::<Vec<_>>(),
+                "rootCauseHypotheses": [],
+                "fixSteps": [],
+                "confidence": 0.8,
+                "citations": [],
+                "versionAwareness": null
+            },
+            "sections": [],
+            "checks": [],
+            "issues": issues
+        }))
+        .expect("sample diagnosis")
     }
 }

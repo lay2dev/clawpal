@@ -657,6 +657,84 @@ mod tests {
         ])
         .unwrap_err();
         assert!(error.contains("Unsupported openclaw plan command"));
+        assert!(error.contains("openclaw auth list"));
+    }
+
+    #[test]
+    fn openclaw_doctor_json_is_rejected_early() {
+        let error = validate_plan_command_argv(&[
+            "openclaw".to_string(),
+            "doctor".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("Unsupported openclaw plan command"));
+        assert!(error.contains("openclaw doctor --json"));
+    }
+
+    #[test]
+    fn multiline_clawpal_exec_is_rejected_early() {
+        let error = validate_plan_command_argv(&[
+            "clawpal".to_string(),
+            "doctor".to_string(),
+            "exec".to_string(),
+            "--tool".to_string(),
+            "python3".to_string(),
+            "--args".to_string(),
+            "- <<'PY'\nprint('hi')\nPY".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("Unsupported clawpal doctor exec args"));
+        assert!(error.contains("heredocs"));
+    }
+
+    #[test]
+    fn plan_commands_treat_clawpal_as_internal_tool() {
+        assert!(plan_command_uses_internal_clawpal_tool(&[
+            "clawpal".to_string(),
+            "doctor".to_string(),
+            "config-read".to_string(),
+        ]));
+        assert!(!plan_command_uses_internal_clawpal_tool(&[
+            "openclaw".to_string(),
+            "doctor".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn config_read_response_returns_raw_context_for_unreadable_json() {
+        let value = config_read_response("{\n  ddd\n}", None).expect("config read response");
+        assert!(value["value"].is_null());
+        assert!(value["raw"].as_str().unwrap_or_default().contains("ddd"));
+        assert!(value["parseError"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("key must be a string"));
+    }
+
+    #[test]
+    fn decode_base64_config_payload_reads_utf8_text() {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode("{\"ok\":true}");
+        let decoded = decode_base64_config_payload(&encoded).expect("decode payload");
+        assert_eq!(decoded, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn plan_command_failure_message_mentions_command_and_error() {
+        let error = plan_command_failure_message(
+            PlanKind::Investigate,
+            2,
+            &[
+                "openclaw".to_string(),
+                "gateway".to_string(),
+                "logs".to_string(),
+            ],
+            "ssh command failed: russh exec timed out after 25s",
+        );
+        assert!(error.contains("Investigate command failed in round 2"));
+        assert!(error.contains("openclaw gateway logs"));
+        assert!(error.contains("timed out after 25s"));
     }
 
     #[test]
