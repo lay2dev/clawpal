@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,7 @@ interface SettingsAlphaFeaturesCardProps {
   showSshTransferSpeedUi: boolean;
   remoteDoctorGatewayUrl: string;
   remoteDoctorGatewayAuthToken: string;
+  remoteDoctorGatewayUrlInputRef?: Ref<HTMLInputElement>;
   onSshTransferSpeedUiToggle: (checked: boolean) => void;
   onRemoteDoctorGatewayUrlChange: (value: string) => void;
   onRemoteDoctorGatewayUrlSave: () => void;
@@ -20,6 +22,7 @@ export function SettingsAlphaFeaturesCard({
   showSshTransferSpeedUi,
   remoteDoctorGatewayUrl,
   remoteDoctorGatewayAuthToken,
+  remoteDoctorGatewayUrlInputRef,
   onSshTransferSpeedUiToggle,
   onRemoteDoctorGatewayUrlChange,
   onRemoteDoctorGatewayUrlSave,
@@ -52,6 +55,7 @@ export function SettingsAlphaFeaturesCard({
         <div className="flex gap-2">
           <Input
             id="remote-doctor-gateway-url"
+            ref={remoteDoctorGatewayUrlInputRef}
             value={remoteDoctorGatewayUrl}
             onChange={(event) => onRemoteDoctorGatewayUrlChange(event.target.value)}
             placeholder={t("settings.remoteDoctorGatewayUrlPlaceholder")}

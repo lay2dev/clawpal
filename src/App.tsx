@@ -48,6 +48,7 @@ import {
   buildSshPassphraseConnectErrorMessage,
 } from "@/lib/sshConnectErrors";
 import { buildFriendlySshError, extractErrorText } from "@/lib/sshDiagnostic";
+import { OPEN_REMOTE_DOCTOR_SETTINGS_EVENT } from "@/lib/remote-doctor-navigation";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -1256,6 +1257,25 @@ export function App() {
     window.setTimeout(() => {
       setDoctorNavPulse(false);
     }, 1400);
+  }, [navigateRoute]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOpenRemoteDoctorSettings = () => {
+      setInStart(true);
+      setStartSection("settings");
+      navigateRoute("home");
+    };
+    window.addEventListener(
+      OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+      handleOpenRemoteDoctorSettings as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+        handleOpenRemoteDoctorSettings as EventListener,
+      );
+    };
   }, [navigateRoute]);
 
   const showSidebar = true;

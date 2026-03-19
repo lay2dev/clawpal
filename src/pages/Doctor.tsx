@@ -12,10 +12,21 @@ import { DoctorLogsDialog } from "@/components/DoctorLogsDialog";
 import { DoctorRecoveryOverview } from "@/components/DoctorRecoveryOverview";
 import { DoctorTempProviderDialog } from "@/components/DoctorTempProviderDialog";
 import { RescueAsciiHeader } from "@/components/RescueAsciiHeader";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useInstance } from "@/lib/instance-context";
 import { localizeDoctorReportText } from "@/lib/doctor-report-i18n";
+import { requestRemoteDoctorSettingsFocus } from "@/lib/remote-doctor-navigation";
 import {
   createDataLoadRequestId,
   emitDataLoadMetric,
@@ -80,6 +91,7 @@ export function Doctor(_: DoctorProps) {
   const [tempProviderDialogOpen, setTempProviderDialogOpen] = useState(false);
   const [tempProviderProfileId, setTempProviderProfileId] = useState<string | null>(null);
   const [activeRepairMode, setActiveRepairMode] = useState<"localRepair" | "remoteDoctor" | null>(null);
+  const [remoteDoctorConfigPromptOpen, setRemoteDoctorConfigPromptOpen] = useState(false);
 
   const busy = diagnosisLoading || repairing;
   const liveReadsReady = ua.instanceToken !== 0;
@@ -328,6 +340,11 @@ export function Doctor(_: DoctorProps) {
       setError(t("doctor.rescueBotConnectRequired", { defaultValue: "Connect to SSH first." }));
       return;
     }
+    const prefs = await ua.getAppPreferences();
+    if (!prefs.remoteDoctorGatewayUrl?.trim()) {
+      setRemoteDoctorConfigPromptOpen(true);
+      return;
+    }
     setRepairing(true);
     setActiveRepairMode("remoteDoctor");
     setError(null);
@@ -349,6 +366,11 @@ export function Doctor(_: DoctorProps) {
       setActiveRepairMode(null);
     }
   }, [busy, diagnosis, isConnected, isRemote, liveReadsReady, runDiagnosis, t, ua]);
+
+  const handleOpenRemoteDoctorSettings = useCallback(() => {
+    setRemoteDoctorConfigPromptOpen(false);
+    requestRemoteDoctorSettingsFocus();
+  }, []);
 
   const buttonLabel = useMemo(() => {
     if (diagnosisLoading) {
@@ -529,6 +551,26 @@ export function Doctor(_: DoctorProps) {
         initialProfileId={tempProviderProfileId}
         onSaved={handleTempProviderSaved}
       />
+      <AlertDialog open={remoteDoctorConfigPromptOpen} onOpenChange={setRemoteDoctorConfigPromptOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("doctor.remoteDoctorGatewayRequiredTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("doctor.remoteDoctorGatewayRequiredDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              {t("doctor.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleOpenRemoteDoctorSettings}>
+              {t("doctor.openRemoteDoctorSettings")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

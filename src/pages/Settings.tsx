@@ -25,6 +25,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsAlphaFeaturesCard } from "@/components/SettingsAlphaFeaturesCard";
+import {
+  consumePendingRemoteDoctorSettingsFocus,
+  OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+} from "@/lib/remote-doctor-navigation";
 import { getSettingsProfileUiState } from "./settings-profile-ui";
 import {
   Select,
@@ -258,6 +262,7 @@ export function Settings({
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
   const [remoteDoctorGatewayUrl, setRemoteDoctorGatewayUrl] = useState("");
   const [remoteDoctorGatewayAuthToken, setRemoteDoctorGatewayAuthToken] = useState("");
+  const remoteDoctorGatewayUrlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -271,6 +276,36 @@ export function Settings({
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {});
   }, []);
+
+  const focusRemoteDoctorGatewayUrlInput = useCallback(() => {
+    const input = remoteDoctorGatewayUrlInputRef.current;
+    if (!input) return;
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 60);
+  }, []);
+
+  useEffect(() => {
+    if (section !== "all" && section !== "preferences") return;
+    if (consumePendingRemoteDoctorSettingsFocus()) {
+      focusRemoteDoctorGatewayUrlInput();
+    }
+    const handleOpenRemoteDoctorSettings = () => {
+      focusRemoteDoctorGatewayUrlInput();
+    };
+    window.addEventListener(
+      OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+      handleOpenRemoteDoctorSettings as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+        handleOpenRemoteDoctorSettings as EventListener,
+      );
+    };
+  }, [focusRemoteDoctorGatewayUrlInput, section]);
 
   const handleCheckForUpdates = useCallback(async () => {
     setAppUpdateChecking(true);
@@ -914,6 +949,7 @@ export function Settings({
                 showSshTransferSpeedUi={showSshTransferSpeedUi}
                 remoteDoctorGatewayUrl={remoteDoctorGatewayUrl}
                 remoteDoctorGatewayAuthToken={remoteDoctorGatewayAuthToken}
+                remoteDoctorGatewayUrlInputRef={remoteDoctorGatewayUrlInputRef}
                 onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
                 onRemoteDoctorGatewayUrlChange={setRemoteDoctorGatewayUrl}
                 onRemoteDoctorGatewayUrlSave={handleRemoteDoctorGatewayUrlSave}
