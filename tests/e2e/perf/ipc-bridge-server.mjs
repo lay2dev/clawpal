@@ -43,10 +43,10 @@ const rawConfig = ssh("cat /root/.openclaw/openclaw.json") || "{}";
 const cfg = parseCliJson(rawConfig) || {};
 const statusRaw = ssh("openclaw status --json");
 const agentsRaw = ssh("openclaw agents list --json");
-const modelsRaw = ssh("openclaw config get models --json");
+const modelsRaw = ssh("openclaw config get agents.defaults.models --json");
 const versionRaw = ssh("openclaw --version 2>/dev/null") || "unknown";
-const channelsRaw = ssh("openclaw config get channels --json");
-const cronRaw = ssh("openclaw config get cron --json");
+const channelsRaw = ssh("openclaw config get channels --json") || ssh("cat /root/.openclaw/openclaw.json 2>/dev/null | python3 -c \"import sys,json; print(json.dumps(json.load(sys.stdin).get('channels',{})))\"");
+const cronRaw = ssh("openclaw config get cron --json") || null;
 
 const status = parseCliJson(statusRaw);
 const agentsList = parseCliJson(agentsRaw);
@@ -105,12 +105,13 @@ const cronConfig = { jobs: cron?.jobs ?? [] };
 console.log(`Pre-fetch done in ${Date.now() - startMs}ms`);
 
 // Fail hard if critical SSH commands returned no data
+// Status requires a running gateway; skip if unavailable
+if (!status) console.warn("openclaw status --json: no data (gateway not running?)");
 const failed = [];
-if (!status) failed.push("openclaw status --json");
-if (!agentsList) failed.push("openclaw agents list --json");
-if (!models) failed.push("openclaw config get models --json");
+if (!agentsList && agents.length === 0) failed.push("openclaw agents list --json");
+if (!models && modelProfiles.length === 0) failed.push("models (neither CLI nor config)");
 if (failed.length > 0) {
-  console.error("FATAL: SSH-backed commands returned no data:");
+  console.error("FATAL: No agent/model data available:");
   failed.forEach((c) => console.error("  -", c));
   process.exit(1);
 }

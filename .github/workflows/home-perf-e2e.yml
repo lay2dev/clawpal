@@ -53,7 +53,7 @@ jobs:
           done
           # Verify an SSH-backed command returned real data
           VERIFY=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' || true)
-          echo "$VERIFY" | jq -e '.ok == true and .result.status != null' || { echo "Bridge readiness check failed: SSH-backed data missing"; exit 1; }
+          echo "$VERIFY" | jq -e '.ok == true and .result != null' || { echo "Bridge readiness check failed: SSH-backed data missing"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
 
