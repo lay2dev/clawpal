@@ -5,13 +5,20 @@ use std::process::Command;
 use std::time::Instant;
 
 use base64::Engine;
-use ed25519_dalek::pkcs8::EncodePrivateKey;
-use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime, State};
 use uuid::Uuid;
 
+use super::config::{
+    append_diagnosis_log, build_config_excerpt_context,
+    build_gateway_credentials as remote_doctor_gateway_credentials,
+    config_excerpt_log_summary, diagnosis_context,
+    diagnosis_has_only_non_auto_fixable_issues, diagnosis_is_healthy,
+    diagnosis_missing_rescue_profile, diagnosis_unhealthy_rescue_gateway, empty_config_excerpt_context,
+    empty_diagnosis, load_gateway_config as remote_doctor_gateway_config,
+    load_or_create_remote_doctor_identity, remote_doctor_identity_path,
+    RemoteDoctorGatewayConfig,
+};
 use super::session::{
     append_session_log as append_remote_doctor_log,
     emit_session_progress as emit_progress, result_for_completion,
@@ -26,7 +33,6 @@ use super::types::{
 use crate::bridge_client::BridgeClient;
 use crate::cli_runner::{get_active_openclaw_home_override, run_openclaw, run_openclaw_remote};
 use crate::commands::logs::log_dev;
-use crate::commands::preferences::load_app_preferences_from_paths;
 use crate::commands::{agent::create_agent, agent::setup_agent_identity};
 use crate::commands::{
     diagnose_primary_via_rescue, manage_rescue_bot, read_raw_config,
@@ -35,118 +41,14 @@ use crate::commands::{
 };
 use crate::config_io::read_openclaw_config;
 use crate::models::resolve_paths;
-use crate::node_client::{GatewayCredentials, NodeClient};
+use crate::node_client::NodeClient;
 use crate::ssh::SshConnectionPool;
 
-const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
-const DEFAULT_GATEWAY_PORT: u16 = 18789;
 const DEFAULT_DETECT_METHOD: &str = "doctor.get_detection_plan";
 const DEFAULT_REPAIR_METHOD: &str = "doctor.get_repair_plan";
 const MAX_REMOTE_DOCTOR_ROUNDS: usize = 50;
 const REPAIR_PLAN_STALL_THRESHOLD: usize = 3;
 const REMOTE_DOCTOR_AGENT_ID: &str = "clawpal-remote-doctor";
-
-#[derive(Debug, Clone)]
-struct RemoteDoctorGatewayConfig {
-    url: String,
-    auth_token_override: Option<String>,
-}
-
-fn remote_doctor_gateway_config() -> Result<RemoteDoctorGatewayConfig, String> {
-    let paths = resolve_paths();
-    let app_preferences = load_app_preferences_from_paths(&paths);
-    if let Some(url) = app_preferences.remote_doctor_gateway_url {
-        return Ok(RemoteDoctorGatewayConfig {
-            url,
-            auth_token_override: app_preferences.remote_doctor_gateway_auth_token,
-        });
-    }
-    let configured_port = std::fs::read_to_string(&paths.config_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|config| {
-            config
-                .get("gateway")
-                .and_then(|gateway| gateway.get("port"))
-                .and_then(|value| value.as_u64())
-        })
-        .map(|value| value as u16)
-        .unwrap_or(DEFAULT_GATEWAY_PORT);
-    Ok(RemoteDoctorGatewayConfig {
-        url: format!("ws://{DEFAULT_GATEWAY_HOST}:{configured_port}"),
-        auth_token_override: app_preferences.remote_doctor_gateway_auth_token,
-    })
-}
-
-fn remote_doctor_gateway_credentials(
-    auth_token_override: Option<&str>,
-) -> Result<Option<GatewayCredentials>, String> {
-    let Some(token) = auth_token_override.filter(|value| !value.trim().is_empty()) else {
-        return Ok(None);
-    };
-    let identity = load_or_create_remote_doctor_identity()?;
-    Ok(Some(GatewayCredentials {
-        token: token.to_string(),
-        device_id: identity.device_id,
-        private_key_pem: identity.private_key_pem,
-    }))
-}
-
-fn remote_doctor_identity_path() -> PathBuf {
-    resolve_paths()
-        .clawpal_dir
-        .join("remote-doctor")
-        .join("device-identity.json")
-}
-
-fn load_or_create_remote_doctor_identity() -> Result<StoredRemoteDoctorIdentity, String> {
-    let path = remote_doctor_identity_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(identity) = serde_json::from_str::<StoredRemoteDoctorIdentity>(&text) {
-            if identity.version == 1
-                && !identity.device_id.trim().is_empty()
-                && !identity.private_key_pem.trim().is_empty()
-            {
-                return Ok(identity);
-            }
-        }
-    }
-
-    let parent = path
-        .parent()
-        .ok_or("Failed to resolve remote doctor identity directory")?;
-    create_dir_all(parent)
-        .map_err(|e| format!("Failed to create remote doctor identity dir: {e}"))?;
-
-    let mut secret = [0u8; 32];
-    getrandom::getrandom(&mut secret)
-        .map_err(|e| format!("Failed to generate remote doctor device secret: {e}"))?;
-    let signing_key = SigningKey::from_bytes(&secret);
-    let raw_public = signing_key.verifying_key().to_bytes();
-    let device_id = Sha256::digest(raw_public)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    let private_key_pem = signing_key
-        .to_pkcs8_pem(Default::default())
-        .map_err(|e| format!("Failed to encode remote doctor private key: {e}"))?
-        .to_string();
-    let created_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Failed to get system time: {e}"))?
-        .as_millis() as u64;
-    let identity = StoredRemoteDoctorIdentity {
-        version: 1,
-        created_at_ms,
-        device_id,
-        private_key_pem,
-    };
-    let text = serde_json::to_string_pretty(&identity)
-        .map_err(|e| format!("Failed to serialize remote doctor identity: {e}"))?;
-    std::fs::write(&path, format!("{text}\n"))
-        .map_err(|e| format!("Failed to persist remote doctor identity: {e}"))?;
-    Ok(identity)
-}
 
 fn detect_method_name() -> String {
     std::env::var("CLAWPAL_REMOTE_DOCTOR_DETECT_METHOD")
@@ -357,10 +259,6 @@ fn is_unknown_method_error(error: &str) -> bool {
         || error.contains("\"code\": \"INVALID_REQUEST\"")
 }
 
-fn diagnosis_has_only_non_auto_fixable_issues(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
-    !diagnosis.issues.is_empty() && diagnosis.issues.iter().all(|issue| !issue.auto_fixable)
-}
-
 async fn run_rescue_diagnosis<R: Runtime>(
     app: &AppHandle<R>,
     target_location: TargetLocation,
@@ -409,58 +307,6 @@ async fn read_target_config_raw<R: Runtime>(
             remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await
         }
     }
-}
-
-fn build_config_excerpt_context(raw: &str) -> ConfigExcerptContext {
-    match serde_json::from_str::<Value>(raw) {
-        Ok(config_excerpt) => ConfigExcerptContext {
-            config_excerpt,
-            config_excerpt_raw: None,
-            config_parse_error: None,
-        },
-        Err(error) => ConfigExcerptContext {
-            config_excerpt: Value::Null,
-            config_excerpt_raw: Some(raw.to_string()),
-            config_parse_error: Some(format!("Failed to parse target config: {error}")),
-        },
-    }
-}
-
-fn config_excerpt_log_summary(context: &ConfigExcerptContext) -> Value {
-    json!({
-        "configExcerptPresent": !context.config_excerpt.is_null(),
-        "configExcerptBytes": serde_json::to_string(&context.config_excerpt).ok().map(|text| text.len()).unwrap_or(0),
-        "configExcerptRawPresent": context.config_excerpt_raw.as_ref().map(|text| !text.trim().is_empty()).unwrap_or(false),
-        "configExcerptRawBytes": context.config_excerpt_raw.as_ref().map(|text| text.len()).unwrap_or(0),
-        "configParseError": context.config_parse_error,
-    })
-}
-
-fn empty_config_excerpt_context() -> ConfigExcerptContext {
-    ConfigExcerptContext {
-        config_excerpt: Value::Null,
-        config_excerpt_raw: None,
-        config_parse_error: None,
-    }
-}
-
-fn empty_diagnosis() -> RescuePrimaryDiagnosisResult {
-    serde_json::from_value(json!({
-        "status": "healthy",
-        "checkedAt": "2026-03-18T00:00:00Z",
-        "targetProfile": "primary",
-        "rescueProfile": "rescue",
-        "summary": {
-            "status": "healthy",
-            "headline": "Healthy",
-            "recommendedAction": null,
-            "fixableIssueCount": 0,
-            "selectedFixIssueIds": []
-        },
-        "issues": [],
-        "sections": []
-    }))
-    .expect("empty diagnosis should deserialize")
 }
 
 async fn write_target_config<R: Runtime>(
@@ -527,41 +373,6 @@ async fn restart_target_gateway<R: Runtime>(
         }
     }
     Ok(())
-}
-
-fn diagnosis_is_healthy(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
-    diagnosis.status == "healthy"
-        && diagnosis.summary.status == "healthy"
-        && diagnosis.issues.is_empty()
-}
-
-fn diagnosis_context(diagnosis: &RescuePrimaryDiagnosisResult) -> Value {
-    json!({
-        "status": diagnosis.status,
-        "summary": {
-            "status": diagnosis.summary.status,
-            "headline": diagnosis.summary.headline,
-            "recommendedAction": diagnosis.summary.recommended_action,
-            "fixableIssueCount": diagnosis.summary.fixable_issue_count,
-            "selectedFixIssueIds": diagnosis.summary.selected_fix_issue_ids,
-        },
-        "issues": diagnosis.issues,
-        "sections": diagnosis.sections,
-    })
-}
-
-fn diagnosis_missing_rescue_profile(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
-    diagnosis
-        .issues
-        .iter()
-        .any(|issue| issue.code == "rescue.profile.missing")
-}
-
-fn diagnosis_unhealthy_rescue_gateway(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
-    diagnosis
-        .issues
-        .iter()
-        .any(|issue| issue.code == "rescue.gateway.unhealthy")
 }
 
 fn rescue_setup_command_result(
@@ -901,28 +712,6 @@ async fn repair_rescue_gateway_if_needed<R: Runtime>(
     *diagnosis = run_rescue_diagnosis(app, target_location, instance_id).await?;
     append_diagnosis_log(session_id, "after_rescue_activation", round, diagnosis);
     Ok(())
-}
-
-fn append_diagnosis_log(
-    session_id: &str,
-    stage: &str,
-    round: usize,
-    diagnosis: &RescuePrimaryDiagnosisResult,
-) {
-    append_remote_doctor_log(
-        session_id,
-        json!({
-            "event": "diagnosis_result",
-            "stage": stage,
-            "round": round,
-            "status": diagnosis.status,
-            "summaryStatus": diagnosis.summary.status,
-            "headline": diagnosis.summary.headline,
-            "recommendedAction": diagnosis.summary.recommended_action,
-            "issueCount": diagnosis.issues.len(),
-            "issues": diagnosis_issue_summaries(diagnosis),
-        }),
-    );
 }
 
 fn clawpal_server_step_type_summary(steps: &[ClawpalServerPlanStep]) -> Value {
