@@ -1,9 +1,9 @@
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signer, SigningKey};
+use base64::Engine;
 use ed25519_dalek::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey, pkcs8::EncodePublicKey};
+use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::Error;

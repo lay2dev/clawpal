@@ -1,10 +1,12 @@
 use serde_json::json;
 use tauri::{AppHandle, Runtime};
 
-use super::shared::MAX_REMOTE_DOCTOR_ROUNDS;
 use super::super::plan::execute_command;
 use super::super::session::{append_session_log, emit_session_progress};
-use super::super::types::{CommandResult, PlanKind, PlanResponse, RemoteDoctorRepairResult, TargetLocation};
+use super::super::types::{
+    CommandResult, PlanKind, PlanResponse, RemoteDoctorRepairResult, TargetLocation,
+};
+use super::shared::MAX_REMOTE_DOCTOR_ROUNDS;
 use crate::ssh::SshConnectionPool;
 
 pub(crate) async fn run_remote_doctor_repair_loop<R: Runtime, F, Fut>(

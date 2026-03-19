@@ -26,7 +26,9 @@ use super::legacy::{
 };
 use super::plan::request_plan;
 use super::session::append_session_log;
-use super::types::{parse_target_location, PlanKind, RemoteDoctorProtocol, RemoteDoctorRepairResult, TargetLocation};
+use super::types::{
+    parse_target_location, PlanKind, RemoteDoctorProtocol, RemoteDoctorRepairResult, TargetLocation,
+};
 use crate::bridge_client::BridgeClient;
 use crate::commands::logs::log_dev;
 use crate::node_client::NodeClient;

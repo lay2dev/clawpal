@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use super::super::types::{diagnosis_issue_summaries, ClawpalServerPlanStep, RepairRoundObservation};
+use super::super::types::{
+    diagnosis_issue_summaries, ClawpalServerPlanStep, RepairRoundObservation,
+};
 
 pub(crate) const MAX_REMOTE_DOCTOR_ROUNDS: usize = 10;
 pub(crate) const REPAIR_PLAN_STALL_THRESHOLD: usize = 3;

@@ -1,10 +1,6 @@
 use serde_json::json;
 use tauri::{AppHandle, Runtime};
 
-use super::shared::{
-    clawpal_server_step_type_summary, repair_plan_stalled, round_limit_error_message,
-    stalled_plan_error_message, MAX_REMOTE_DOCTOR_ROUNDS, REPAIR_PLAN_STALL_THRESHOLD,
-};
 use super::super::config::{
     append_diagnosis_log, build_config_excerpt_context, config_excerpt_log_summary,
     diagnosis_is_healthy, read_target_config_raw, restart_target_gateway, run_rescue_diagnosis,
@@ -19,6 +15,10 @@ use super::super::session::{append_session_log, emit_session_progress, result_fo
 use super::super::types::{
     diagnosis_issue_summaries, CommandResult, PlanKind, RemoteDoctorProtocol,
     RemoteDoctorRepairResult, RepairRoundObservation, TargetLocation,
+};
+use super::shared::{
+    clawpal_server_step_type_summary, repair_plan_stalled, round_limit_error_message,
+    stalled_plan_error_message, MAX_REMOTE_DOCTOR_ROUNDS, REPAIR_PLAN_STALL_THRESHOLD,
 };
 use crate::node_client::NodeClient;
 
@@ -65,8 +65,9 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
             Some(PlanKind::Repair),
             None,
         );
-        let config_context =
-            build_config_excerpt_context(&read_target_config_raw(app, target_location, instance_id).await?);
+        let config_context = build_config_excerpt_context(
+            &read_target_config_raw(app, target_location, instance_id).await?,
+        );
         append_session_log(
             session_id,
             json!({
@@ -149,7 +150,10 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
                     result.stdout = format!("Updated {path}");
                 }
                 "configUnset" => {
-                    let path = step.path.as_deref().ok_or("configUnset step missing path")?;
+                    let path = step
+                        .path
+                        .as_deref()
+                        .ok_or("configUnset step missing path")?;
                     emit_session_progress(
                         Some(app),
                         session_id,
@@ -179,8 +183,11 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
                     append_diagnosis_log(session_id, "post_step_rediagnose", round, &diagnosis);
                     rediagnosed = true;
                     result.argv = vec!["doctorRediagnose".into()];
-                    result.stdout =
-                        format!("Diagnosis status={} issues={}", diagnosis.status, diagnosis.issues.len());
+                    result.stdout = format!(
+                        "Diagnosis status={} issues={}",
+                        diagnosis.status,
+                        diagnosis.issues.len()
+                    );
                 }
                 other => {
                     result.exit_code = Some(1);
@@ -212,7 +219,8 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
             diagnosis = run_rescue_diagnosis(app, target_location, instance_id).await?;
             append_diagnosis_log(session_id, "post_round", round, &diagnosis);
         }
-        if super::super::agent::protocol_runs_rescue_preflight(RemoteDoctorProtocol::ClawpalServer) {
+        if super::super::agent::protocol_runs_rescue_preflight(RemoteDoctorProtocol::ClawpalServer)
+        {
             repair_rescue_gateway_if_needed(
                 app,
                 session_id,
@@ -224,7 +232,11 @@ pub(crate) async fn run_clawpal_server_repair_loop<R: Runtime>(
             .await?;
         }
         last_step_types = round_step_types.clone();
-        round_observations.push(RepairRoundObservation::new(round, &round_step_types, &diagnosis));
+        round_observations.push(RepairRoundObservation::new(
+            round,
+            &round_step_types,
+            &diagnosis,
+        ));
         if repair_plan_stalled(&round_observations, REPAIR_PLAN_STALL_THRESHOLD) {
             let observation = round_observations
                 .last()

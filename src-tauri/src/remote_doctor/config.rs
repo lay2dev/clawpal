@@ -12,12 +12,12 @@ use super::types::{
     diagnosis_issue_summaries, ConfigExcerptContext, StoredRemoteDoctorIdentity, TargetLocation,
 };
 use crate::commands::preferences::load_app_preferences_from_paths;
+use crate::commands::version::{format_timestamp_from_unix, unix_timestamp_secs};
 use crate::commands::{
     diagnose_primary_via_rescue, read_raw_config, remote_diagnose_primary_via_rescue,
     remote_read_raw_config, remote_restart_gateway, remote_write_raw_config, restart_gateway,
     RescuePrimaryDiagnosisResult, RescuePrimarySummary,
 };
-use crate::commands::version::{format_timestamp_from_unix, unix_timestamp_secs};
 use crate::models::resolve_paths;
 use crate::node_client::GatewayCredentials;
 use crate::ssh::SshConnectionPool;

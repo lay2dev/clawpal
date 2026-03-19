@@ -1,10 +1,6 @@
 use serde_json::json;
 use tauri::{AppHandle, Runtime};
 
-use super::shared::{
-    repair_plan_stalled, round_limit_error_message, stalled_plan_error_message,
-    MAX_REMOTE_DOCTOR_ROUNDS, REPAIR_PLAN_STALL_THRESHOLD,
-};
 use super::super::agent::next_agent_plan_kind_for_round;
 use super::super::config::{
     append_diagnosis_log, build_config_excerpt_context, config_excerpt_log_summary,
@@ -12,7 +8,9 @@ use super::super::config::{
     run_rescue_diagnosis,
 };
 use super::super::legacy::request_agent_plan;
-use super::super::plan::{agent_plan_step_types, execute_plan_command, plan_command_failure_message};
+use super::super::plan::{
+    agent_plan_step_types, execute_plan_command, plan_command_failure_message,
+};
 use super::super::session::{
     append_session_log, emit_session_progress, result_for_completion,
     result_for_completion_with_warnings,
@@ -20,6 +18,10 @@ use super::super::session::{
 use super::super::types::{
     diagnosis_issue_summaries, CommandResult, PlanKind, RemoteDoctorRepairResult,
     RepairRoundObservation, TargetLocation,
+};
+use super::shared::{
+    repair_plan_stalled, round_limit_error_message, stalled_plan_error_message,
+    MAX_REMOTE_DOCTOR_ROUNDS, REPAIR_PLAN_STALL_THRESHOLD,
 };
 use crate::bridge_client::BridgeClient;
 use crate::node_client::NodeClient;
@@ -53,8 +55,9 @@ pub(crate) async fn run_agent_planner_repair_loop<R: Runtime>(
 
     for round in 1..=MAX_REMOTE_DOCTOR_ROUNDS {
         let kind = next_agent_plan_kind_for_round(&diagnosis, &previous_results);
-        let config_context =
-            build_config_excerpt_context(&read_target_config_raw(app, target_location, instance_id).await?);
+        let config_context = build_config_excerpt_context(
+            &read_target_config_raw(app, target_location, instance_id).await?,
+        );
         let phase = match kind {
             PlanKind::Detect => "planning_detect",
             PlanKind::Investigate => "planning_investigate",
@@ -159,10 +162,17 @@ pub(crate) async fn run_agent_planner_repair_loop<R: Runtime>(
                 }),
             );
             let command_result =
-                match execute_plan_command(app, pool, target_location, instance_id, &command.argv).await {
+                match execute_plan_command(app, pool, target_location, instance_id, &command.argv)
+                    .await
+                {
                     Ok(result) => result,
                     Err(error) => {
-                        return Err(plan_command_failure_message(kind, round, &command.argv, &error));
+                        return Err(plan_command_failure_message(
+                            kind,
+                            round,
+                            &command.argv,
+                            &error,
+                        ));
                     }
                 };
             append_session_log(
@@ -219,7 +229,11 @@ pub(crate) async fn run_agent_planner_repair_loop<R: Runtime>(
             ));
         }
 
-        round_observations.push(RepairRoundObservation::new(round, &last_step_types, &diagnosis));
+        round_observations.push(RepairRoundObservation::new(
+            round,
+            &last_step_types,
+            &diagnosis,
+        ));
         if repair_plan_stalled(&round_observations, REPAIR_PLAN_STALL_THRESHOLD) {
             let observation = round_observations
                 .last()

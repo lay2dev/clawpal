@@ -1,7 +1,7 @@
 use futures::{SinkExt, StreamExt};
 use openclaw_gateway_client::client::GatewayClientBuilder;
 use openclaw_gateway_client::node::NodeClient;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_tungstenite::{accept_async, tungstenite::Message};

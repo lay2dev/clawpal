@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::error::Error;
 use crate::protocol::{
-    ClientInfo, ConnectParams, EventFrame, GatewayFrame, HelloOk, PROTOCOL_VERSION, RequestFrame,
-    ResponseFrame,
+    ClientInfo, ConnectParams, EventFrame, GatewayFrame, HelloOk, RequestFrame, ResponseFrame,
+    PROTOCOL_VERSION,
 };
 use crate::tls::normalize_fingerprint;
 
