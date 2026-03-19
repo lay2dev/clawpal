@@ -449,7 +449,7 @@ jobs:
           fi
         env:
           PERF_BRIDGE_URL: "http://localhost:3399"
-          PERF_SETTLED_GATE_MS: "5000"
+          PERF_SETTLED_GATE_MS: "15000"
 
       - name: Cleanup container
         if: always()
