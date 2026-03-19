@@ -279,6 +279,12 @@ jobs:
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
             sleep 1
           done
+          # Wait for OpenClaw gateway inside container
+          for i in $(seq 1 45); do
+            GW=$(sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost 'curl -sf http://127.0.0.1:18789/ 2>/dev/null' || true)
+            if [ -n "$GW" ]; then echo "Gateway ready after ${i}s"; break; fi
+            sleep 1
+          done
 
       - name: Run remote command timing via SSH
         id: remote_perf
@@ -380,6 +386,12 @@ jobs:
           docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
           for i in $(seq 1 15); do
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+          # Wait for OpenClaw gateway inside container
+          for i in $(seq 1 45); do
+            GW=$(sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost 'curl -sf http://127.0.0.1:18789/ 2>/dev/null' || true)
+            if [ -n "$GW" ]; then echo "Gateway ready after ${i}s"; break; fi
             sleep 1
           done
 
