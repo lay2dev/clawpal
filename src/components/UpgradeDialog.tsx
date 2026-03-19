@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
+import { formatBackupProgressLabel, runBackupStream } from "@/lib/backup-stream";
 import { withGuidance } from "@/lib/guidance";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,7 @@ export function UpgradeDialog({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [backupStatus, setBackupStatus] = useState("");
 
   const IndeterminateProgress = ({ label }: { label: string }) => (
     <div className="space-y-2">
@@ -60,6 +62,7 @@ export function UpgradeDialog({
     setError("");
     setLoading(false);
     setShowLog(false);
+    setBackupStatus("");
   };
 
   const handleClose = (open: boolean) => {
@@ -77,20 +80,18 @@ export function UpgradeDialog({
   const runBackup = async () => {
     setLoading(true);
     setError("");
+    setBackupStatus("");
     try {
-      const info = isRemote
-        ? await withGuidance(
-          () => api.remoteBackupBeforeUpgrade(instanceId),
-          "remoteBackupBeforeUpgrade",
-          instanceId,
-          "remote_ssh",
-        )
-        : await withGuidance(
-          () => api.backupBeforeUpgrade(),
-          "backupBeforeUpgrade",
-          "local",
-          "local",
-        );
+      const info = await runBackupStream({
+        start: () => (
+          isRemote
+            ? api.remoteBackupBeforeUpgradeStream(instanceId)
+            : api.backupBeforeUpgradeStream()
+        ),
+        onProgress: (event) => {
+          setBackupStatus(formatBackupProgressLabel(event, t('upgrade.creatingBackup')));
+        },
+      });
       setBackupName(info.name);
       setLoading(false);
       setStep("upgrading");
@@ -160,7 +161,7 @@ export function UpgradeDialog({
         {step === "backup" && (
           <div className="space-y-3">
             {loading && (
-              <IndeterminateProgress label={t('upgrade.creatingBackup')} />
+              <IndeterminateProgress label={backupStatus || t('upgrade.creatingBackup')} />
             )}
             {error && (
               <div className="text-sm text-destructive">{error}</div>
