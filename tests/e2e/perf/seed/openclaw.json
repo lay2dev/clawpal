@@ -1,7 +1,9 @@
 {
   "gateway": {
     "port": 18789,
-    "token": "perf-test-token"
+    "auth": {
+      "token": "perf-test-token"
+    }
   },
   "defaults": {
     "model": "anthropic/claude-sonnet-4-20250514"
