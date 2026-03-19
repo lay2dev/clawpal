@@ -28,7 +28,7 @@ All scripts resolve the repo root from their own path and can be run from anywhe
 `scripts/ci-metrics.sh` behaves differently from the other scripts:
 
 - Hard gates fail the script:
-  - total built JavaScript gzip size must be `<= 512 KB`
+  - total built JavaScript gzip size must be `<= 350 KB`
   - `cargo test -p clawpal --test perf_metrics` must pass
   - `cargo test -p clawpal --test command_perf_e2e` must pass
 - Soft gates only report warnings:
