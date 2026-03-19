@@ -19,9 +19,9 @@ use crate::commands::logs::log_dev;
 use crate::commands::preferences::load_app_preferences_from_paths;
 use crate::commands::{agent::create_agent, agent::setup_agent_identity};
 use crate::commands::{
-    diagnose_primary_via_rescue, manage_rescue_bot, read_raw_config, remote_diagnose_primary_via_rescue,
-    remote_manage_rescue_bot, remote_read_raw_config, remote_restart_gateway, remote_write_raw_config,
-    restart_gateway, RescuePrimaryDiagnosisResult,
+    diagnose_primary_via_rescue, manage_rescue_bot, read_raw_config,
+    remote_diagnose_primary_via_rescue, remote_manage_rescue_bot, remote_read_raw_config,
+    remote_restart_gateway, remote_write_raw_config, restart_gateway, RescuePrimaryDiagnosisResult,
 };
 use crate::config_io::read_openclaw_config;
 use crate::models::resolve_paths;
@@ -437,16 +437,13 @@ fn ensure_local_remote_doctor_agent_ready() -> Result<(), String> {
         }
     }
 
-    setup_agent_identity(
-        agent_id.clone(),
-        "ClawPal Remote Doctor".to_string(),
-        None,
-    )?;
+    setup_agent_identity(agent_id.clone(), "ClawPal Remote Doctor".to_string(), None)?;
 
     let paths = resolve_paths();
     let cfg = read_openclaw_config(&paths)?;
-    let workspace = clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
-        .map(|path| shellexpand::tilde(&path).to_string())?;
+    let workspace =
+        clawpal_core::doctor::resolve_agent_workspace_from_config(&cfg, &agent_id, None)
+            .map(|path| shellexpand::tilde(&path).to_string())?;
     create_dir_all(&workspace)
         .map_err(|error| format!("Failed to create remote doctor workspace: {error}"))?;
 
@@ -603,8 +600,13 @@ async fn run_rescue_diagnosis<R: Runtime>(
         TargetLocation::LocalOpenclaw => diagnose_primary_via_rescue(None, None).await,
         TargetLocation::RemoteOpenclaw => {
             let host_id = primary_remote_target_host_id(instance_id)?;
-            remote_diagnose_primary_via_rescue(app.state::<SshConnectionPool>(), host_id, None, None)
-                .await
+            remote_diagnose_primary_via_rescue(
+                app.state::<SshConnectionPool>(),
+                host_id,
+                None,
+                None,
+            )
+            .await
         }
     }
 }
@@ -621,7 +623,8 @@ async fn read_target_config<R: Runtime>(
             remote_read_raw_config(app.state::<SshConnectionPool>(), host_id).await?
         }
     };
-    serde_json::from_str::<Value>(&raw).map_err(|error| format!("Failed to parse target config: {error}"))
+    serde_json::from_str::<Value>(&raw)
+        .map_err(|error| format!("Failed to parse target config: {error}"))
 }
 
 async fn read_target_config_raw<R: Runtime>(
@@ -757,7 +760,9 @@ async fn restart_target_gateway<R: Runtime>(
 }
 
 fn diagnosis_is_healthy(diagnosis: &RescuePrimaryDiagnosisResult) -> bool {
-    diagnosis.status == "healthy" && diagnosis.summary.status == "healthy" && diagnosis.issues.is_empty()
+    diagnosis.status == "healthy"
+        && diagnosis.summary.status == "healthy"
+        && diagnosis.issues.is_empty()
 }
 
 fn diagnosis_context(diagnosis: &RescuePrimaryDiagnosisResult) -> Value {
@@ -827,14 +832,20 @@ fn rescue_setup_command_result(
     }
 }
 
-fn rescue_bot_manage_command_result(result: &crate::commands::RescueBotManageResult) -> CommandResult {
+fn rescue_bot_manage_command_result(
+    result: &crate::commands::RescueBotManageResult,
+) -> CommandResult {
     CommandResult {
         argv: vec![
             "manage_rescue_bot".into(),
             result.action.clone(),
             result.profile.clone(),
         ],
-        exit_code: Some(if result.active || result.configured { 0 } else { 1 }),
+        exit_code: Some(if result.active || result.configured {
+            0
+        } else {
+            1
+        }),
         stdout: format!(
             "configured={} active={} runtimeState={} rescuePort={} mainPort={} commands={}",
             result.configured,
@@ -886,7 +897,11 @@ fn rescue_activation_error_message(
     format!(
         "Rescue profile \"{}\" was {} but did not become active (runtime state: {}).",
         profile,
-        if configured { "configured" } else { "not configured" },
+        if configured {
+            "configured"
+        } else {
+            "not configured"
+        },
         runtime_state
     ) + &suffix
 }
@@ -944,7 +959,14 @@ async fn execute_rescue_activation_diagnostic_command<R: Runtime>(
         };
     }
 
-    match execute_command(&app.state::<SshConnectionPool>(), target_location, instance_id, argv).await {
+    match execute_command(
+        &app.state::<SshConnectionPool>(),
+        target_location,
+        instance_id,
+        argv,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(error) => CommandResult {
             argv: argv.to_vec(),
@@ -965,7 +987,10 @@ async fn collect_rescue_activation_failure_diagnostics<R: Runtime>(
 ) -> Vec<CommandResult> {
     let mut results = Vec::new();
     for argv in rescue_activation_diagnostic_commands(profile) {
-        results.push(execute_rescue_activation_diagnostic_command(app, target_location, instance_id, &argv).await);
+        results.push(
+            execute_rescue_activation_diagnostic_command(app, target_location, instance_id, &argv)
+                .await,
+        );
     }
     results
 }
@@ -983,18 +1008,34 @@ async fn ensure_rescue_profile_ready<R: Runtime>(
 ) -> Result<CommandResult, RescueActivationFailure> {
     let started = Instant::now();
     let result = match target_location {
-        TargetLocation::LocalOpenclaw => manage_rescue_bot("activate".into(), Some("rescue".into()), None)
-            .await
-            .map_err(|error| RescueActivationFailure {
-                message: error,
-                activation_result: rescue_setup_command_result("activate", "rescue", false, false, "activation_failed"),
-                diagnostics: Vec::new(),
-            })?,
+        TargetLocation::LocalOpenclaw => {
+            manage_rescue_bot("activate".into(), Some("rescue".into()), None)
+                .await
+                .map_err(|error| RescueActivationFailure {
+                    message: error,
+                    activation_result: rescue_setup_command_result(
+                        "activate",
+                        "rescue",
+                        false,
+                        false,
+                        "activation_failed",
+                    ),
+                    diagnostics: Vec::new(),
+                })?
+        }
         TargetLocation::RemoteOpenclaw => {
-            let host_id = primary_remote_target_host_id(instance_id).map_err(|error| RescueActivationFailure {
-                message: error,
-                activation_result: rescue_setup_command_result("activate", "rescue", false, false, "activation_failed"),
-                diagnostics: Vec::new(),
+            let host_id = primary_remote_target_host_id(instance_id).map_err(|error| {
+                RescueActivationFailure {
+                    message: error,
+                    activation_result: rescue_setup_command_result(
+                        "activate",
+                        "rescue",
+                        false,
+                        false,
+                        "activation_failed",
+                    ),
+                    diagnostics: Vec::new(),
+                }
             })?;
             remote_manage_rescue_bot(
                 app.state::<SshConnectionPool>(),
@@ -1006,7 +1047,13 @@ async fn ensure_rescue_profile_ready<R: Runtime>(
             .await
             .map_err(|error| RescueActivationFailure {
                 message: error,
-                activation_result: rescue_setup_command_result("activate", "rescue", false, false, "activation_failed"),
+                activation_result: rescue_setup_command_result(
+                    "activate",
+                    "rescue",
+                    false,
+                    false,
+                    "activation_failed",
+                ),
                 diagnostics: Vec::new(),
             })?
         }
@@ -1020,8 +1067,13 @@ async fn ensure_rescue_profile_ready<R: Runtime>(
     );
     command_result.duration_ms = started.elapsed().as_millis() as u64;
     if !result.active {
-        let diagnostics =
-            collect_rescue_activation_failure_diagnostics(app, target_location, instance_id, &result.profile).await;
+        let diagnostics = collect_rescue_activation_failure_diagnostics(
+            app,
+            target_location,
+            instance_id,
+            &result.profile,
+        )
+        .await;
         let suggested_checks = diagnostics
             .iter()
             .map(|result| result.argv.join(" "))
@@ -1048,7 +1100,9 @@ async fn repair_rescue_gateway_if_needed<R: Runtime>(
     instance_id: &str,
     diagnosis: &mut RescuePrimaryDiagnosisResult,
 ) -> Result<(), String> {
-    if !(diagnosis_missing_rescue_profile(diagnosis) || diagnosis_unhealthy_rescue_gateway(diagnosis)) {
+    if !(diagnosis_missing_rescue_profile(diagnosis)
+        || diagnosis_unhealthy_rescue_gateway(diagnosis))
+    {
         return Ok(());
     }
 
@@ -1097,7 +1151,12 @@ async fn repair_rescue_gateway_if_needed<R: Runtime>(
     Ok(())
 }
 
-fn append_diagnosis_log(session_id: &str, stage: &str, round: usize, diagnosis: &RescuePrimaryDiagnosisResult) {
+fn append_diagnosis_log(
+    session_id: &str,
+    stage: &str,
+    round: usize,
+    diagnosis: &RescuePrimaryDiagnosisResult,
+) {
     append_remote_doctor_log(
         session_id,
         json!({
@@ -1182,14 +1241,19 @@ fn ensure_object(value: &mut Value) -> Result<&mut serde_json::Map<String, Value
 }
 
 fn apply_config_set(root: &mut Value, path: &str, value: Value) -> Result<(), String> {
-    let segments = path.split('.').filter(|segment| !segment.trim().is_empty()).collect::<Vec<_>>();
+    let segments = path
+        .split('.')
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
     if segments.is_empty() {
         return Err("Config set path cannot be empty".into());
     }
     let mut cursor = root;
     for segment in &segments[..segments.len() - 1] {
         let object = ensure_object(cursor)?;
-        cursor = object.entry((*segment).to_string()).or_insert_with(|| json!({}));
+        cursor = object
+            .entry((*segment).to_string())
+            .or_insert_with(|| json!({}));
     }
     let object = ensure_object(cursor)?;
     object.insert(segments[segments.len() - 1].to_string(), value);
@@ -1197,13 +1261,19 @@ fn apply_config_set(root: &mut Value, path: &str, value: Value) -> Result<(), St
 }
 
 fn apply_config_unset(root: &mut Value, path: &str) -> Result<(), String> {
-    let segments = path.split('.').filter(|segment| !segment.trim().is_empty()).collect::<Vec<_>>();
+    let segments = path
+        .split('.')
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
     if segments.is_empty() {
         return Err("Config unset path cannot be empty".into());
     }
     let mut cursor = root;
     for segment in &segments[..segments.len() - 1] {
-        let Some(next) = cursor.as_object_mut().and_then(|object| object.get_mut(*segment)) else {
+        let Some(next) = cursor
+            .as_object_mut()
+            .and_then(|object| object.get_mut(*segment))
+        else {
             return Ok(());
         };
         cursor = next;
@@ -1352,8 +1422,13 @@ async fn execute_clawpal_command<R: Runtime>(
     argv: &[String],
 ) -> Result<Value, String> {
     match argv.get(1).map(String::as_str) {
-        Some("doctor") => execute_clawpal_doctor_command(app, pool, target_location, instance_id, argv).await,
-        other => Err(format!("Unsupported clawpal command in remote doctor agent session: {:?}", other)),
+        Some("doctor") => {
+            execute_clawpal_doctor_command(app, pool, target_location, instance_id, argv).await
+        }
+        other => Err(format!(
+            "Unsupported clawpal command in remote doctor agent session: {:?}",
+            other
+        )),
     }
 }
 
@@ -1374,20 +1449,32 @@ async fn execute_clawpal_doctor_command<R: Runtime>(
             )
             .await?;
             let which_result = match target_location {
-                TargetLocation::LocalOpenclaw => execute_command(
-                    pool,
-                    target_location,
-                    instance_id,
-                    &["sh".into(), "-lc".into(), "command -v openclaw || true".into()],
-                )
-                .await?,
-                TargetLocation::RemoteOpenclaw => execute_command(
-                    pool,
-                    target_location,
-                    instance_id,
-                    &["sh".into(), "-lc".into(), "command -v openclaw || true".into()],
-                )
-                .await?,
+                TargetLocation::LocalOpenclaw => {
+                    execute_command(
+                        pool,
+                        target_location,
+                        instance_id,
+                        &[
+                            "sh".into(),
+                            "-lc".into(),
+                            "command -v openclaw || true".into(),
+                        ],
+                    )
+                    .await?
+                }
+                TargetLocation::RemoteOpenclaw => {
+                    execute_command(
+                        pool,
+                        target_location,
+                        instance_id,
+                        &[
+                            "sh".into(),
+                            "-lc".into(),
+                            "command -v openclaw || true".into(),
+                        ],
+                    )
+                    .await?
+                }
             };
             Ok(json!({
                 "ok": version_result.exit_code == Some(0),
@@ -1396,7 +1483,10 @@ async fn execute_clawpal_doctor_command<R: Runtime>(
             }))
         }
         Some("config-read") => {
-            let maybe_path = argv.get(3).map(String::as_str).filter(|value| !value.starts_with("--"));
+            let maybe_path = argv
+                .get(3)
+                .map(String::as_str)
+                .filter(|value| !value.starts_with("--"));
             let raw = read_target_config_raw(app, target_location, instance_id).await?;
             config_read_response(&raw, maybe_path)
         }
@@ -1407,7 +1497,9 @@ async fn execute_clawpal_doctor_command<R: Runtime>(
             }))
         }
         Some("config-delete") => {
-            let path = argv.get(3).ok_or("clawpal doctor config-delete requires a path")?;
+            let path = argv
+                .get(3)
+                .ok_or("clawpal doctor config-delete requires a path")?;
             let mut config = read_target_config(app, target_location, instance_id).await?;
             apply_config_unset(&mut config, path)?;
             write_target_config(app, target_location, instance_id, &config).await?;
@@ -1427,8 +1519,12 @@ async fn execute_clawpal_doctor_command<R: Runtime>(
             }))
         }
         Some("config-upsert") => {
-            let path = argv.get(3).ok_or("clawpal doctor config-upsert requires a path")?;
-            let value_raw = argv.get(4).ok_or("clawpal doctor config-upsert requires a value")?;
+            let path = argv
+                .get(3)
+                .ok_or("clawpal doctor config-upsert requires a path")?;
+            let value_raw = argv
+                .get(4)
+                .ok_or("clawpal doctor config-upsert requires a value")?;
             let value: Value = serde_json::from_str(value_raw)
                 .map_err(|error| format!("Invalid JSON value for config-upsert: {error}"))?;
             let mut config = read_target_config(app, target_location, instance_id).await?;
@@ -1442,15 +1538,16 @@ async fn execute_clawpal_doctor_command<R: Runtime>(
                 .iter()
                 .position(|part| part == "--tool")
                 .ok_or("clawpal doctor exec requires --tool")?;
-            let tool = argv.get(tool_idx + 1).ok_or("clawpal doctor exec missing tool name")?;
+            let tool = argv
+                .get(tool_idx + 1)
+                .ok_or("clawpal doctor exec missing tool name")?;
             let args_idx = argv.iter().position(|part| part == "--args");
             let mut exec_argv = vec![tool.clone()];
             if let Some(index) = args_idx {
                 if let Some(arg_string) = argv.get(index + 1) {
-                    exec_argv.extend(
-                        shell_words::split(arg_string)
-                            .map_err(|error| format!("Failed to parse clawpal doctor exec args: {error}"))?,
-                    );
+                    exec_argv.extend(shell_words::split(arg_string).map_err(|error| {
+                        format!("Failed to parse clawpal doctor exec args: {error}")
+                    })?);
                 }
             }
             let result = execute_command(pool, target_location, instance_id, &exec_argv).await?;
@@ -1527,7 +1624,9 @@ async fn execute_invoke_payload<R: Runtime>(
             }))
         }
         "clawpal" => execute_clawpal_command(app, pool, target_location, instance_id, &argv).await,
-        other => Err(format!("Unsupported invoke command in remote doctor agent session: {other}")),
+        other => Err(format!(
+            "Unsupported invoke command in remote doctor agent session: {other}"
+        )),
     }
 }
 
@@ -1547,9 +1646,9 @@ async fn run_agent_request_with_bridge<R: Runtime>(
         .await?;
     let mut invokes = bridge.subscribe_invokes();
     let final_future = async move {
-        final_rx
-            .await
-            .map_err(|_| "Agent request ended before a final chat response was received".to_string())
+        final_rx.await.map_err(|_| {
+            "Agent request ended before a final chat response was received".to_string()
+        })
     };
     tokio::pin!(final_future);
 
@@ -1609,7 +1708,11 @@ async fn execute_command(
     let result = match target_location {
         TargetLocation::LocalOpenclaw => {
             if argv[0] == "openclaw" {
-                let arg_refs = argv.iter().skip(1).map(String::as_str).collect::<Vec<&str>>();
+                let arg_refs = argv
+                    .iter()
+                    .skip(1)
+                    .map(String::as_str)
+                    .collect::<Vec<&str>>();
                 let output = run_openclaw(&arg_refs)?;
                 CommandResult {
                     argv: argv.to_vec(),
@@ -1625,9 +1728,9 @@ async fn execute_command(
                 if let Some(openclaw_home) = get_active_openclaw_home_override() {
                     command.env("OPENCLAW_HOME", openclaw_home);
                 }
-                let output = command
-                    .output()
-                    .map_err(|error| format!("Failed to execute local command {:?}: {error}", argv))?;
+                let output = command.output().map_err(|error| {
+                    format!("Failed to execute local command {:?}: {error}", argv)
+                })?;
                 CommandResult {
                     argv: argv.to_vec(),
                     exit_code: output.status.code(),
@@ -1641,7 +1744,11 @@ async fn execute_command(
         TargetLocation::RemoteOpenclaw => {
             let host_id = primary_remote_target_host_id(instance_id)?;
             if argv[0] == "openclaw" {
-                let arg_refs = argv.iter().skip(1).map(String::as_str).collect::<Vec<&str>>();
+                let arg_refs = argv
+                    .iter()
+                    .skip(1)
+                    .map(String::as_str)
+                    .collect::<Vec<&str>>();
                 let output = run_openclaw_remote(pool, &host_id, &arg_refs).await?;
                 CommandResult {
                     argv: argv.to_vec(),
@@ -1652,7 +1759,9 @@ async fn execute_command(
                     timed_out: false,
                 }
             } else {
-                let output = pool.exec_login(&host_id, &build_shell_command(argv)).await?;
+                let output = pool
+                    .exec_login(&host_id, &build_shell_command(argv))
+                    .await?;
                 CommandResult {
                     argv: argv.to_vec(),
                     exit_code: Some(output.exit_code as i32),
@@ -1733,10 +1842,13 @@ fn plan_command_failure_message(
 }
 
 fn command_result_stdout(value: &Value) -> String {
-    value.get("stdout")
+    value
+        .get("stdout")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+        .unwrap_or_else(|| {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        })
 }
 
 async fn execute_plan_command<R: Runtime>(
@@ -2133,8 +2245,15 @@ async fn run_clawpal_server_repair_loop<R: Runtime>(
     let mut diagnosis = run_rescue_diagnosis(app, target_location, instance_id).await?;
     append_diagnosis_log(session_id, "initial", 0, &diagnosis);
     if protocol_runs_rescue_preflight(RemoteDoctorProtocol::ClawpalServer) {
-        repair_rescue_gateway_if_needed(app, session_id, 0, target_location, instance_id, &mut diagnosis)
-            .await?;
+        repair_rescue_gateway_if_needed(
+            app,
+            session_id,
+            0,
+            target_location,
+            instance_id,
+            &mut diagnosis,
+        )
+        .await?;
     }
     if diagnosis_is_healthy(&diagnosis) {
         return Ok(result_for_completion(
@@ -2159,8 +2278,9 @@ async fn run_clawpal_server_repair_loop<R: Runtime>(
             Some(PlanKind::Repair),
             None,
         );
-        let config_context =
-            build_config_excerpt_context(&read_target_config_raw(app, target_location, instance_id).await?);
+        let config_context = build_config_excerpt_context(
+            &read_target_config_raw(app, target_location, instance_id).await?,
+        );
         append_remote_doctor_log(
             session_id,
             json!({
@@ -2243,7 +2363,10 @@ async fn run_clawpal_server_repair_loop<R: Runtime>(
                     result.stdout = format!("Updated {path}");
                 }
                 "configUnset" => {
-                    let path = step.path.as_deref().ok_or("configUnset step missing path")?;
+                    let path = step
+                        .path
+                        .as_deref()
+                        .ok_or("configUnset step missing path")?;
                     emit_progress(
                         Some(app),
                         session_id,
@@ -2298,7 +2421,8 @@ async fn run_clawpal_server_repair_loop<R: Runtime>(
                     "result": result,
                 }),
             );
-            report_clawpal_server_step_result(client, &plan.plan_id, step_index, step, &result).await;
+            report_clawpal_server_step_result(client, &plan.plan_id, step_index, step, &result)
+                .await;
             if result.exit_code.unwrap_or(1) != 0 {
                 return Err(result.stderr);
             }
@@ -2320,7 +2444,11 @@ async fn run_clawpal_server_repair_loop<R: Runtime>(
             .await?;
         }
         last_step_types = round_step_types.clone();
-        round_observations.push(RepairRoundObservation::new(round, &round_step_types, &diagnosis));
+        round_observations.push(RepairRoundObservation::new(
+            round,
+            &round_step_types,
+            &diagnosis,
+        ));
         if repair_plan_stalled(&round_observations, REPAIR_PLAN_STALL_THRESHOLD) {
             let observation = round_observations
                 .last()
@@ -2382,8 +2510,9 @@ async fn run_agent_planner_repair_loop<R: Runtime>(
 
     for round in 1..=MAX_REMOTE_DOCTOR_ROUNDS {
         let kind = next_agent_plan_kind_for_round(&diagnosis, &previous_results);
-        let config_context =
-            build_config_excerpt_context(&read_target_config_raw(app, target_location, instance_id).await?);
+        let config_context = build_config_excerpt_context(
+            &read_target_config_raw(app, target_location, instance_id).await?,
+        );
         let phase = match kind {
             PlanKind::Detect => "planning_detect",
             PlanKind::Investigate => "planning_investigate",
@@ -2460,11 +2589,15 @@ async fn run_agent_planner_repair_loop<R: Runtime>(
                     PlanKind::Investigate => "executing_investigate",
                     PlanKind::Repair => "executing_repair",
                 },
-                format!("Running {} command: {}", match kind {
-                    PlanKind::Detect => "detect",
-                    PlanKind::Investigate => "investigate",
-                    PlanKind::Repair => "repair",
-                }, command.argv.join(" ")),
+                format!(
+                    "Running {} command: {}",
+                    match kind {
+                        PlanKind::Detect => "detect",
+                        PlanKind::Investigate => "investigate",
+                        PlanKind::Repair => "repair",
+                    },
+                    command.argv.join(" ")
+                ),
                 Some(kind),
                 Some(command.argv.clone()),
             );
@@ -2483,20 +2616,20 @@ async fn run_agent_planner_repair_loop<R: Runtime>(
                     "purpose": command.purpose,
                 }),
             );
-            let command_result = match execute_plan_command(
-                app,
-                pool,
-                target_location,
-                instance_id,
-                &command.argv,
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(error) => {
-                    return Err(plan_command_failure_message(kind, round, &command.argv, &error));
-                }
-            };
+            let command_result =
+                match execute_plan_command(app, pool, target_location, instance_id, &command.argv)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return Err(plan_command_failure_message(
+                            kind,
+                            round,
+                            &command.argv,
+                            &error,
+                        ));
+                    }
+                };
             append_remote_doctor_log(
                 session_id,
                 json!({
@@ -2551,7 +2684,11 @@ async fn run_agent_planner_repair_loop<R: Runtime>(
             ));
         }
 
-        round_observations.push(RepairRoundObservation::new(round, &last_step_types, &diagnosis));
+        round_observations.push(RepairRoundObservation::new(
+            round,
+            &last_step_types,
+            &diagnosis,
+        ));
         if repair_plan_stalled(&round_observations, REPAIR_PLAN_STALL_THRESHOLD) {
             let observation = round_observations
                 .last()
@@ -2741,16 +2878,27 @@ async fn start_remote_doctor_repair_impl<R: Runtime>(
                     "[remote_doctor] session={} protocol fallback legacy_doctor -> clawpal_server",
                     session_id
                 ));
-                run_clawpal_server_repair_loop(&app, &client, &session_id, &instance_id, target_location)
-                    .await
+                run_clawpal_server_repair_loop(
+                    &app,
+                    &client,
+                    &session_id,
+                    &instance_id,
+                    target_location,
+                )
+                .await
             } else {
                 legacy
             }
         }
         RemoteDoctorProtocol::ClawpalServer => {
-            let clawpal_server =
-                run_clawpal_server_repair_loop(&app, &client, &session_id, &instance_id, target_location)
-                    .await;
+            let clawpal_server = run_clawpal_server_repair_loop(
+                &app,
+                &client,
+                &session_id,
+                &instance_id,
+                target_location,
+            )
+            .await;
             if forced_protocol.is_none()
                 && matches!(&clawpal_server, Err(error) if is_unknown_method_error(error))
             {
@@ -2952,7 +3100,9 @@ mod tests {
         )
         .expect("config set");
         assert_eq!(
-            value.pointer("/models/providers/openai/baseUrl").and_then(Value::as_str),
+            value
+                .pointer("/models/providers/openai/baseUrl")
+                .and_then(Value::as_str),
             Some("http://127.0.0.1:3000/v1")
         );
     }
@@ -3137,8 +3287,7 @@ mod tests {
         assert_eq!(remote_doctor_agent_id(), "clawpal-remote-doctor");
         assert!(!remote_doctor_agent_session_key("sess-1").contains("main"));
         assert!(
-            remote_doctor_agent_session_key("sess-1")
-                .starts_with("agent:clawpal-remote-doctor:")
+            remote_doctor_agent_session_key("sess-1").starts_with("agent:clawpal-remote-doctor:")
         );
     }
 
@@ -3198,10 +3347,12 @@ mod tests {
             .expect("agent workspace")
             .replace("~/", &format!("{}/", home_dir.to_string_lossy()));
         for file_name in ["IDENTITY.md", "USER.md", "BOOTSTRAP.md", "AGENTS.md"] {
-            let content =
-                std::fs::read_to_string(std::path::Path::new(&workspace).join(file_name))
-                    .unwrap_or_else(|error| panic!("read {file_name}: {error}"));
-            assert!(!content.trim().is_empty(), "{file_name} should not be empty");
+            let content = std::fs::read_to_string(std::path::Path::new(&workspace).join(file_name))
+                .unwrap_or_else(|error| panic!("read {file_name}: {error}"));
+            assert!(
+                !content.trim().is_empty(),
+                "{file_name} should not be empty"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&temp_root);
@@ -3210,14 +3361,22 @@ mod tests {
     #[test]
     fn only_agent_planner_protocol_requires_bridge() {
         assert!(protocol_requires_bridge(RemoteDoctorProtocol::AgentPlanner));
-        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::ClawpalServer));
-        assert!(!protocol_requires_bridge(RemoteDoctorProtocol::LegacyDoctor));
+        assert!(!protocol_requires_bridge(
+            RemoteDoctorProtocol::ClawpalServer
+        ));
+        assert!(!protocol_requires_bridge(
+            RemoteDoctorProtocol::LegacyDoctor
+        ));
     }
 
     #[test]
     fn clawpal_server_protocol_skips_local_rescue_preflight() {
-        assert!(!protocol_runs_rescue_preflight(RemoteDoctorProtocol::ClawpalServer));
-        assert!(!protocol_runs_rescue_preflight(RemoteDoctorProtocol::AgentPlanner));
+        assert!(!protocol_runs_rescue_preflight(
+            RemoteDoctorProtocol::ClawpalServer
+        ));
+        assert!(!protocol_runs_rescue_preflight(
+            RemoteDoctorProtocol::AgentPlanner
+        ));
     }
 
     #[test]
@@ -3318,7 +3477,11 @@ mod tests {
         let error = plan_command_failure_message(
             PlanKind::Investigate,
             2,
-            &["openclaw".to_string(), "gateway".to_string(), "logs".to_string()],
+            &[
+                "openclaw".to_string(),
+                "gateway".to_string(),
+                "logs".to_string(),
+            ],
             "ssh command failed: russh exec timed out after 25s",
         );
         assert!(error.contains("Investigate command failed in round 2"));
@@ -3387,17 +3550,15 @@ mod tests {
 
     #[test]
     fn repeated_rediagnose_only_rounds_are_detected_as_stalled() {
-        let diagnosis = sample_diagnosis(vec![
-            json!({
-                "id": "providers.base_url",
-                "code": "invalid.base_url",
-                "severity": "medium",
-                "message": "Provider base URL is invalid",
-                "autoFixable": true,
-                "fixHint": "Reset baseUrl",
-                "source": "config"
-            }),
-        ]);
+        let diagnosis = sample_diagnosis(vec![json!({
+            "id": "providers.base_url",
+            "code": "invalid.base_url",
+            "severity": "medium",
+            "message": "Provider base URL is invalid",
+            "autoFixable": true,
+            "fixHint": "Reset baseUrl",
+            "source": "config"
+        })]);
         let step_types = vec!["doctorRediagnose".to_string()];
 
         assert!(!repair_plan_stalled(
@@ -3419,21 +3580,16 @@ mod tests {
 
     #[test]
     fn round_limit_error_message_includes_latest_issues_and_step_types() {
-        let diagnosis = sample_diagnosis(vec![
-            json!({
-                "id": "providers.base_url",
-                "code": "invalid.base_url",
-                "severity": "medium",
-                "message": "Provider base URL is invalid",
-                "autoFixable": true,
-                "fixHint": "Reset baseUrl",
-                "source": "config"
-            }),
-        ]);
-        let error = round_limit_error_message(
-            &diagnosis,
-            &["doctorRediagnose".to_string()],
-        );
+        let diagnosis = sample_diagnosis(vec![json!({
+            "id": "providers.base_url",
+            "code": "invalid.base_url",
+            "severity": "medium",
+            "message": "Provider base URL is invalid",
+            "autoFixable": true,
+            "fixHint": "Reset baseUrl",
+            "source": "config"
+        })]);
+        let error = round_limit_error_message(&diagnosis, &["doctorRediagnose".to_string()]);
         assert!(error.contains("invalid.base_url"));
         assert!(error.contains("doctorRediagnose"));
         assert!(error.contains("Provider base URL is invalid"));
@@ -3443,14 +3599,16 @@ mod tests {
     fn unreadable_config_context_uses_raw_excerpt_and_parse_error() {
         let context = build_config_excerpt_context("{\n  ddd\n}");
         assert!(context.config_excerpt.is_null());
-        assert!(context.config_excerpt_raw.as_deref().unwrap_or_default().contains("ddd"));
-        assert!(
-            context
-                .config_parse_error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("key must be a string")
-        );
+        assert!(context
+            .config_excerpt_raw
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ddd"));
+        assert!(context
+            .config_parse_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("key must be a string"));
     }
 
     #[test]
@@ -3459,12 +3617,10 @@ mod tests {
         let summary = config_excerpt_log_summary(&context);
         assert_eq!(summary["configExcerptPresent"], json!(false));
         assert_eq!(summary["configExcerptRawPresent"], json!(true));
-        assert!(
-            summary["configParseError"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("key must be a string")
-        );
+        assert!(summary["configParseError"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("key must be a string"));
     }
 
     #[test]
@@ -3472,12 +3628,10 @@ mod tests {
         let value = config_read_response("{\n  ddd\n}", None).expect("config read response");
         assert!(value["value"].is_null());
         assert!(value["raw"].as_str().unwrap_or_default().contains("ddd"));
-        assert!(
-            value["parseError"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("key must be a string")
-        );
+        assert!(value["parseError"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("key must be a string"));
     }
 
     #[test]
@@ -3531,7 +3685,10 @@ mod tests {
             "rescue",
             false,
             "configured_inactive",
-            &["manage_rescue_bot status rescue".to_string(), "openclaw --profile rescue gateway status".to_string()],
+            &[
+                "manage_rescue_bot status rescue".to_string(),
+                "openclaw --profile rescue gateway status".to_string(),
+            ],
         );
         assert!(error.contains("rescue"));
         assert!(error.contains("configured_inactive"));
@@ -3549,7 +3706,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(rendered.contains(&"manage_rescue_bot status rescue".to_string()));
         assert!(rendered.contains(&"openclaw --profile rescue gateway status".to_string()));
-        assert!(rendered.contains(&"openclaw --profile rescue config get gateway.port --json".to_string()));
+        assert!(rendered
+            .contains(&"openclaw --profile rescue config get gateway.port --json".to_string()));
     }
 
     const E2E_CONTAINER_NAME: &str = "clawpal-e2e-remote-doctor";
@@ -3677,7 +3835,10 @@ CMD ["/usr/sbin/sshd", "-D"]
 "#;
 
     fn should_run_docker_e2e() -> bool {
-        std::env::var("CLAWPAL_RUN_REMOTE_DOCTOR_E2E").ok().as_deref() == Some("1")
+        std::env::var("CLAWPAL_RUN_REMOTE_DOCTOR_E2E")
+            .ok()
+            .as_deref()
+            == Some("1")
     }
 
     fn live_gateway_url() -> Option<String> {
@@ -3746,7 +3907,14 @@ CMD ["/usr/sbin/sshd", "-D"]
     fn build_e2e_image() -> Result<(), String> {
         let dockerfile = E2E_DOCKERFILE.replace("ROOTPASS", E2E_ROOT_PASSWORD);
         let output = Command::new("docker")
-            .args(["build", "-t", &format!("{E2E_CONTAINER_NAME}:latest"), "-f", "-", "."])
+            .args([
+                "build",
+                "-t",
+                &format!("{E2E_CONTAINER_NAME}:latest"),
+                "-f",
+                "-",
+                ".",
+            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -3844,10 +4012,12 @@ CMD ["/usr/sbin/sshd", "-D"]
         let _cleanup = Cleanup;
         wait_for_ssh(30).expect("ssh should become available");
 
-        let temp_root = std::env::temp_dir().join(format!("clawpal-remote-doctor-e2e-{}", Uuid::new_v4()));
+        let temp_root =
+            std::env::temp_dir().join(format!("clawpal-remote-doctor-e2e-{}", Uuid::new_v4()));
         let clawpal_dir = temp_root.join(".clawpal");
         create_dir_all(&clawpal_dir).expect("create clawpal dir");
-        set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string())).expect("set clawpal data");
+        set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
+            .expect("set clawpal data");
         set_active_openclaw_home_override(None).expect("clear openclaw home override");
 
         let pool = SshConnectionPool::new();
@@ -3916,7 +4086,10 @@ CMD ["/usr/sbin/sshd", "-D"]
                             success: true,
                         })
                     }
-                    _ => Err(format!("unexpected planner request: {:?} round {}", kind, round)),
+                    _ => Err(format!(
+                        "unexpected planner request: {:?} round {}",
+                        kind, round
+                    )),
                 }
             },
         )
@@ -3933,7 +4106,10 @@ CMD ["/usr/sbin/sshd", "-D"]
             .expect("marker check");
         assert_eq!(marker_result.exit_code, 0);
 
-        let log_path = clawpal_dir.join("doctor").join("remote").join(format!("{session_id}.jsonl"));
+        let log_path = clawpal_dir
+            .join("doctor")
+            .join("remote")
+            .join(format!("{session_id}.jsonl"));
         let log_text = std::fs::read_to_string(&log_path).expect("read remote doctor log");
         assert!(log_text.contains("\"planKind\":\"detect\""));
         assert!(log_text.contains("\"planKind\":\"repair\""));
@@ -3954,7 +4130,8 @@ CMD ["/usr/sbin/sshd", "-D"]
 
         cleanup_e2e_container();
         build_e2e_image().expect("docker build");
-        start_e2e_container_with_env(&[("OPENCLAW_RESCUE_GATEWAY_ACTIVE", "0")]).expect("docker run");
+        start_e2e_container_with_env(&[("OPENCLAW_RESCUE_GATEWAY_ACTIVE", "0")])
+            .expect("docker run");
         struct Cleanup;
         impl Drop for Cleanup {
             fn drop(&mut self) {
@@ -3981,12 +4158,10 @@ CMD ["/usr/sbin/sshd", "-D"]
 
         assert!(error.message.contains("did not become active"));
         assert!(error.message.contains("configured_inactive"));
-        assert!(
-            error
-                .diagnostics
-                .iter()
-                .any(|result| result.argv.join(" ") == "manage_rescue_bot status rescue")
-        );
+        assert!(error
+            .diagnostics
+            .iter()
+            .any(|result| result.argv.join(" ") == "manage_rescue_bot status rescue"));
     }
 
     #[tokio::test]
@@ -4130,8 +4305,10 @@ CMD ["/usr/sbin/sshd", "-D"]
         let app = mock_app();
         let app_handle = app.handle().clone();
         app_handle.manage(SshConnectionPool::new());
-        let temp_root = std::env::temp_dir()
-            .join(format!("clawpal-remote-doctor-live-loop-{}", Uuid::new_v4()));
+        let temp_root = std::env::temp_dir().join(format!(
+            "clawpal-remote-doctor-live-loop-{}",
+            Uuid::new_v4()
+        ));
         let clawpal_dir = temp_root.join(".clawpal");
         create_dir_all(&clawpal_dir).expect("create clawpal dir");
         set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
@@ -4210,8 +4387,10 @@ CMD ["/usr/sbin/sshd", "-D"]
         let app = mock_app();
         let app_handle = app.handle().clone();
         app_handle.manage(SshConnectionPool::new());
-        let temp_root = std::env::temp_dir()
-            .join(format!("clawpal-remote-doctor-live-start-{}", Uuid::new_v4()));
+        let temp_root = std::env::temp_dir().join(format!(
+            "clawpal-remote-doctor-live-start-{}",
+            Uuid::new_v4()
+        ));
         let clawpal_dir = temp_root.join(".clawpal");
         create_dir_all(&clawpal_dir).expect("create clawpal dir");
         set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
@@ -4287,8 +4466,10 @@ CMD ["/usr/sbin/sshd", "-D"]
         let app = mock_app();
         let app_handle = app.handle().clone();
         app_handle.manage(SshConnectionPool::new());
-        let temp_root = std::env::temp_dir()
-            .join(format!("clawpal-remote-doctor-live-raw-config-{}", Uuid::new_v4()));
+        let temp_root = std::env::temp_dir().join(format!(
+            "clawpal-remote-doctor-live-raw-config-{}",
+            Uuid::new_v4()
+        ));
         let clawpal_dir = temp_root.join(".clawpal");
         create_dir_all(&clawpal_dir).expect("create clawpal dir");
         set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
@@ -4331,7 +4512,11 @@ CMD ["/usr/sbin/sshd", "-D"]
             .exec_login(&cfg.id, "python3 - <<'PY'\nimport json, pathlib\njson.load(open(pathlib.Path.home()/'.openclaw'/'openclaw.json'))\nprint('ok')\nPY")
             .await
             .expect("read repaired config");
-        assert_eq!(repaired.exit_code, 0, "repaired config should be valid JSON: {}", repaired.stderr);
+        assert_eq!(
+            repaired.exit_code, 0,
+            "repaired config should be valid JSON: {}",
+            repaired.stderr
+        );
         assert_eq!(repaired.stdout.trim(), "ok");
 
         set_active_clawpal_data_override(None).expect("clear clawpal data");

@@ -7,7 +7,9 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[tokio::test]
 async fn waits_for_connect_challenge_and_sends_connect_request() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
     let addr = listener.local_addr().expect("local addr");
     let (tx, rx) = oneshot::channel::<Value>();
 
@@ -25,7 +27,11 @@ async fn waits_for_connect_challenge_and_sends_connect_request() {
         .await
         .expect("send challenge");
 
-        let message = ws.next().await.expect("message").expect("websocket message");
+        let message = ws
+            .next()
+            .await
+            .expect("message")
+            .expect("websocket message");
         let text = message.into_text().expect("text frame");
         let value: Value = serde_json::from_str(&text).expect("json request");
         let req_id = value["id"].as_str().expect("request id").to_string();

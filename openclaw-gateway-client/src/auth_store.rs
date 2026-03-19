@@ -29,7 +29,9 @@ impl FileAuthStore {
     }
 
     fn path_for(&self, device_id: &str, role: &str) -> PathBuf {
-        self.root.join(sanitize(device_id)).join(format!("{}.json", sanitize(role)))
+        self.root
+            .join(sanitize(device_id))
+            .join(format!("{}.json", sanitize(role)))
     }
 }
 
@@ -64,7 +66,8 @@ impl AuthStore for FileAuthStore {
 }
 
 fn sanitize(value: &str) -> String {
-    value.chars()
+    value
+        .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
                 ch

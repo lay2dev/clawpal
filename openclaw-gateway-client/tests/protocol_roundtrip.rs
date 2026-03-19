@@ -1,6 +1,6 @@
 use openclaw_gateway_client::protocol::{EventFrame, GatewayFrame, RequestFrame, ResponseFrame};
 use pretty_assertions::assert_eq;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn serializes_request_frame() {

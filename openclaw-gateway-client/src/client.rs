@@ -92,8 +92,12 @@ impl GatewayClientBuilder {
     }
 
     pub fn build(self) -> Result<GatewayClient, Error> {
-        let url = Url::parse(&self.url.ok_or_else(|| Error::Config("url is required".into()))?)
-            .map_err(|err| Error::Config(err.to_string()))?;
+        let url = Url::parse(
+            &self
+                .url
+                .ok_or_else(|| Error::Config("url is required".into()))?,
+        )
+        .map_err(|err| Error::Config(err.to_string()))?;
         let tls_fingerprint = self
             .tls_fingerprint
             .as_deref()
@@ -147,7 +151,12 @@ impl GatewayClient {
         let challenge = read_until_challenge(&mut reader).await?;
         let nonce = challenge
             .payload
-            .and_then(|payload| payload.get("nonce").and_then(|value| value.as_str()).map(str::to_string))
+            .and_then(|payload| {
+                payload
+                    .get("nonce")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
             .ok_or_else(|| Error::Protocol("connect challenge missing nonce".into()))?;
 
         let request_id = Uuid::new_v4().to_string();
@@ -188,7 +197,8 @@ impl GatewayClient {
                             };
                             match frame {
                                 GatewayFrame::Response(response) => {
-                                    let sender = read_inner.pending.lock().await.remove(&response.id);
+                                    let sender =
+                                        read_inner.pending.lock().await.remove(&response.id);
                                     if let Some(sender) = sender {
                                         let result = if response.ok {
                                             Ok(response.payload.unwrap_or(Value::Null))
@@ -278,7 +288,9 @@ impl Clone for GatewayClientHandle {
 
 async fn read_until_challenge(
     reader: &mut futures::stream::SplitStream<
-        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
     >,
 ) -> Result<EventFrame, Error> {
     while let Some(message) = reader.next().await {
@@ -286,19 +298,27 @@ async fn read_until_challenge(
         if !message.is_text() {
             continue;
         }
-        let frame: GatewayFrame = serde_json::from_str(message.to_text().map_err(|err| Error::Transport(err.to_string()))?)?;
+        let frame: GatewayFrame = serde_json::from_str(
+            message
+                .to_text()
+                .map_err(|err| Error::Transport(err.to_string()))?,
+        )?;
         if let GatewayFrame::Event(event) = frame {
             if event.event == "connect.challenge" {
                 return Ok(event);
             }
         }
     }
-    Err(Error::Protocol("connection closed before connect.challenge".into()))
+    Err(Error::Protocol(
+        "connection closed before connect.challenge".into(),
+    ))
 }
 
 async fn read_until_connect_response(
     reader: &mut futures::stream::SplitStream<
-        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
     >,
     request_id: &str,
 ) -> Result<HelloOk, Error> {
@@ -307,7 +327,11 @@ async fn read_until_connect_response(
         if !message.is_text() {
             continue;
         }
-        let frame: GatewayFrame = serde_json::from_str(message.to_text().map_err(|err| Error::Transport(err.to_string()))?)?;
+        let frame: GatewayFrame = serde_json::from_str(
+            message
+                .to_text()
+                .map_err(|err| Error::Transport(err.to_string()))?,
+        )?;
         if let GatewayFrame::Response(ResponseFrame {
             id,
             ok,
@@ -321,13 +345,21 @@ async fn read_until_connect_response(
             if !ok {
                 return Err(Error::Protocol(
                     error
-                        .and_then(|value| value.get("message").and_then(|msg| msg.as_str()).map(str::to_string))
+                        .and_then(|value| {
+                            value
+                                .get("message")
+                                .and_then(|msg| msg.as_str())
+                                .map(str::to_string)
+                        })
                         .unwrap_or_else(|| "connect failed".into()),
                 ));
             }
-            let payload = payload.ok_or_else(|| Error::Protocol("connect response missing payload".into()))?;
+            let payload = payload
+                .ok_or_else(|| Error::Protocol("connect response missing payload".into()))?;
             return serde_json::from_value(payload).map_err(Error::from);
         }
     }
-    Err(Error::Protocol("connection closed before connect response".into()))
+    Err(Error::Protocol(
+        "connection closed before connect response".into(),
+    ))
 }

@@ -121,14 +121,21 @@ fn deserializes_hello_ok_response_payload() {
 
     let frame: GatewayFrame = serde_json::from_value(raw).expect("deserialize hello response");
 
-    let GatewayFrame::Response(ResponseFrame { payload: Some(payload), .. }) = frame else {
+    let GatewayFrame::Response(ResponseFrame {
+        payload: Some(payload),
+        ..
+    }) = frame
+    else {
         panic!("expected response");
     };
 
     let hello: HelloOk = serde_json::from_value(payload).expect("decode hello payload");
     assert_eq!(hello.server_name.as_deref(), Some("gateway.local"));
     assert_eq!(hello.policy.tick_interval_ms, Some(30_000));
-    assert_eq!(hello.auth.and_then(|auth| auth.device_token), Some("next-device-token".into()));
+    assert_eq!(
+        hello.auth.and_then(|auth| auth.device_token),
+        Some("next-device-token".into())
+    );
 }
 
 #[test]

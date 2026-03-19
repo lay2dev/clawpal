@@ -7,7 +7,9 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[tokio::test]
 async fn request_receives_matching_response_and_events_are_broadcast() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
     let addr = listener.local_addr().expect("local addr");
     let (req_tx, mut req_rx) = mpsc::unbounded_channel::<Value>();
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
@@ -34,7 +36,10 @@ async fn request_receives_matching_response_and_events_are_broadcast() {
             .into_text()
             .expect("text");
         let connect_value: Value = serde_json::from_str(&connect_text).expect("connect json");
-        let connect_id = connect_value["id"].as_str().expect("connect id").to_string();
+        let connect_id = connect_value["id"]
+            .as_str()
+            .expect("connect id")
+            .to_string();
 
         ws.send(Message::text(
             json!({

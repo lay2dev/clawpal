@@ -109,13 +109,8 @@ impl NodeClient {
                         .await;
                     }
                     Ok(Message::Binary(bytes)) => {
-                        Self::handle_message_payload(
-                            &bytes,
-                            &inner_ref,
-                            &chat_ref,
-                            &app_clone,
-                        )
-                        .await;
+                        Self::handle_message_payload(&bytes, &inner_ref, &chat_ref, &app_clone)
+                            .await;
                     }
                     Ok(Message::Close(_)) => {
                         let _ = app_clone
@@ -292,10 +287,7 @@ impl NodeClient {
         Ok(rx)
     }
 
-    pub async fn await_agent_final(
-        &self,
-        rx: oneshot::Receiver<String>,
-    ) -> Result<String, String> {
+    pub async fn await_agent_final(&self, rx: oneshot::Receiver<String>) -> Result<String, String> {
         match tokio::time::timeout(std::time::Duration::from_secs(180), rx).await {
             Ok(Ok(text)) => Ok(text),
             Ok(Err(_)) => {

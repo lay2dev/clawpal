@@ -472,8 +472,15 @@ impl BridgeClient {
             return;
         };
         if let Ok(frame) = serde_json::from_str::<Value>(text) {
-            Self::handle_frame(frame, inner_ref, invokes_ref, invoke_events, expired_ref, app)
-                .await;
+            Self::handle_frame(
+                frame,
+                inner_ref,
+                invokes_ref,
+                invoke_events,
+                expired_ref,
+                app,
+            )
+            .await;
         }
     }
 

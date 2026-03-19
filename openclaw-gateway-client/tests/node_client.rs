@@ -8,7 +8,9 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[tokio::test]
 async fn node_client_decodes_invoke_requests_and_sends_results_and_events() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
     let addr = listener.local_addr().expect("local addr");
     let (capture_tx, capture_rx) = oneshot::channel::<(Value, Value)>();
 
@@ -34,7 +36,10 @@ async fn node_client_decodes_invoke_requests_and_sends_results_and_events() {
             .into_text()
             .expect("text");
         let connect_value: Value = serde_json::from_str(&connect_text).expect("connect json");
-        let connect_id = connect_value["id"].as_str().expect("connect id").to_string();
+        let connect_id = connect_value["id"]
+            .as_str()
+            .expect("connect id")
+            .to_string();
 
         ws.send(Message::text(
             json!({
@@ -101,7 +106,8 @@ async fn node_client_decodes_invoke_requests_and_sends_results_and_events() {
             .expect("node event frame")
             .into_text()
             .expect("text");
-        let node_event_value: Value = serde_json::from_str(&node_event_text).expect("node event json");
+        let node_event_value: Value =
+            serde_json::from_str(&node_event_text).expect("node event json");
         let node_event_id = node_event_value["id"]
             .as_str()
             .expect("node event id")
@@ -154,7 +160,10 @@ async fn node_client_decodes_invoke_requests_and_sends_results_and_events() {
     assert_eq!(invoke_result["params"]["id"], "invoke-1");
     assert_eq!(invoke_result["params"]["nodeId"], "node-1");
     assert_eq!(invoke_result["params"]["ok"], true);
-    assert_eq!(invoke_result["params"]["payload"], json!({ "echoed": true }));
+    assert_eq!(
+        invoke_result["params"]["payload"],
+        json!({ "echoed": true })
+    );
 
     assert_eq!(node_event["method"], "node.event");
     assert_eq!(node_event["params"]["event"], "exec.finished");

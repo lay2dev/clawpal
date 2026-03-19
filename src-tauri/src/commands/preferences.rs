@@ -99,9 +99,8 @@ fn save_app_preferences_from_paths(
     stored.show_ssh_transfer_speed_ui = prefs.show_ssh_transfer_speed_ui;
     stored.remote_doctor_gateway_url =
         normalize_remote_doctor_gateway_url(prefs.remote_doctor_gateway_url.clone());
-    stored.remote_doctor_gateway_auth_token = normalize_remote_doctor_gateway_auth_token(
-        prefs.remote_doctor_gateway_auth_token.clone(),
-    );
+    stored.remote_doctor_gateway_auth_token =
+        normalize_remote_doctor_gateway_auth_token(prefs.remote_doctor_gateway_auth_token.clone());
     save_stored_preferences_from_paths(paths, &stored)
 }
 
@@ -172,8 +171,7 @@ pub fn set_remote_doctor_gateway_auth_token_preference(
 ) -> Result<AppPreferences, String> {
     let paths = resolve_paths();
     let mut prefs = load_app_preferences_from_paths(&paths);
-    prefs.remote_doctor_gateway_auth_token =
-        normalize_remote_doctor_gateway_auth_token(auth_token);
+    prefs.remote_doctor_gateway_auth_token = normalize_remote_doctor_gateway_auth_token(auth_token);
     save_app_preferences_from_paths(&paths, &prefs)?;
     Ok(prefs)
 }

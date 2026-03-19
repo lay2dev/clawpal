@@ -3,7 +3,9 @@ pub fn normalize_fingerprint(input: &str) -> Option<String> {
         .chars()
         .filter(|ch| *ch != ':' && !ch.is_ascii_whitespace())
         .collect();
-    if compact.is_empty() || compact.len() % 2 != 0 || !compact.chars().all(|ch| ch.is_ascii_hexdigit())
+    if compact.is_empty()
+        || compact.len() % 2 != 0
+        || !compact.chars().all(|ch| ch.is_ascii_hexdigit())
     {
         return None;
     }

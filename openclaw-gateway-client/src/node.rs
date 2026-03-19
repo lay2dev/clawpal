@@ -71,6 +71,8 @@ impl NodeClient {
         if let Some(payload) = payload {
             params.insert("payload".into(), payload);
         }
-        self.handle.request("node.event", Some(Value::Object(params))).await
+        self.handle
+            .request("node.event", Some(Value::Object(params)))
+            .await
     }
 }
