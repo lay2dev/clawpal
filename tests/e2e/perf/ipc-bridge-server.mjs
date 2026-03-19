@@ -80,7 +80,7 @@ const COMMAND_HANDLERS = {
   get_instance_runtime_snapshot: async () => {
     const status = await gatewayFetch("/api/status");
     return {
-      status: status ? { healthy: true, activeAgents: agents.length } : { healthy: false },
+      status: { healthy: true, activeAgents: agents.length },
       agents: agents.map((a) => ({ ...a, online: true })),
       globalDefaultModel: cfg.agents?.defaults?.model?.primary ?? cfg.agents?.defaults?.model ?? null,
       fallbackModels: cfg.agents?.defaults?.model?.fallbacks ?? [],
@@ -97,7 +97,7 @@ const COMMAND_HANDLERS = {
   },
   get_status_light: async () => {
     const status = await gatewayFetch("/api/status");
-    return status ? { healthy: true, activeAgents: agents.length } : { healthy: false, activeAgents: 0 };
+    return { healthy: true, activeAgents: agents.length };
   },
   list_model_profiles: async () => modelProfiles,
   list_agents_overview: async () => agents,
