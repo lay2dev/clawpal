@@ -84,11 +84,11 @@ const runtimeSnapshot = {
 
 const statusExtra = { openclawVersion: versionRaw };
 
-const modelProfiles = (models && typeof models === "object")
-  ? Object.entries(models).map(([id, m]) => ({
-      id, provider: m.provider, model: m.model, enabled: true,
-    }))
-  : [];
+// Build model profiles from CLI output, falling back to raw config
+const modelsSource = (models && typeof models === "object") ? models : (cfg.models || {});
+const modelProfiles = Object.entries(modelsSource).map(([id, m]) => ({
+  id, provider: m.provider, model: m.model, enabled: true,
+}));
 
 const channelsConfig = { channels: channels?.list ?? [], bindings: channels?.bindings ?? [] };
 const cronConfig = { jobs: cron?.jobs ?? [] };
