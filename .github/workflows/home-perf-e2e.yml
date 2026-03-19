@@ -42,8 +42,16 @@ jobs:
             sleep 1
           done
 
-      - name: Extract fixtures from container
-        run: node tests/e2e/perf/extract-fixtures.mjs
+      - name: Start IPC bridge server
+        run: |
+          node tests/e2e/perf/ipc-bridge-server.mjs &
+          # Wait for bridge to be ready
+          for i in $(seq 1 10); do
+            curl -s http://localhost:3399/invoke -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"cmd":"get_app_preferences","args":{}}' > /dev/null 2>&1 && break
+            sleep 1
+          done
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
 
@@ -58,7 +66,7 @@ jobs:
       - name: Run render probe E2E
         run: npx playwright test --config tests/e2e/perf/playwright.config.mjs
         env:
-          PERF_MOCK_LATENCY_MS: "50"
+          PERF_BRIDGE_URL: "http://localhost:3399"
           PERF_SETTLED_GATE_MS: "5000"
 
       - name: Ensure report exists
