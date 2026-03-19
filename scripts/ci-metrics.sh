@@ -10,7 +10,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 BUNDLE_RAW_KB="N/A"
 BUNDLE_GZIP_KB="N/A"
 BUNDLE_INIT_GZIP_KB="N/A"
-BUNDLE_LIMIT_KB=512
+BUNDLE_LIMIT_KB=350
 BUNDLE_STATUS="FAIL"
 BUNDLE_NOTE=""
 BUNDLE_LOG="$TMP_DIR/bundle.log"
@@ -201,9 +201,9 @@ run_perf_metrics_check() {
   PERF_FAILED="${PERF_FAILED:-0}"
   PERF_RSS_MB="$(extract_metric 'METRIC:rss_mb=[0-9.]+' "$PERF_LOG")"
   PERF_VMS_MB="$(extract_metric 'METRIC:vms_mb=[0-9.]+' "$PERF_LOG")"
-  PERF_CMD_P50="$(extract_metric 'METRIC:cmd_p50_ms=[0-9.]+' "$PERF_LOG")"
-  PERF_CMD_P95="$(extract_metric 'METRIC:cmd_p95_ms=[0-9.]+' "$PERF_LOG")"
-  PERF_CMD_MAX="$(extract_metric 'METRIC:cmd_max_ms=[0-9.]+' "$PERF_LOG")"
+  PERF_CMD_P50="$(extract_metric 'METRIC:cmd_p50_us=[0-9.]+' "$PERF_LOG")"
+  PERF_CMD_P95="$(extract_metric 'METRIC:cmd_p95_us=[0-9.]+' "$PERF_LOG")"
+  PERF_CMD_MAX="$(extract_metric 'METRIC:cmd_max_us=[0-9.]+' "$PERF_LOG")"
   PERF_UPTIME="$(extract_metric 'METRIC:uptime_secs=[0-9.]+' "$PERF_LOG")"
 }
 
