@@ -15,7 +15,9 @@ const SSH_PREFIX = `sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no 
 
 function ssh(cmd, timeoutMs = 15_000) {
   try {
-    return execSync(`${SSH_PREFIX} ${JSON.stringify(cmd)}`, {
+    // Use bash -c with single-quote wrapping to avoid double-quote escaping issues
+    const escaped = cmd.replace(/'/g, "'\''");
+    return execSync(`${SSH_PREFIX} bash -c '${escaped}'`, {
       encoding: "utf-8",
       timeout: timeoutMs,
     }).trim();
