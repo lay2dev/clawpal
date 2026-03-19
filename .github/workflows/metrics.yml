@@ -383,6 +383,20 @@ jobs:
             sleep 1
           done
 
+      - name: Start OpenClaw gateway in container
+        run: |
+          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
+          $SSH 'nohup openclaw gateway start > /tmp/oc-gw.log 2>&1 &'
+          for i in $(seq 1 30); do
+            STATUS=$($SSH 'openclaw status --json 2>/dev/null' || true)
+            if echo "$STATUS" | jq -e '.status' > /dev/null 2>&1; then
+              echo "Gateway ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          $SSH 'openclaw status 2>/dev/null' || echo "Warning: gateway may not be fully ready"
+
       - name: Start IPC bridge server
         run: |
           node tests/e2e/perf/ipc-bridge-server.mjs &
