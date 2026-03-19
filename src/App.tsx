@@ -118,7 +118,6 @@ export function App() {
       || connectionStatus[_bootstrapActiveInstance] === "connected",
     resolveInstanceTransport,
     showToast,
-    setShowSshTransferSpeedUi: () => {},  // patched below
   });
 
   const {

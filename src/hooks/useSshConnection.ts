@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
-import { invalidateGlobalReadCache } from "@/lib/use-api";
+import { buildCacheKey, invalidateGlobalReadCache, subscribeToCacheKey } from "@/lib/use-api";
 import { withGuidance, explainAndBuildGuidanceError } from "@/lib/guidance";
 import { ensureRemotePersistenceScope } from "@/lib/instance-persistence";
 import {
@@ -13,6 +13,8 @@ import {
 import { buildFriendlySshError, extractErrorText } from "@/lib/sshDiagnostic";
 import { logDevException, logDevIgnoredError } from "@/lib/dev-logging";
 import type { SshHost, PrecheckIssue } from "@/lib/types";
+
+const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
 
 interface ProfileSyncStatus {
   phase: "idle" | "syncing" | "success" | "error";
@@ -56,6 +58,19 @@ export function useSshConnection(params: UseSshConnectionParams) {
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
   const [sshTransferStats, setSshTransferStats] = useState<import("@/lib/types").SshTransferStats | null>(null);
   const [doctorNavPulse, setDoctorNavPulse] = useState(false);
+
+  // Load SSH transfer-speed UI preference (and subscribe to cache updates)
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api.getAppPreferences()
+        .then((prefs) => { if (!cancelled) setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi)); })
+        .catch(() => { if (!cancelled) setShowSshTransferSpeedUi(false); });
+    };
+    load();
+    const unsubscribe = subscribeToCacheKey(APP_PREFERENCES_CACHE_KEY, load);
+    return () => { cancelled = true; unsubscribe(); };
+  }, []);
 
   const sshHealthFailStreakRef = useRef<Record<string, number>>({});
   const doctorSshAutohealMuteUntilRef = useRef<Record<string, number>>({});

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { buildCacheKey, prewarmRemoteInstanceReadCache, subscribeToCacheKey } from "@/lib/use-api";
+import { prewarmRemoteInstanceReadCache } from "@/lib/use-api";
 import { withGuidance, explainAndBuildGuidanceError } from "@/lib/guidance";
 import {
   ensureRemotePersistenceScope,
@@ -13,7 +13,6 @@ import { deriveDockerPaths, hashInstanceToken } from "@/lib/docker-instance-help
 import { logDevIgnoredError } from "@/lib/dev-logging";
 import type { DockerInstance, RegisteredInstance, SshHost, PrecheckIssue } from "@/lib/types";
 
-const APP_PREFERENCES_CACHE_KEY = buildCacheKey("__global__", "getAppPreferences", []);
 
 interface UseInstancePersistenceParams {
   activeInstance: string;
@@ -25,7 +24,6 @@ interface UseInstancePersistenceParams {
   isConnected: boolean;
   resolveInstanceTransport: (id: string) => "local" | "docker_local" | "remote_ssh";
   showToast: (message: string, type?: "success" | "error") => void;
-  setShowSshTransferSpeedUi: (show: boolean) => void;
 }
 
 export function useInstancePersistence(params: UseInstancePersistenceParams) {
@@ -39,7 +37,6 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
     isConnected,
     resolveInstanceTransport,
     showToast,
-    setShowSshTransferSpeedUi,
   } = params;
 
   const [configVersion, setConfigVersion] = useState(0);
@@ -54,31 +51,7 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
     setConfigVersion((v) => v + 1);
   }, []);
 
-  // Load UI preferences
-  useEffect(() => {
-    let cancelled = false;
-    const loadUiPreferences = () => {
-      api.getAppPreferences()
-        .then((prefs) => {
-          if (!cancelled) {
-            setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setShowSshTransferSpeedUi(false);
-          }
-        });
-    };
 
-    loadUiPreferences();
-    const unsubscribe = subscribeToCacheKey(APP_PREFERENCES_CACHE_KEY, loadUiPreferences);
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [setShowSshTransferSpeedUi]);
 
   const ensureAccessForInstance = useCallback((instanceId: string) => {
     const transport = resolveInstanceTransport(instanceId);
