@@ -3,7 +3,7 @@
   "nav.recipes": "Recipes",
   "nav.channels": "Channels",
   "nav.history": "History",
-  "nav.doctor": "\uD83E\uDD9E help \uD83E\uDD9E",
+  "nav.doctor": "🦞 help 🦞",
   "nav.sessions": "Sessions",
   "nav.orchestrator": "Orchestrator",
   "nav.settings": "Settings",
@@ -11,7 +11,6 @@
   "nav.context": "Context",
   "nav.website": "Website",
   "nav.chat": "Chat",
-
   "config.pendingChanges": "Pending changes",
   "config.applyChanges": "Apply Changes",
   "config.discard": "Discard",
@@ -27,7 +26,6 @@
   "config.discardFailed": "Discard failed: {{error}}",
   "config.sshFailed": "SSH connection failed: {{error}}",
   "config.noRecipeSelected": "No recipe selected.",
-
   "home.title": "Home",
   "home.status": "Status",
   "home.health": "Health",
@@ -129,7 +127,6 @@
   "installChat.gatewayLogsApp": "Gateway Logs (app)",
   "installChat.gatewayLogsError": "Gateway Logs (error)",
   "installChat.diagnosticSourceRemote": "remote ({{hostId}})",
-
   "install.docker.setupFailed": "Docker setup failed",
   "install.docker.precheck.summary": "Docker precheck completed",
   "install.docker.precheck.details": "Docker, Docker Compose, and git are available",
@@ -139,7 +136,6 @@
   "install.docker.init.details": "Built official OpenClaw Docker image (openclaw:local)",
   "install.docker.verify.summary": "Docker verify completed",
   "install.docker.verify.details": "Official Docker compose configuration and local image verified",
-
   "install.local.precheck.summary": "Local precheck completed",
   "install.local.precheck.failed": "Local precheck failed",
   "install.local.precheck.detailsFound": "OpenClaw detected on local machine",
@@ -151,7 +147,6 @@
   "install.local.init.failed": "Local init failed",
   "install.local.init.details": "Initialized OpenClaw directory",
   "install.local.verify.summary": "Local verify completed",
-
   "install.ssh.precheck.summary": "Remote SSH precheck completed",
   "install.ssh.precheck.failed": "Remote SSH precheck failed",
   "install.ssh.precheck.detailsFound": "OpenClaw detected on remote host",
@@ -165,7 +160,6 @@
   "install.ssh.init.details": "Initialized ~/.openclaw on remote host",
   "install.ssh.verify.summary": "Remote SSH verify completed",
   "install.ssh.verify.failed": "Remote SSH verify failed",
-
   "install.wsl2.precheck.summary": "WSL2 precheck completed",
   "install.wsl2.install.summary": "WSL2 install completed",
   "install.wsl2.init.summary": "WSL2 init completed",
@@ -181,7 +175,6 @@
   "home.deleteBackupFailed": "Delete failed: {{error}}",
   "home.remoteReadFailed": "Failed to read remote OpenClaw instance: {{error}}",
   "home.remoteAgentsFailed": "Failed to load remote agents: {{error}}",
-
   "settings.title": "Settings",
   "settings.oauthHint": "For OAuth providers, you can authorize directly in Add Profile (Start OAuth -> paste callback URL/code). CLI login is still supported.",
   "settings.oauthHintSuffix": "Profiles created via CLI will appear in the list on the right.",
@@ -360,8 +353,7 @@
   "settings.bugReportStatsLastHour": "Sent in last hour: {{count}}",
   "settings.bugReportStatsDropped": "Rate-limited drops: {{count}}",
   "settings.bugReportStatsLastSent": "Last sent: {{value}}",
-
-  "doctor.title": "\uD83E\uDD9E help \uD83E\uDD9E",
+  "doctor.title": "🦞 help 🦞",
   "doctor.healthScore": "Health score: {{score}}",
   "doctor.healthSummary": "Health: {{score}}",
   "doctor.fix": "fix",
@@ -389,8 +381,8 @@
   "doctor.failedLoadRemoteSessions": "Failed to load remote session files",
   "doctor.filesCount": "{{count}} files ({{size}})",
   "doctor.noSessionFiles": "No session files found.",
-  "doctor.collapse": "\u25B2 Collapse",
-  "doctor.details": "\u25BC Details",
+  "doctor.collapse": "▲ Collapse",
+  "doctor.details": "▼ Details",
   "doctor.empty": "{{count}} empty",
   "doctor.lowValue": "{{count}} low value",
   "doctor.valuable": "{{count}} valuable",
@@ -605,7 +597,6 @@
   "doctor.fullAutoWarning": "In full-auto mode, all commands from the agent will be executed immediately without your approval. This includes write operations and arbitrary shell commands. Only enable this if you trust the agent source.",
   "doctor.fullAutoConfirm": "Enable",
   "doctor.cancel": "Cancel",
-
   "orchestrator.title": "Recipe activity",
   "orchestrator.description": "See what each recipe changed, when it ran, and where it was applied.",
   "orchestrator.scope.current": "This environment",
@@ -633,7 +624,6 @@
   "orchestrator.statusCompleted": "Completed",
   "orchestrator.statusNeedsAttention": "Needs attention",
   "orchestrator.statusInProgress": "In progress",
-
   "history.title": "History",
   "history.rollback": "rollback",
   "history.reverted": "Reverted {{details}}",
@@ -657,7 +647,6 @@
   "history.runArtifacts": "Artifacts",
   "history.runClaims": "Resource claims",
   "history.sourceTrace": "Source trace",
-
   "channels.title": "Channels",
   "channels.noChannels": "No channels configured. Add channel plugins in your OpenClaw config, then refresh to see them here.",
   "channels.refresh": "Refresh",
@@ -670,7 +659,6 @@
   "channels.mainDefault": "main (default)",
   "channels.defaultModel": "default model",
   "channels.newAgent": "+ New agent...",
-
   "recipes.title": "Recipes",
   "recipes.sourceLabel": "Recipe source",
   "recipes.import": "Import",
@@ -824,7 +812,6 @@
   "recipeStudio.saveFailed": "Failed to save recipe draft: {{error}}",
   "recipeStudio.deleteSuccess": "Deleted workspace recipe: {{slug}}",
   "recipeStudio.deleteFailed": "Failed to delete workspace recipe: {{error}}",
-
   "cook.recipeNotFound": "Recipe not found",
   "cook.next": "Next",
   "cook.skippedEmpty": "(skipped — empty params)",
@@ -938,14 +925,12 @@
   "cook.progressChecksBoth": "Running auth and config checks ({{complete}}/{{total}})",
   "cook.progressChecksAuth": "Running auth checks ({{complete}}/{{total}})",
   "cook.progressChecksConfig": "Loading config context ({{complete}}/{{total}})",
-
   "chat.new": "New",
   "chat.thinking": "Thinking...",
   "chat.placeholder": "Ask your OpenClaw agent...",
   "chat.send": "Send",
   "chat.noResponse": "No response",
   "chat.noAgents": "No agents available. Create an agent first.",
-
   "createAgent.title": "New Agent",
   "createAgent.agentId": "Agent ID",
   "createAgent.agentIdPlaceholder": "e.g. my-agent",
@@ -958,7 +943,6 @@
   "createAgent.creating": "Creating...",
   "createAgent.create": "Create",
   "createAgent.agentIdRequired": "Agent ID is required",
-
   "upgrade.title": "Upgrade OpenClaw",
   "upgrade.backupTitle": "Creating Backup...",
   "upgrade.upgradingTitle": "Upgrading...",
@@ -979,7 +963,6 @@
   "upgrade.startUpgrade": "Start Upgrade",
   "upgrade.retryBackup": "Retry Backup",
   "upgrade.close": "Close",
-
   "recipeCard.steps_one": "{{count}} step",
   "recipeCard.steps_other": "{{count}} steps",
   "recipeCard.easy": "Easy",
@@ -989,7 +972,6 @@
   "recipeCard.viewSource": "View source",
   "recipeCard.editSource": "Edit source",
   "recipeCard.forkToWorkspace": "Fork to workspace",
-
   "paramForm.isRequired": "{{label}} is required",
   "paramForm.tooShort": "{{label}} is too short",
   "paramForm.tooLong": "{{label}} is too long",
@@ -1001,7 +983,6 @@
   "paramForm.selectAgent": "Select an agent",
   "paramForm.selectModel": "Select a model",
   "paramForm.useGlobalDefault": "Use global default",
-
   "instance.local": "Local",
   "instance.start": "Start",
   "instance.typeLocal": "Local",
@@ -1068,7 +1049,6 @@
   "instance.keyGuideClose": "Got it",
   "instance.keyGuideCopy": "Copy",
   "instance.keyGuideCopied": "Copied!",
-
   "ssh.errorConnectionRefused": "Connection refused — please check Host and Port",
   "ssh.errorNoSuchFile": "Key file not found — please check Key Path",
   "ssh.errorHostUnreachable": "Host unreachable or hostname cannot be resolved — please check Host (for example, use reachable IP/FQDN instead of an unknown alias)",
@@ -1097,7 +1077,6 @@
   "ssh.passphraseLabel": "Passphrase",
   "ssh.passphrasePlaceholder": "Leave empty if key has no passphrase",
   "ssh.passphraseConfirm": "Connect",
-
   "nav.cron": "Cron",
   "cron.title": "Cron Jobs",
   "cron.noJobs": "No cron jobs configured",
@@ -1169,7 +1148,6 @@
   "watchdog.stopSuccess": "Watchdog stopped",
   "watchdog.actionFailed": "Watchdog action failed: {{error}}",
   "watchdog.startingHint": "Waiting for first health check...",
-
   "queue.pendingCount_one": "{{count}} pending change",
   "queue.pendingCount_other": "{{count}} pending changes",
   "queue.remove": "Remove",
@@ -1187,7 +1165,6 @@
   "queue.discardFailed": "Discard failed: {{error}}",
   "queue.discardTitle": "Discard all queued changes?",
   "queue.discardDescription": "This will remove {{count}} queued command(s). No changes will be applied.",
-
   "start.welcome": "Welcome to ClawPal",
   "start.welcomeHint": "Select an instance to manage, or connect a new one.",
   "start.addInstance": "Connect Instance",
@@ -1239,9 +1216,7 @@
   "quickDiagnose.placeholder": "Diagnose this issue and propose concrete next steps.",
   "quickDiagnose.buttonLabel": "Quick Diagnose",
   "quickDiagnose.diagnoseWithZeroclaw": "Diagnose with Zeroclaw",
-
   "instance.close": "Close tab",
-
   "onboarding.summary": "This instance needs some setup before it's ready to use",
   "onboarding.noProfilesSummary": "No model profiles detected yet. Doctor Claw needs at least one available model profile.",
   "onboarding.actionCheckDoctor": "Check the Doctor page — the instance is not healthy",
@@ -1249,5 +1224,33 @@
   "onboarding.actionSetDefault": "Select a default model on the Home page",
   "onboarding.actionSyncProfiles": "Open Settings and sync/extract profiles from your existing OpenClaw config",
   "onboarding.actionConnectInstanceFirst": "Connect an instance first from Start, then configure model profiles",
-  "onboarding.actionOpenConnectEntry": "Open Start → Connect Instance"
+  "onboarding.actionOpenConnectEntry": "Open Start → Connect Instance",
+  "recipes.loading": "Loading...",
+  "recipes.load": "Load",
+  "recipes.loadedFrom": "Loaded from: {{source}}",
+  "recipes.builtinSource": "builtin / clawpal recipes",
+  "createAgent.independent": "Independent agent (separate workspace)",
+  "createAgent.displayName": "Display Name",
+  "createAgent.displayNamePlaceholder": "e.g. MyBot",
+  "createAgent.emoji": "Emoji",
+  "home.gitBackup": "Git Backup",
+  "home.gitBackupDescription": "Back up your workspace via git. Recommended for private repos.",
+  "home.gitNotInitialized": "Workspace is not a git repository.",
+  "home.gitInitRepo": "Initialize Git",
+  "home.gitInitialized": "Git repository initialized with .gitignore.",
+  "home.gitAlreadyInitialized": "Already a git repository.",
+  "home.gitNoRemote": "No remote configured. Add one with: git remote add origin <url>",
+  "home.gitSync": "Sync Now",
+  "home.gitSyncing": "Syncing...",
+  "home.gitSynced": "Workspace synced successfully.",
+  "home.gitSyncFailed": "Git sync failed: {{error}}",
+  "home.gitBranch": "Branch: {{branch}}",
+  "home.gitRemote": "Remote: {{url}}",
+  "home.gitUncommitted": "{{count}} uncommitted change(s)",
+  "home.gitAhead": "{{count}} commit(s) ahead",
+  "home.gitBehind": "{{count}} commit(s) behind",
+  "home.gitLastCommit": "Last: {{message}}",
+  "home.gitClean": "Workspace is clean — nothing to commit.",
+  "home.gitInitFailed": "Failed to initialize: {{error}}",
+  "home.gitLocalOnly": "Local only (no remote)"
 }

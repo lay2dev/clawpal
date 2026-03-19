@@ -510,6 +510,22 @@ export function useApi() {
         dispatch(api.deleteBackup, api.remoteDeleteBackup),
         ["listBackups"],
       ),
+
+      // Workspace Git Backup
+      workspaceGitStatus: dispatchCached(
+        "workspaceGitStatus",
+        isRemote ? 20_000 : 12_000,
+        api.workspaceGitStatus,
+        api.remoteWorkspaceGitStatus,
+      ),
+      workspaceGitBackup: withInvalidation(
+        dispatch(api.workspaceGitBackup, api.remoteWorkspaceGitBackup),
+        ["workspaceGitStatus"],
+      ),
+      workspaceGitInit: withInvalidation(
+        dispatch(api.workspaceGitInit, api.remoteWorkspaceGitInit),
+        ["workspaceGitStatus"],
+      ),
       runOpenclawUpgrade: withInvalidation(
         dispatch(
           api.runOpenclawUpgrade,
