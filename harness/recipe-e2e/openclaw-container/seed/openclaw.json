@@ -13,7 +13,7 @@
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "https://api.anthropic.com/v1",
+        "baseUrl": "http://127.0.0.1:19999/v1",
         "models": [
           {
             "id": "claude-sonnet-4-20250514",
