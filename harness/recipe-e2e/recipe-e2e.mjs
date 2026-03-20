@@ -332,6 +332,14 @@ async function enterRemoteInstance(driver) {
   // Brief settle time
   await sleep(driver, 1000);
   console.log("Instance ready for recipe operations");
+
+  // Debug: verify SSH is reachable from the test process
+  try {
+    const sshTest = sshExec("echo SSH_REACHABLE && cat /root/.openclaw/openclaw.json | head -3");
+    console.log("SSH debug check:", sshTest.trim());
+  } catch (e) {
+    console.log("SSH debug check FAILED:", e.message);
+  }
 }
 
 async function maybeApprove(driver) {

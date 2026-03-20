@@ -19,7 +19,10 @@ RUN echo "root:${ROOT_PASSWORD}" | chpasswd \
     && sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
     && echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config \
     && echo "MaxSessions 20" >> /etc/ssh/sshd_config \
-    && echo "MaxStartups 20:30:60" >> /etc/ssh/sshd_config
+    && echo "MaxStartups 20:30:60" >> /etc/ssh/sshd_config \
+    && echo "ClientAliveInterval 10" >> /etc/ssh/sshd_config \
+    && echo "ClientAliveCountMax 6" >> /etc/ssh/sshd_config \
+    && echo "TCPKeepAlive yes" >> /etc/ssh/sshd_config
 
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

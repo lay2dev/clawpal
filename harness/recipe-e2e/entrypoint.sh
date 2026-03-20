@@ -25,11 +25,9 @@ cleanup() {
   local status=$?
 
   if docker ps -a --format '{{.Names}}' | grep -qx "${OPENCLAW_CONTAINER_NAME}"; then
-    if [ "${status}" -ne 0 ]; then
-      echo "--- inner OpenClaw container logs ---"
-      docker logs "${OPENCLAW_CONTAINER_NAME}" || true
-      echo "--- end inner logs ---"
-    fi
+    echo "--- inner OpenClaw container logs ---"
+    docker logs "${OPENCLAW_CONTAINER_NAME}" 2>&1 || true
+    echo "--- end inner logs ---"
     docker rm -f "${OPENCLAW_CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 
@@ -113,6 +111,11 @@ for attempt in $(seq 1 60); do
   fi
   sleep 2
 done
+
+echo "Docker containers:"
+docker ps -a 2>/dev/null || true
+echo "SSH port check:"
+ss -tlnp | grep 2222 || true
 
 cd /harness
 node /harness/recipe-e2e.mjs "$@"
