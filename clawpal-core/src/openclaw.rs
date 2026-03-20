@@ -376,7 +376,8 @@ mod tests {
         // Reproduce the real-world scenario where feishu plugin logs with
         // ANSI color codes leak into stdout alongside JSON output.
         let output = CliOutput {
-            stdout: "[{\"id\":\"main\"}]\n\x1b[35m[plugins]\x1b[39m \x1b[36mfeishu: ok\x1b[39m".to_string(),
+            stdout: "[{\"id\":\"main\"}]\n\x1b[35m[plugins]\x1b[39m \x1b[36mfeishu: ok\x1b[39m"
+                .to_string(),
             stderr: String::new(),
             exit_code: 0,
         };
@@ -398,7 +399,7 @@ mod tests {
         assert_eq!(value, serde_json::json!({"ok": true}));
     }
 
-        #[test]
+    #[test]
     fn strip_ansi_removes_escape_sequences() {
         let input = "\x1b[35m[plugins]\x1b[39m hello";
         let cleaned = strip_ansi(input);

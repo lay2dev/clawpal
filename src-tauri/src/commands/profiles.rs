@@ -1588,20 +1588,17 @@ mod tests {
         assert!(changed);
         // Model entry should exist as an empty object — provider/model are
         // encoded in the key, not as fields (openclaw schema rejects them).
-        assert!(
-            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1")
-                .unwrap()
-                .is_object()
-        );
+        assert!(cfg
+            .pointer("/agents/defaults/models/openrouter~1deepseek-r1")
+            .unwrap()
+            .is_object());
         // Must NOT contain "provider" or "model" fields.
-        assert!(
-            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1/provider")
-                .is_none()
-        );
-        assert!(
-            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1/model")
-                .is_none()
-        );
+        assert!(cfg
+            .pointer("/agents/defaults/models/openrouter~1deepseek-r1/provider")
+            .is_none());
+        assert!(cfg
+            .pointer("/agents/defaults/models/openrouter~1deepseek-r1/model")
+            .is_none());
         // Provider baseUrl should be written under agents.defaults.providers.
         assert_eq!(
             cfg.pointer("/models/providers/openrouter/baseUrl")

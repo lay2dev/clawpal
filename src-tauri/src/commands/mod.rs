@@ -2994,8 +2994,7 @@ mod recipe_action_materializer_tests {
                     && command[0] == "openclaw"
                     && command[1] == "config"
                     && command[2] == "set"
-                    && command[3]
-                        .ends_with(".guilds.guild-1.channels.channel-1.systemPrompt")
+                    && command[3].ends_with(".guilds.guild-1.channels.channel-1.systemPrompt")
             })
             .map(|(_, command)| command[4].clone())
             .expect("systemPrompt config set command");
