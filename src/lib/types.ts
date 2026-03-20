@@ -1,3 +1,29 @@
+import type { SshDiagnosticReport } from "./ssh-types";
+export type {
+  SftpEntry,
+  SshCommandError,
+  SshConfigHostSuggestion,
+  SshConnectionBottleneckStage,
+  SshConnectionProbePhase,
+  SshConnectionProbeStatus,
+  SshConnectionProfile,
+  SshConnectionQuality,
+  SshConnectionStageKey,
+  SshConnectionStageMetric,
+  SshConnectionStageStatus,
+  SshDiagnosticReport,
+  SshDiagnosticStatus,
+  SshErrorCode,
+  SshEvidence,
+  SshExecResult,
+  SshHost,
+  SshIntent,
+  SshProbeProgressEvent,
+  SshRepairAction,
+  SshStage,
+  SshTransferStats,
+} from "./ssh-types";
+
 export type Severity = "low" | "medium" | "high";
 
 export interface ChannelNode {
@@ -422,6 +448,48 @@ export interface AgentSessionAnalysis {
   sessions: SessionAnalysis[];
 }
 
+export interface SessionAnalysisChunkEvent {
+  handleId: string;
+  agent: string;
+  sessions: SessionAnalysis[];
+  totalFiles: number;
+  totalSizeBytes: number;
+  emptyCount: number;
+  lowValueCount: number;
+  valuableCount: number;
+  done: boolean;
+}
+
+export interface SessionStreamDoneEvent {
+  handleId: string;
+  totalAgents: number;
+  totalSessions: number;
+  cancelled: boolean;
+}
+
+export interface SessionPreviewMessage {
+  role: string;
+  content: string;
+}
+
+export interface SessionPreviewPageEvent {
+  handleId: string;
+  page: number;
+  messages: SessionPreviewMessage[];
+  totalMessages: number;
+}
+
+export interface SessionPreviewDoneEvent {
+  handleId: string;
+  totalMessages: number;
+  cancelled: boolean;
+}
+
+export interface SessionStreamErrorEvent {
+  handleId: string;
+  error: string;
+}
+
 export interface ModelProfile {
   id: string;
   name: string;
@@ -489,14 +557,6 @@ export interface AppPreferences {
   showSshTransferSpeedUi: boolean;
 }
 
-export interface SshTransferStats {
-  hostId: string;
-  uploadBytesPerSec: number;
-  downloadBytesPerSec: number;
-  totalUploadBytes: number;
-  totalDownloadBytes: number;
-  updatedAtMs: number;
-}
 
 export type BugReportBackend = "sentry";
 export type BugReportSeverity = "info" | "warn" | "error" | "critical";
@@ -531,20 +591,7 @@ export interface HistoryItem {
   artifacts?: RecipeRuntimeArtifact[];
 }
 
-export interface DoctorIssue {
-  id: string;
-  code: string;
-  severity: "error" | "warn" | "info";
-  message: string;
-  autoFixable: boolean;
-  fixHint?: string;
-}
 
-export interface DoctorReport {
-  ok: boolean;
-  score: number;
-  issues: DoctorIssue[];
-}
 
 export interface GuidanceAction {
   label: string;
@@ -580,47 +627,9 @@ export interface InstanceStatus {
   sshDiagnostic?: SshDiagnosticReport | null;
 }
 
-export type SshConnectionQuality = "excellent" | "good" | "fair" | "poor" | "unknown";
-export type SshConnectionBottleneckStage = "connect" | "gateway" | "config" | "agents" | "version" | "other";
-export type SshConnectionProbeStatus = "success" | "failed" | "interactive_required";
-export type SshConnectionStageKey = "connect" | "gateway" | "config" | "agents" | "version";
-export type SshConnectionStageStatus = "ok" | "failed" | "not_run" | "reused" | "interactive_required";
-export type SshConnectionProbePhase = "start" | "success" | "failed" | "reused" | "interactive_required" | "completed";
 
-export interface SshConnectionStageMetric {
-  key: SshConnectionStageKey;
-  latencyMs: number;
-  status: SshConnectionStageStatus;
-  note?: string | null;
-}
 
-export interface SshProbeProgressEvent {
-  hostId: string;
-  requestId: string;
-  stage: SshConnectionStageKey;
-  phase: SshConnectionProbePhase;
-  latencyMs?: number | null;
-  note?: string | null;
-}
 
-export interface SshConnectionProfile {
-  probeStatus?: SshConnectionProbeStatus;
-  reusedExistingConnection?: boolean;
-  status: InstanceStatus;
-  connectLatencyMs: number;
-  gatewayLatencyMs: number;
-  configLatencyMs: number;
-  agentsLatencyMs?: number;
-  versionLatencyMs: number;
-  totalLatencyMs: number;
-  quality: SshConnectionQuality;
-  qualityScore: number;
-  bottleneck: {
-    stage: SshConnectionBottleneckStage;
-    latencyMs: number;
-  };
-  stages?: SshConnectionStageMetric[];
-}
 
 export interface StatusExtra {
   openclawVersion?: string;
@@ -651,14 +660,7 @@ export interface ChannelsRuntimeSnapshot {
   agents: AgentOverview[];
 }
 
-export interface CronConfigSnapshot {
-  jobs: CronJob[];
-}
 
-export interface CronRuntimeSnapshot {
-  jobs: CronJob[];
-  watchdog: WatchdogStatus & { alive: boolean; deployed: boolean };
-}
 
 export interface Binding {
   agentId: string;
@@ -672,91 +674,33 @@ export interface BackupInfo {
   sizeBytes: number;
 }
 
-export interface SshHost {
-  id: string;
-  label: string;
-  host: string;
-  port: number;
-  username: string;
-  authMethod: "key" | "ssh_config" | "password";
-  keyPath?: string;
-  password?: string;
-  passphrase?: string;
+export interface BackupProgressEvent {
+  handleId: string;
+  phase: string;
+  filesCopied: number;
+  bytesCopied: number;
+  currentPath?: string | null;
 }
 
-export interface SshConfigHostSuggestion {
-  hostAlias: string;
-  hostName?: string;
-  user?: string;
-  port?: number;
-  identityFile?: string;
+export interface BackupDoneEvent {
+  handleId: string;
+  info: BackupInfo;
 }
 
-export type SshStage =
-  | "resolveHostConfig"
-  | "tcpReachability"
-  | "hostKeyVerification"
-  | "authNegotiation"
-  | "sessionOpen"
-  | "remoteExec"
-  | "sftpRead"
-  | "sftpWrite"
-  | "sftpRemove";
-
-export type SshIntent =
-  | "connect"
-  | "exec"
-  | "sftp_read"
-  | "sftp_write"
-  | "sftp_remove"
-  | "install_step"
-  | "doctor_remote"
-  | "health_check";
-
-export type SshDiagnosticStatus = "ok" | "degraded" | "failed";
-
-export type SshErrorCode =
-  | "SSH_HOST_UNREACHABLE"
-  | "SSH_CONNECTION_REFUSED"
-  | "SSH_TIMEOUT"
-  | "SSH_HOST_KEY_FAILED"
-  | "SSH_KEYFILE_MISSING"
-  | "SSH_PASSPHRASE_REQUIRED"
-  | "SSH_AUTH_FAILED"
-  | "SSH_REMOTE_COMMAND_FAILED"
-  | "SSH_SFTP_PERMISSION_DENIED"
-  | "SSH_SESSION_STALE"
-  | "SSH_UNKNOWN";
-
-export type SshRepairAction =
-  | "promptPassphrase"
-  | "retryWithBackoff"
-  | "switchAuthMethodToSshConfig"
-  | "suggestKnownHostsBootstrap"
-  | "suggestAuthorizedKeysCheck"
-  | "suggestPortHostValidation"
-  | "reconnectSession";
-
-export interface SshEvidence {
-  kind: string;
-  value: string;
+export interface BackupErrorEvent {
+  handleId: string;
+  error: string;
 }
 
-export interface SshDiagnosticReport {
-  stage: SshStage;
-  intent: SshIntent;
-  status: SshDiagnosticStatus;
-  errorCode?: SshErrorCode | null;
-  summary: string;
-  evidence: SshEvidence[];
-  repairPlan: SshRepairAction[];
-  confidence: number;
-}
 
-export interface SshCommandError {
-  message: string;
-  diagnostic: SshDiagnosticReport;
-}
+
+
+
+
+
+
+
+
 
 export interface DockerInstance {
   id: string;
@@ -784,372 +728,96 @@ export interface DiscoveredInstance {
   alreadyRegistered: boolean;
 }
 
-export interface SshExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
 
-export interface SftpEntry {
-  name: string;
-  isDir: boolean;
-  size: number;
-}
 
-export type RescueBotAction = "set" | "activate" | "status" | "deactivate" | "unset";
-export type RescueBotRuntimeState =
-  | "unconfigured"
-  | "configured_inactive"
-  | "active"
-  | "checking"
-  | "error";
 
-export interface RescueBotCommandResult {
-  command: string[];
-  output: {
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-  };
-}
 
-export interface RescueBotManageResult {
-  action: RescueBotAction;
-  profile: string;
-  mainPort: number;
-  rescuePort: number;
-  minRecommendedPort: number;
-  configured: boolean;
-  active: boolean;
-  runtimeState: RescueBotRuntimeState;
-  wasAlreadyConfigured: boolean;
-  commands: RescueBotCommandResult[];
-}
 
-export interface RescuePrimaryCheckItem {
-  id: string;
-  title: string;
-  ok: boolean;
-  detail: string;
-}
 
-export interface RescuePrimaryIssue {
-  id: string;
-  code: string;
-  severity: "error" | "warn" | "info";
-  message: string;
-  autoFixable: boolean;
-  fixHint?: string;
-  source: "rescue" | "primary";
-}
 
-export interface RescueDocHypothesis {
-  title: string;
-  reason: string;
-  score: number;
-}
 
-export interface RescueDocCitation {
-  url: string;
-  section: string;
-}
 
-export interface RescuePrimarySummary {
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  headline: string;
-  recommendedAction: string;
-  fixableIssueCount: number;
-  selectedFixIssueIds: string[];
-  rootCauseHypotheses?: RescueDocHypothesis[];
-  fixSteps?: string[];
-  confidence?: number;
-  citations?: RescueDocCitation[];
-  versionAwareness?: string;
-}
 
-export interface RescuePrimarySectionItem {
-  id: string;
-  label: string;
-  status: "ok" | "warn" | "error" | "info" | "inactive";
-  detail: string;
-  autoFixable: boolean;
-  issueId?: string | null;
-}
 
-export interface RescuePrimarySectionResult {
-  key: "gateway" | "models" | "tools" | "agents" | "channels";
-  title: string;
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  summary: string;
-  docsUrl: string;
-  items: RescuePrimarySectionItem[];
-  rootCauseHypotheses?: RescueDocHypothesis[];
-  fixSteps?: string[];
-  confidence?: number;
-  citations?: RescueDocCitation[];
-  versionAwareness?: string;
-}
 
-export interface RescuePrimaryDiagnosisResult {
-  status: "healthy" | "degraded" | "broken" | "inactive";
-  checkedAt: string;
-  targetProfile: string;
-  rescueProfile: string;
-  rescueConfigured: boolean;
-  rescuePort?: number;
-  summary: RescuePrimarySummary;
-  sections: RescuePrimarySectionResult[];
-  checks: RescuePrimaryCheckItem[];
-  issues: RescuePrimaryIssue[];
-}
 
-export interface RescuePrimaryRepairStep {
-  id: string;
-  title: string;
-  ok: boolean;
-  detail: string;
-  command?: string[];
-}
 
-export interface RescuePrimaryPendingAction {
-  kind: "tempProviderSetup";
-  reason: string;
-  tempProviderProfileId?: string | null;
-}
 
-export interface RescuePrimaryRepairResult {
-  status: "completed" | "needsTempProviderSetup";
-  attemptedAt: string;
-  targetProfile: string;
-  rescueProfile: string;
-  selectedIssueIds: string[];
-  appliedIssueIds: string[];
-  skippedIssueIds: string[];
-  failedIssueIds: string[];
-  pendingAction?: RescuePrimaryPendingAction | null;
-  steps: RescuePrimaryRepairStep[];
-  before: RescuePrimaryDiagnosisResult;
-  after: RescuePrimaryDiagnosisResult;
-}
 
 // Cron
 
-export type WatchdogJobStatus = "ok" | "pending" | "triggered" | "retrying" | "escalated";
 
-export interface CronSchedule {
-  kind: "cron" | "every" | "at";
-  expr?: string;
-  tz?: string;
-  everyMs?: number;
-  at?: string;
-}
 
-export interface CronJobState {
-  lastRunAtMs?: number;
-  lastStatus?: string;
-  lastError?: string;
-}
 
-export interface CronJobDelivery {
-  mode?: string;
-  channel?: string;
-  to?: string;
-}
 
-export interface CronJob {
-  jobId: string;
-  name: string;
-  schedule: CronSchedule;
-  sessionTarget: "main" | "isolated";
-  agentId?: string;
-  enabled: boolean;
-  description?: string;
-  state?: CronJobState;
-  delivery?: CronJobDelivery;
-}
 
-export interface CronRun {
-  jobId: string;
-  startedAt: string;
-  endedAt?: string;
-  outcome: string;
-  error?: string;
-  ts?: number;
-  runAtMs?: number;
-  durationMs?: number;
-  summary?: string;
-}
 
-export interface WatchdogJobState {
-  status: WatchdogJobStatus;
-  lastScheduledAt?: string;
-  lastRunAt?: string | null;
-  retries: number;
-  lastError?: string;
-  escalatedAt?: string;
-}
 
-export interface WatchdogStatus {
-  pid: number;
-  startedAt: string;
-  lastCheckAt: string;
-  gatewayHealthy: boolean;
-  jobs: Record<string, WatchdogJobState>;
-}
 
 // Command Queue
 
-export interface PendingCommand {
-  id: string;
-  label: string;
-  command: string[];
-  createdAt: string;
-}
 
-export interface PreviewQueueResult {
-  commands: PendingCommand[];
-  configBefore: string;
-  configAfter: string;
-  warnings: string[];
-  errors: string[];
-}
 
-// Doctor Agent
 
-export interface DoctorInvoke {
-  id: string;
-  command: string;
-  args: Record<string, unknown>;
-  type: "read" | "write";
-}
 
-export interface DiagnosisCitation {
-  url: string;
-  section?: string;
-}
 
-export interface DiagnosisReportItem {
-  problem: string;
-  severity: "error" | "warn" | "info";
-  fix_options: string[];
-  root_cause_hypothesis?: string;
-  fix_steps?: string[];
-  confidence?: number;
-  citations?: DiagnosisCitation[];
-  version_awareness?: string;
-  action?: { tool: string; args: string; instance?: string; reason?: string };
-}
 
-export interface DoctorChatMessage {
-  id: string;
-  role: "assistant" | "user" | "tool-call" | "tool-result";
-  content: string;
-  invoke?: DoctorInvoke;
-  invokeResult?: unknown;
-  invokeId?: string;
-  status?: "pending" | "approved" | "rejected" | "auto";
-  diagnosisReport?: { items: DiagnosisReportItem[] };
-  /** Epoch milliseconds when the message was created. */
-  timestamp?: number;
-}
 
-export interface ApplyQueueResult {
-  ok: boolean;
-  appliedCount: number;
-  totalCount: number;
-  error: string | null;
-  rolledBack: boolean;
-}
 
-export type InstallMethod = "local" | "wsl2" | "docker" | "remote_ssh";
+export type {
+  RescueBotAction,
+  RescueBotRuntimeState,
+  RescueBotCommandResult,
+  RescueBotManageResult,
+  RescuePrimaryCheckItem,
+  RescuePrimaryIssue,
+  RescueDocHypothesis,
+  RescueDocCitation,
+  RescuePrimarySummary,
+  RescuePrimarySectionItem,
+  RescuePrimarySectionResult,
+  RescuePrimaryDiagnosisResult,
+  RescuePrimaryRepairStep,
+  RescuePrimaryPendingAction,
+  RescuePrimaryRepairResult,
+} from "./rescue-types";
 
-export type InstallState =
-  | "idle"
-  | "selected_method"
-  | "precheck_running"
-  | "precheck_failed"
-  | "precheck_passed"
-  | "install_running"
-  | "install_failed"
-  | "install_passed"
-  | "init_running"
-  | "init_failed"
-  | "init_passed"
-  | "verify_running"
-  | "verify_failed"
-  | "ready";
+export type {
+  InstallMethod,
+  InstallState,
+  InstallStep,
+  InstallLogEntry,
+  InstallSession,
+  InstallStepResult,
+  InstallMethodCapability,
+  InstallOrchestratorDecision,
+  InstallUiAction,
+  InstallTargetDecision,
+  EnsureAccessResult,
+  RecordInstallExperienceResult,
+} from "./install-types";
 
-export type InstallStep = "precheck" | "install" | "init" | "verify";
+export type {
+  CronConfigSnapshot,
+  CronRuntimeSnapshot,
+  WatchdogJobStatus,
+  CronSchedule,
+  CronJobState,
+  CronJobDelivery,
+  CronJob,
+  CronRun,
+  WatchdogJobState,
+  WatchdogStatus,
+} from "./cron-types";
 
-export interface InstallLogEntry {
-  at: string;
-  level: string;
-  message: string;
-}
-
-export interface InstallSession {
-  id: string;
-  method: InstallMethod;
-  state: InstallState;
-  current_step: InstallStep | null;
-  logs: InstallLogEntry[];
-  artifacts: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface InstallStepResult {
-  ok: boolean;
-  summary: string;
-  details: string;
-  commands: string[];
-  artifacts: Record<string, unknown>;
-  next_step: string | null;
-  error_code: string | null;
-  ssh_diagnostic?: SshDiagnosticReport | null;
-}
-
-export interface InstallMethodCapability {
-  method: InstallMethod;
-  available: boolean;
-  hint: string | null;
-}
-
-export interface InstallOrchestratorDecision {
-  step: string | null;
-  reason: string;
-  source: string;
-  errorCode?: string | null;
-  actionHint?: string | null;
-}
-
-export interface InstallUiAction {
-  id: string;
-  kind: string;
-  label: string;
-  payload?: Record<string, unknown>;
-}
-
-export interface InstallTargetDecision {
-  method: InstallMethod | null;
-  reason: string;
-  source: string;
-  requiresSshHost: boolean;
-  requiredFields?: string[];
-  uiActions?: InstallUiAction[];
-  errorCode?: string | null;
-  actionHint?: string | null;
-}
-
-export interface EnsureAccessResult {
-  instanceId: string;
-  transport: string;
-  workingChain: string[];
-  usedLegacyFallback: boolean;
-  profileReused: boolean;
-}
-
-export interface RecordInstallExperienceResult {
-  saved: boolean;
-  totalCount: number;
-}
+export type {
+  ApplyQueueResult,
+  DiagnosisCitation,
+  DiagnosisReportItem,
+  DoctorChatMessage,
+  DoctorInvoke,
+  DoctorIssue,
+  DoctorReport,
+  PendingCommand,
+  PreviewQueueResult,
+} from "./doctor-types";

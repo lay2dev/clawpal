@@ -3,7 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 
-import doctorImage from "@/assets/doctor.png";
+import doctorImage from "@/assets/doctor.webp";
 import i18n from "@/i18n";
 import { InstanceContext } from "@/lib/instance-context";
 import { Doctor } from "../Doctor";

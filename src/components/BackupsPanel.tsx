@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
+import { formatBackupProgressLabel, runBackupStream } from "@/lib/backup-stream";
 import { formatBytes, formatTime } from "@/lib/utils";
 import type { BackupInfo } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,7 +53,12 @@ export function BackupsPanel() {
           onClick={async () => {
             setBackupMessage("");
             try {
-              const info = await ua.backupBeforeUpgrade();
+              const info = await runBackupStream({
+                start: () => ua.backupBeforeUpgradeStream(),
+                onProgress: (event) => {
+                  setBackupMessage(formatBackupProgressLabel(event, t("home.creating")));
+                },
+              });
               setBackupMessage(t("home.backupCreated", { name: info.name }));
               refreshBackups();
             } catch (e) {

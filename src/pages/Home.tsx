@@ -51,6 +51,7 @@ import {
 } from "@/lib/data-load-log";
 import { readPersistedReadCache } from "@/lib/persistent-read-cache";
 import { RenderProbe } from "@/lib/render-probe";
+import { useHomeGuidance } from "../hooks/useHomeGuidance";
 
 type OpenclawUpdateLatch = {
   checkedAt: number;
@@ -180,71 +181,10 @@ export function Home({
   const retriesRef = useRef(0);
   const remoteErrorShownRef = useRef(false);
   const remoteUnhealthyStreakRef = useRef(0);
-  const duplicateInstallGuidanceSigRef = useRef<string>("");
-  const onboardingGuidanceSigRef = useRef<string>("");
 
   const statusInFlightRef = useRef(false);
 
-  useEffect(() => {
-    const entries = statusExtra?.duplicateInstalls || [];
-    if (entries.length === 0) return;
-    const signature = `${ua.instanceId}:${entries.join("|")}`;
-    if (duplicateInstallGuidanceSigRef.current === signature) return;
-    duplicateInstallGuidanceSigRef.current = signature;
-    const transport = ua.isRemote ? "remote_ssh" : (ua.isDocker ? "docker_local" : "local");
-    const rawError = `Duplicate openclaw installs detected: ${entries.join(" ; ")}`;
-    window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
-      detail: {
-        message: t("home.duplicateInstalls"),
-        summary: t("home.duplicateInstalls"),
-        actions: [
-          t("home.fixInDoctor"),
-          "Run `which -a openclaw` and keep only one valid binary in PATH",
-        ],
-        source: "status-extra",
-        operation: "status.extra.duplicate_installs",
-        instanceId: ua.instanceId,
-        transport,
-        rawError,
-        createdAt: Date.now(),
-      },
-    }));
-  }, [statusExtra?.duplicateInstalls, t, ua.instanceId, ua.isDocker, ua.isRemote]);
-
-  // Post-install onboarding guidance: when status settles and instance needs setup,
-  // emit guidance so the Help surface can walk the user through remaining configuration.
-  useEffect(() => {
-    if (!statusSettled || !status) return;
-    const remote = ua.isRemote;
-    // Model profiles/default model are global host-level concerns, not remote-instance-local setup.
-    const needsSetup = !status.healthy || (!remote && (modelProfiles.length === 0 || !status.globalDefaultModel));
-    if (!needsSetup) return;
-    const issues: string[] = [];
-    if (!status.healthy) issues.push("unhealthy");
-    if (!remote && modelProfiles.length === 0) issues.push("no_profiles");
-    if (!remote && !status.globalDefaultModel) issues.push("no_default_model");
-    const signature = `${ua.instanceId}:onboarding:${issues.join(",")}`;
-    if (onboardingGuidanceSigRef.current === signature) return;
-    onboardingGuidanceSigRef.current = signature;
-    const transport = ua.isRemote ? "remote_ssh" : (ua.isDocker ? "docker_local" : "local");
-    const actions: string[] = [];
-    if (!status.healthy) actions.push(t("onboarding.actionCheckDoctor"));
-    if (!remote && modelProfiles.length === 0) actions.push(t("onboarding.actionAddProfile"));
-    if (!remote && !status.globalDefaultModel && modelProfiles.length > 0) actions.push(t("onboarding.actionSetDefault"));
-    window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
-      detail: {
-        message: t("onboarding.summary"),
-        summary: t("onboarding.summary"),
-        actions,
-        source: "onboarding",
-        operation: "post_install.onboarding",
-        instanceId: ua.instanceId,
-        transport,
-        rawError: `Instance needs setup: ${issues.join(", ")}`,
-        createdAt: Date.now(),
-      },
-    }));
-  }, [statusSettled, status, modelProfiles, t, ua.instanceId, ua.isDocker, ua.isRemote]);
+  useHomeGuidance({ statusExtra, statusSettled, status, modelProfiles, instanceId: ua.instanceId, isRemote: ua.isRemote, isDocker: ua.isDocker });
 
   // Render probe: record first-render of each data section
   useEffect(() => { if (status) probe.hit("status"); }, [status, probe]);
@@ -382,46 +322,20 @@ export function Home({
   }, [applyConfigSnapshot, liveReadsReady, persistedRuntimeSnapshot, ua]);
 
   useEffect(() => {
-    if (persistedConfigSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceConfigSnapshot"),
-        resource: "getInstanceConfigSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedRuntimeSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceRuntimeSnapshot"),
-        resource: "getInstanceRuntimeSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedStatusExtra) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getStatusExtra"),
-        resource: "getStatusExtra",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
+    // Emit persisted-cache metrics for each pre-loaded resource
+    for (const [resource, data] of [
+      ["getInstanceConfigSnapshot", persistedConfigSnapshot],
+      ["getInstanceRuntimeSnapshot", persistedRuntimeSnapshot],
+      ["getStatusExtra", persistedStatusExtra],
+    ] as const) {
+      if (data) {
+        emitDataLoadMetric({
+          requestId: createDataLoadRequestId(resource),
+          resource, page: "home",
+          instanceId: ua.instanceId, instanceToken: ua.instanceToken,
+          source: "persisted", phase: "success", elapsedMs: 0, cacheHit: true,
+        });
+      }
     }
     setUpdateInfo(null);
     setCheckingUpdate(false);
@@ -430,8 +344,6 @@ export function Home({
     remoteErrorShownRef.current = false;
     remoteUnhealthyStreakRef.current = 0;
     statusInFlightRef.current = false;
-    duplicateInstallGuidanceSigRef.current = "";
-    onboardingGuidanceSigRef.current = "";
   }, [persistedConfigSnapshot, persistedRuntimeSnapshot, persistedStatusExtra, ua.instanceId, ua.instanceToken]);
 
   // P0: Unified poll loop — replaces 3 separate intervals + delayed model fetch.

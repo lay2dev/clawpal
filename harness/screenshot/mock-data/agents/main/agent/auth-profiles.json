@@ -1,0 +1,14 @@
+[
+  {
+    "id": "anthropic",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "authRef": "ANTHROPIC_API_KEY"
+  },
+  {
+    "id": "openai",
+    "provider": "openai",
+    "model": "gpt-4o",
+    "authRef": "OPENAI_API_KEY"
+  }
+]

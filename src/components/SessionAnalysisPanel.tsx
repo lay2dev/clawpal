@@ -1,8 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
 import { formatBytes } from "@/lib/utils";
-import type { AgentSessionAnalysis, SessionFile } from "@/lib/types";
+import type {
+  AgentSessionAnalysis,
+  SessionAnalysis,
+  SessionAnalysisChunkEvent,
+  SessionFile,
+  SessionPreviewDoneEvent,
+  SessionPreviewMessage,
+  SessionPreviewPageEvent,
+  SessionStreamDoneEvent,
+  SessionStreamErrorEvent,
+} from "@/lib/types";
 import {
   Card,
   CardHeader,
@@ -33,6 +44,8 @@ import {
 export function SessionAnalysisPanel() {
   const { t } = useTranslation();
   const ua = useApi();
+  const analysisHandleRef = useRef<string | null>(null);
+  const previewHandleRef = useRef<string | null>(null);
 
   const [sessionFiles, setSessionFiles] = useState<SessionFile[]>([]);
   const [dataMessage, setDataMessage] = useState("");
@@ -42,7 +55,7 @@ export function SessionAnalysisPanel() {
   const [selectedSessions, setSelectedSessions] = useState<Map<string, Set<string>>>(new Map());
   const [deletingCategory, setDeletingCategory] = useState<{ agent: string; category: string } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewMessages, setPreviewMessages] = useState<{ role: string; content: string }[]>([]);
+  const [previewMessages, setPreviewMessages] = useState<SessionPreviewMessage[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewTitle, setPreviewTitle] = useState("");
 
@@ -65,6 +78,37 @@ export function SessionAnalysisPanel() {
     () => sessionFiles.reduce((sum, f) => sum + f.sizeBytes, 0),
     [sessionFiles],
   );
+
+  const cancelStreamHandle = (handleId: string | null) => {
+    if (!handleId) return;
+    void ua.cancelStream(handleId).catch(() => {});
+  };
+
+  const sortSessions = (sessions: SessionAnalysis[]) => {
+    const categoryOrder = (category: SessionAnalysis["category"]) =>
+      category === "empty" ? 0 : category === "low_value" ? 1 : 2;
+    return [...sessions].sort(
+      (a, b) => categoryOrder(a.category) - categoryOrder(b.category) || b.ageDays - a.ageDays,
+    );
+  };
+
+  const mergeSessionAnalysisChunk = (chunk: SessionAnalysisChunkEvent) => {
+    setSessionAnalysis((prev) => {
+      const nextMap = new Map((prev ?? []).map((agent) => [agent.agent, { ...agent, sessions: [...agent.sessions] }]));
+      const existing = nextMap.get(chunk.agent);
+      const sessions = sortSessions([...(existing?.sessions ?? []), ...chunk.sessions]);
+      nextMap.set(chunk.agent, {
+        agent: chunk.agent,
+        totalFiles: chunk.totalFiles,
+        totalSizeBytes: chunk.totalSizeBytes,
+        emptyCount: chunk.emptyCount,
+        lowValueCount: chunk.lowValueCount,
+        valuableCount: chunk.valuableCount,
+        sessions,
+      });
+      return Array.from(nextMap.values()).sort((a, b) => b.totalSizeBytes - a.totalSizeBytes);
+    });
+  };
 
   function refreshData() {
     ua.listSessionFiles()
@@ -95,6 +139,10 @@ export function SessionAnalysisPanel() {
 
   useEffect(() => {
     // Reset and reload when switching instances
+    cancelStreamHandle(analysisHandleRef.current);
+    cancelStreamHandle(previewHandleRef.current);
+    analysisHandleRef.current = null;
+    previewHandleRef.current = null;
     setSessionFiles([]);
     setSessionAnalysis(null);
     setDataMessage("");
@@ -105,6 +153,95 @@ export function SessionAnalysisPanel() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ua.instanceId, ua.instanceToken, ua.isRemote, ua.isConnected]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenChunk: (() => void) | null = null;
+    let unlistenDone: (() => void) | null = null;
+    let unlistenPage: (() => void) | null = null;
+    let unlistenPreviewDone: (() => void) | null = null;
+    let unlistenError: (() => void) | null = null;
+
+    void listen<SessionAnalysisChunkEvent>("sessions:chunk", (event) => {
+      if (disposed || event.payload.handleId !== analysisHandleRef.current) return;
+      mergeSessionAnalysisChunk(event.payload);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenChunk = fn;
+    });
+
+    void listen<SessionStreamDoneEvent>("sessions:done", (event) => {
+      if (disposed) return;
+      if (event.payload.handleId === analysisHandleRef.current) {
+        analysisHandleRef.current = null;
+        setAnalyzing(false);
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenDone = fn;
+    });
+
+    void listen<SessionPreviewPageEvent>("session-preview:page", (event) => {
+      if (disposed || event.payload.handleId !== previewHandleRef.current) return;
+      setPreviewMessages((prev) => [...prev, ...event.payload.messages]);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenPage = fn;
+    });
+
+    void listen<SessionPreviewDoneEvent>("session-preview:done", (event) => {
+      if (disposed || event.payload.handleId !== previewHandleRef.current) return;
+      previewHandleRef.current = null;
+      setPreviewLoading(false);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenPreviewDone = fn;
+    });
+
+    void listen<SessionStreamErrorEvent>("sessions:error", (event) => {
+      if (disposed) return;
+      if (event.payload.handleId === analysisHandleRef.current) {
+        analysisHandleRef.current = null;
+        setAnalyzing(false);
+        setDataMessage(event.payload.error || t('doctor.failedAnalyze'));
+      }
+      if (event.payload.handleId === previewHandleRef.current) {
+        previewHandleRef.current = null;
+        setPreviewLoading(false);
+        setPreviewMessages([{ role: "error", content: event.payload.error || t('doctor.failedLoadSession') }]);
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenError = fn;
+    });
+
+    return () => {
+      disposed = true;
+      cancelStreamHandle(analysisHandleRef.current);
+      cancelStreamHandle(previewHandleRef.current);
+      if (unlistenChunk) unlistenChunk();
+      if (unlistenDone) unlistenDone();
+      if (unlistenPage) unlistenPage();
+      if (unlistenPreviewDone) unlistenPreviewDone();
+      if (unlistenError) unlistenError();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>
@@ -126,15 +263,21 @@ export function SessionAnalysisPanel() {
                   size="sm"
                   disabled={analyzing}
                   onClick={() => {
+                    cancelStreamHandle(analysisHandleRef.current);
+                    analysisHandleRef.current = null;
                     setAnalyzing(true);
-                    ua.analyzeSessions()
-                      .then((data) => {
-                        setSessionAnalysis(data);
-                        setExpandedAgents(new Set());
-                        setSelectedSessions(new Map());
+                    setDataMessage("");
+                    setSessionAnalysis([]);
+                    setExpandedAgents(new Set());
+                    setSelectedSessions(new Map());
+                    ua.analyzeSessionsStream()
+                      .then((handleId) => {
+                        analysisHandleRef.current = handleId;
                       })
-                      .catch(() => setDataMessage(t('doctor.failedAnalyze')))
-                      .finally(() => setAnalyzing(false));
+                      .catch(() => {
+                        setAnalyzing(false);
+                        setDataMessage(t('doctor.failedAnalyze'));
+                      });
                   }}
                 >
                   {analyzing ? t('doctor.analyzing') : t('doctor.analyze')}
@@ -443,14 +586,20 @@ export function SessionAnalysisPanel() {
                                   className="font-mono w-20 truncate text-left underline decoration-dotted hover:text-foreground text-muted-foreground"
                                   title={`Preview ${session.sessionId}`}
                                   onClick={() => {
+                                    cancelStreamHandle(previewHandleRef.current);
+                                    previewHandleRef.current = null;
                                     setPreviewTitle(`${agentData.agent} / ${session.sessionId.slice(0, 12)}`);
                                     setPreviewMessages([]);
                                     setPreviewLoading(true);
                                     setPreviewOpen(true);
-                                    ua.previewSession(agentData.agent, session.sessionId)
-                                      .then(setPreviewMessages)
-                                      .catch(() => setPreviewMessages([{ role: "error", content: t('doctor.failedLoadSession') }]))
-                                      .finally(() => setPreviewLoading(false));
+                                    ua.previewSessionStream(agentData.agent, session.sessionId)
+                                      .then((handleId) => {
+                                        previewHandleRef.current = handleId;
+                                      })
+                                      .catch(() => {
+                                        setPreviewLoading(false);
+                                        setPreviewMessages([{ role: "error", content: t('doctor.failedLoadSession') }]);
+                                      });
                                   }}
                                 >
                                   {session.sessionId.slice(0, 8)}
@@ -479,7 +628,14 @@ export function SessionAnalysisPanel() {
       </div>
 
       {/* Session Preview Dialog */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+      <Dialog open={previewOpen} onOpenChange={(open) => {
+        if (!open) {
+          cancelStreamHandle(previewHandleRef.current);
+          previewHandleRef.current = null;
+          setPreviewLoading(false);
+        }
+        setPreviewOpen(open);
+      }}>
         <DialogContent className="max-w-2xl max-h-[70vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="font-mono text-sm">{previewTitle}</DialogTitle>

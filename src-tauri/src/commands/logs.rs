@@ -70,18 +70,20 @@ pub async fn remote_read_app_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let n = clamp_lines(lines);
-    let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "app");
-    log_debug(&format!(
-        "remote_read_app_log start host_id={host_id} lines={n} cmd={cmd}"
-    ));
-    let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+    timed_async!("remote_read_app_log", {
+        let n = clamp_lines(lines);
+        let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "app");
         log_debug(&format!(
-            "remote_read_app_log failed host_id={host_id} error={error}"
+            "remote_read_app_log start host_id={host_id} lines={n} cmd={cmd}"
         ));
-        error
-    })?;
-    Ok(result.stdout)
+        let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+            log_debug(&format!(
+                "remote_read_app_log failed host_id={host_id} error={error}"
+            ));
+            error
+        })?;
+        Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -90,18 +92,20 @@ pub async fn remote_read_error_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let n = clamp_lines(lines);
-    let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "error");
-    log_debug(&format!(
-        "remote_read_error_log start host_id={host_id} lines={n} cmd={cmd}"
-    ));
-    let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+    timed_async!("remote_read_error_log", {
+        let n = clamp_lines(lines);
+        let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "error");
         log_debug(&format!(
-            "remote_read_error_log failed host_id={host_id} error={error}"
+            "remote_read_error_log start host_id={host_id} lines={n} cmd={cmd}"
         ));
-        error
-    })?;
-    Ok(result.stdout)
+        let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+            log_debug(&format!(
+                "remote_read_error_log failed host_id={host_id} error={error}"
+            ));
+            error
+        })?;
+        Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -110,18 +114,20 @@ pub async fn remote_read_helper_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let n = clamp_lines(lines);
-    let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "helper");
-    log_debug(&format!(
-        "remote_read_helper_log start host_id={host_id} lines={n} cmd={cmd}"
-    ));
-    let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+    timed_async!("remote_read_helper_log", {
+        let n = clamp_lines(lines);
+        let cmd = clawpal_core::doctor::remote_clawpal_log_tail_script(n, "helper");
         log_debug(&format!(
-            "remote_read_helper_log failed host_id={host_id} error={error}"
+            "remote_read_helper_log start host_id={host_id} lines={n} cmd={cmd}"
         ));
-        error
-    })?;
-    Ok(result.stdout)
+        let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+            log_debug(&format!(
+                "remote_read_helper_log failed host_id={host_id} error={error}"
+            ));
+            error
+        })?;
+        Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -130,18 +136,20 @@ pub async fn remote_read_gateway_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let n = clamp_lines(lines);
-    let cmd = remote_gateway_log_command(n);
-    log_debug(&format!(
-        "remote_read_gateway_log start host_id={host_id} lines={n} cmd={cmd}"
-    ));
-    let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+    timed_async!("remote_read_gateway_log", {
+        let n = clamp_lines(lines);
+        let cmd = remote_gateway_log_command(n);
         log_debug(&format!(
-            "remote_read_gateway_log failed host_id={host_id} error={error}"
+            "remote_read_gateway_log start host_id={host_id} lines={n} cmd={cmd}"
         ));
-        error
-    })?;
-    Ok(result.stdout)
+        let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+            log_debug(&format!(
+                "remote_read_gateway_log failed host_id={host_id} error={error}"
+            ));
+            error
+        })?;
+        Ok(result.stdout)
+    })
 }
 
 #[tauri::command]
@@ -150,16 +158,18 @@ pub async fn remote_read_gateway_error_log(
     host_id: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let n = clamp_lines(lines);
-    let cmd = clawpal_core::doctor::remote_gateway_error_log_tail_script(n);
-    log_debug(&format!(
-        "remote_read_gateway_error_log start host_id={host_id} lines={n} cmd={cmd}"
-    ));
-    let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+    timed_async!("remote_read_gateway_error_log", {
+        let n = clamp_lines(lines);
+        let cmd = clawpal_core::doctor::remote_gateway_error_log_tail_script(n);
         log_debug(&format!(
-            "remote_read_gateway_error_log failed host_id={host_id} error={error}"
+            "remote_read_gateway_error_log start host_id={host_id} lines={n} cmd={cmd}"
         ));
-        error
-    })?;
-    Ok(result.stdout)
+        let result = pool.exec(&host_id, &cmd).await.map_err(|error| {
+            log_debug(&format!(
+                "remote_read_gateway_error_log failed host_id={host_id} error={error}"
+            ));
+            error
+        })?;
+        Ok(result.stdout)
+    })
 }

@@ -1,3 +1,27 @@
+/// Macro for wrapping synchronous command bodies with timing.
+/// Uses a closure to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_sync {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = (|| $body)();
+        let __elapsed_us = __start.elapsed().as_micros() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_us);
+        __result
+    }};
+}
+
+/// Macro for wrapping async command bodies with timing.
+/// Uses an async block to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_async {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = async $body.await;
+        let __elapsed_us = __start.elapsed().as_micros() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_us);
+        __result
+    }};
+}
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -39,6 +63,13 @@ use clawpal_core::ssh::diagnostic::{
     from_any_error, SshDiagnosticReport, SshDiagnosticStatus, SshErrorCode, SshIntent, SshStage,
 };
 
+pub mod channels;
+pub mod cli;
+pub mod credentials;
+pub mod discord;
+pub mod perf;
+pub mod version;
+
 pub mod agent;
 pub mod app_logs;
 pub mod backup;
@@ -72,9 +103,17 @@ pub use app_logs::*;
 #[allow(unused_imports)]
 pub use backup::*;
 #[allow(unused_imports)]
+pub use channels::*;
+#[allow(unused_imports)]
+pub use cli::*;
+#[allow(unused_imports)]
 pub use config::*;
 #[allow(unused_imports)]
+pub use credentials::*;
+#[allow(unused_imports)]
 pub use cron::*;
+#[allow(unused_imports)]
+pub use discord::*;
 #[allow(unused_imports)]
 pub use discover_local::*;
 #[allow(unused_imports)]
@@ -94,6 +133,8 @@ pub use model::*;
 #[allow(unused_imports)]
 pub use overview::*;
 #[allow(unused_imports)]
+pub use perf::*;
+#[allow(unused_imports)]
 pub use precheck::*;
 #[allow(unused_imports)]
 pub use preferences::*;
@@ -111,6 +152,8 @@ pub use ssh::*;
 pub use upgrade::*;
 #[allow(unused_imports)]
 pub use util::*;
+#[allow(unused_imports)]
+pub use version::*;
 #[allow(unused_imports)]
 pub use watchdog::*;
 #[allow(unused_imports)]
@@ -420,7 +463,7 @@ pub struct SessionFile {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAnalysis {
     pub agent: String,
@@ -438,7 +481,7 @@ pub struct SessionAnalysis {
     pub kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionAnalysis {
     pub agent: String,
@@ -10973,7 +11016,7 @@ fn resolve_full_api_key(profile_id: String) -> Result<String, String> {
 
 // ---- Backup / Restore ----
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub name: String,
