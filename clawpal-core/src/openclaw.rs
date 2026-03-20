@@ -145,6 +145,32 @@ impl Default for OpenclawCli {
     }
 }
 
+/// Strip ANSI escape sequences (e.g. `\x1b[35m`) that plugin loggers may
+/// leak into stdout.  The `]` inside these codes confuses the bracket-matching
+/// JSON extractor.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // Consume `[` + parameter bytes + final byte
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c in chars.by_ref() {
+                        // Final byte of a CSI sequence is in 0x40..=0x7E
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 pub fn parse_json_output(output: &CliOutput) -> Result<Value> {
     if output.exit_code != 0 {
         let details = if !output.stderr.is_empty() {
@@ -158,40 +184,55 @@ pub fn parse_json_output(output: &CliOutput) -> Result<Value> {
         });
     }
 
-    let raw = &output.stdout;
-    let last_brace = raw.rfind('}');
-    let last_bracket = raw.rfind(']');
-    let end = match (last_brace, last_bracket) {
-        (Some(a), Some(b)) => Some(a.max(b)),
+    let raw = &strip_ansi(&output.stdout);
+
+    // Find the first top-level JSON value by scanning forward from the first
+    // `[` or `{` and doing balanced bracket matching to find its end.  This
+    // is more robust than the old "rfind" approach which was confused by
+    // stray brackets in plugin log lines (e.g. "[plugins]").
+    let first_brace = raw.find('{');
+    let first_bracket = raw.find('[');
+    let start = match (first_brace, first_bracket) {
+        (Some(a), Some(b)) => Some(a.min(b)),
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
         (None, None) => None,
     };
-    let start = match end {
-        Some(e) => {
-            let closer = raw.as_bytes()[e];
-            let opener = if closer == b']' { b'[' } else { b'{' };
-            let mut depth = 0i32;
-            let mut pos = None;
-            for i in (0..=e).rev() {
-                let ch = raw.as_bytes()[i];
-                if ch == closer {
-                    depth += 1;
-                } else if ch == opener {
-                    depth -= 1;
-                }
-                if depth == 0 {
-                    pos = Some(i);
-                    break;
-                }
-            }
-            pos
-        }
-        None => None,
-    };
-
     let start = start.ok_or_else(|| OpenclawError::NoJson(raw.to_string()))?;
-    let end = end.expect("end exists when start exists");
+    let opener = raw.as_bytes()[start];
+    let closer = if opener == b'[' { b']' } else { b'}' };
+    let mut depth = 0i32;
+    let mut end = None;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (i, &ch) in raw.as_bytes()[start..].iter().enumerate() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if ch == b'\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+        if ch == b'"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if ch == opener {
+            depth += 1;
+        } else if ch == closer {
+            depth -= 1;
+        }
+        if depth == 0 {
+            end = Some(start + i);
+            break;
+        }
+    }
+
+    let end = end.ok_or_else(|| OpenclawError::NoJson(raw.to_string()))?;
     let json_str = &raw[start..=end];
     Ok(serde_json::from_str(json_str)?)
 }
@@ -313,6 +354,28 @@ mod tests {
         };
         let err = parse_json_output(&output).unwrap_err();
         assert!(matches!(err, OpenclawError::NoJson(_)));
+    }
+
+    #[test]
+    fn parse_json_output_handles_ansi_codes_in_stdout() {
+        // Reproduce the real-world scenario where feishu plugin logs with
+        // ANSI color codes leak into stdout alongside JSON output.
+        let output = CliOutput {
+            stdout: "[{\"id\":\"main\"}]\n\x1b[35m[plugins]\x1b[39m \x1b[36mfeishu: ok\x1b[39m".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        let value = parse_json_output(&output).expect("parse with ANSI");
+        assert!(value.is_array());
+        assert_eq!(value[0]["id"], "main");
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_sequences() {
+        let input = "\x1b[35m[plugins]\x1b[39m hello";
+        let cleaned = strip_ansi(input);
+        assert_eq!(cleaned, "[plugins] hello");
+        assert!(!cleaned.contains('\x1b'));
     }
 
     #[test]
