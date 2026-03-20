@@ -113,11 +113,22 @@ jobs:
               f.write('body<<EOF\n')
               f.write(body + '\n')
               f.write('EOF\n')
+
+          with open('/tmp/coverage_comment.md', 'w') as f:
+              f.write(body)
           PYEOF
+
+      - name: Save comment as artifact (for fork PRs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-comment
+          path: /tmp/coverage_comment.md
+          retention-days: 1
 
       - name: Find existing comment
         uses: peter-evans/find-comment@v3
         id: fc
+        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
@@ -125,6 +136,7 @@ jobs:
 
       - name: Create or update comment
         uses: peter-evans/create-or-update-comment@v4
+        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}

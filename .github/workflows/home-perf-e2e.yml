@@ -36,16 +36,39 @@ jobs:
 
       - name: Start container
         run: |
-          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          docker run -d --name oc-perf -p 2299:22 -p 18789:18790 clawpal-perf-e2e
           for i in $(seq 1 15); do
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
             sleep 1
           done
+          # Wait for OpenClaw gateway HTTP API (port 18789 exposed to host)
+          for i in $(seq 1 60); do
+            GW=$(curl -sf http://localhost:18789/ 2>/dev/null || true)
+            if [ -n "$GW" ]; then echo "Gateway HTTP ready after ${i}s"; break; fi
+            sleep 1
+          done
+          # Wait for gateway API to be fully ready (not just dashboard)
+          for j in $(seq 1 30); do
+            API=$(curl -sf http://localhost:18789/api/status 2>/dev/null || true)
+            if [ -n "$API" ]; then echo "Gateway API ready after additional ${j}s"; break; fi
+            sleep 1
+          done
 
-      - name: Extract fixtures from container
-        run: node tests/e2e/perf/extract-fixtures.mjs
+      - name: Start IPC bridge server
+        run: |
+          node tests/e2e/perf/ipc-bridge-server.mjs &
+          # Wait for bridge to be ready
+          for i in $(seq 1 60); do
+            RESP=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null || true)
+            if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Verify an SSH-backed command returned real data (get_status_extra calls openclaw --version via SSH)
+          VERIFY=$(curl -sf http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_status_extra","args":{}}') || { echo "Bridge readiness check failed: SSH-backed command errored"; exit 1; }
+          echo "$VERIFY" | jq -e '.ok == true and .result.openclawVersion != null and .result.openclawVersion != "unknown"' || { echo "Bridge readiness check failed: SSH did not return a valid openclaw version"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
+          PERF_SETTLED_GATE_MS: "500"
 
       - name: Start Vite dev server
         run: |
@@ -58,8 +81,8 @@ jobs:
       - name: Run render probe E2E
         run: npx playwright test --config tests/e2e/perf/playwright.config.mjs
         env:
-          PERF_MOCK_LATENCY_MS: "50"
-          PERF_SETTLED_GATE_MS: "5000"
+          PERF_BRIDGE_URL: "http://localhost:3399"
+          PERF_SETTLED_GATE_MS: "500"
 
       - name: Ensure report exists
         if: always()

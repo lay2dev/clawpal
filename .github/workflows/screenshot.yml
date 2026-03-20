@@ -22,7 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 0
 
       - name: Build screenshot Docker image
@@ -51,16 +52,20 @@ jobs:
 
       # Push screenshots to a ref so we can embed them in the PR comment
       - name: Push screenshots to ref
+        if: github.event.pull_request.head.repo.full_name == github.repository
         id: push_ref
         run: |
           REF_NAME="screenshots/pr-${{ github.event.pull_request.number || 'manual' }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Save screenshots before clearing the worktree
+          cp -r screenshots /tmp/pr-screenshots
+
           # Create orphan branch with only screenshots
           git checkout --orphan "${REF_NAME}"
           git rm -rf . > /dev/null 2>&1 || true
-          cp -r screenshots/* .
+          cp -r /tmp/pr-screenshots/* .
           git add -A
           git commit -m "Screenshots for ${{ github.sha }}" --allow-empty
           git push origin "${REF_NAME}" --force
@@ -69,9 +74,10 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           # Return to PR branch
-          git checkout "${{ github.head_ref }}" 2>/dev/null || git checkout "${{ github.sha }}"
+          git checkout "${{ github.event.pull_request.head.ref }}" 2>/dev/null || git checkout "${{ github.sha }}"
 
       - name: Generate PR comment body
+        if: github.event.pull_request.head.repo.full_name == github.repository
         id: comment
         run: |
           REF="${{ steps.push_ref.outputs.ref }}"
@@ -143,7 +149,7 @@ jobs:
       - name: Find existing screenshot comment
         uses: peter-evans/find-comment@v3
         id: fc
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
@@ -151,7 +157,7 @@ jobs:
 
       - name: Create or update screenshot comment
         uses: peter-evans/create-or-update-comment@v4
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}

@@ -274,9 +274,21 @@ jobs:
 
       - name: Start SSH container
         run: |
-          docker run -d --name oc-remote-perf -p 2299:22 clawpal-perf-e2e
+          docker run -d --name oc-remote-perf -p 2298:22 clawpal-perf-e2e
           for i in $(seq 1 15); do
-            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2298 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+          # Wait for OpenClaw gateway HTTP API (port 18789 exposed to host)
+          for i in $(seq 1 60); do
+            GW=$(curl -sf http://localhost:18789/ 2>/dev/null || true)
+            if [ -n "$GW" ]; then echo "Gateway HTTP ready after ${i}s"; break; fi
+            sleep 1
+          done
+          # Wait for gateway API to be fully ready (not just dashboard)
+          for j in $(seq 1 30); do
+            API=$(curl -sf http://localhost:18789/api/status 2>/dev/null || true)
+            if [ -n "$API" ]; then echo "Gateway API ready after additional ${j}s"; break; fi
             sleep 1
           done
 
@@ -287,7 +299,7 @@ jobs:
           SSH_FAIL=0       # SSH transport failures (exit 255)
           CMD_FAIL_COUNT=0 # remote commands that ran but returned non-zero
           TOTAL_RUNS=0
-          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost"
+          SSH="sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2298 root@localhost"
 
           # Exercise remote OpenClaw commands and measure timing
           CMDS=(
@@ -377,16 +389,38 @@ jobs:
 
       - name: Start container (reuses image from remote perf step)
         run: |
-          docker run -d --name oc-perf -p 2299:22 clawpal-perf-e2e
+          docker run -d --name oc-perf -p 2299:22 -p 18789:18790 clawpal-perf-e2e
           for i in $(seq 1 15); do
             sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
             sleep 1
           done
+          # Wait for OpenClaw gateway HTTP API (port 18789 exposed to host)
+          for i in $(seq 1 60); do
+            GW=$(curl -sf http://localhost:18789/ 2>/dev/null || true)
+            if [ -n "$GW" ]; then echo "Gateway HTTP ready after ${i}s"; break; fi
+            sleep 1
+          done
+          # Wait for gateway API to be fully ready (not just dashboard)
+          for j in $(seq 1 30); do
+            API=$(curl -sf http://localhost:18789/api/status 2>/dev/null || true)
+            if [ -n "$API" ]; then echo "Gateway API ready after additional ${j}s"; break; fi
+            sleep 1
+          done
 
-      - name: Extract fixtures from container
-        run: node tests/e2e/perf/extract-fixtures.mjs
+      - name: Start IPC bridge server
+        run: |
+          node tests/e2e/perf/ipc-bridge-server.mjs &
+          for i in $(seq 1 60); do
+            RESP=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null || true)
+            if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Verify SSH-backed data is available
+          VERIFY=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' || true)
+          echo "$VERIFY" | jq -e '.ok == true and .result != null' || { echo "Bridge readiness failed"; exit 1; }
         env:
           CLAWPAL_PERF_SSH_PORT: "2299"
+          PERF_SETTLED_GATE_MS: "15000"
 
       - name: Start Vite dev server
         run: |
@@ -426,8 +460,8 @@ jobs:
             echo "pass=true" >> "$GITHUB_OUTPUT"
           fi
         env:
-          PERF_MOCK_LATENCY_MS: "50"
-          PERF_SETTLED_GATE_MS: "5000"
+          PERF_BRIDGE_URL: "http://localhost:3399"
+          PERF_SETTLED_GATE_MS: "15000"
 
       - name: Cleanup container
         if: always()
@@ -466,7 +500,7 @@ jobs:
             OVERALL="❌ Some gates failed"; GATE_FAIL=1
           fi
           for PROBE_VAL in "${{ steps.home_perf.outputs.status_ms }}" "${{ steps.home_perf.outputs.version_ms }}" "${{ steps.home_perf.outputs.agents_ms }}" "${{ steps.home_perf.outputs.models_ms }}"; do
-            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 200 ] 2>/dev/null; then
+            if [ "$PROBE_VAL" != "N/A" ] && [ "$PROBE_VAL" -gt 500 ] 2>/dev/null; then
               OVERALL="❌ Some gates failed"; GATE_FAIL=1
             fi
           done
@@ -475,7 +509,7 @@ jobs:
           fi
 
           BUNDLE_ICON=$( [ "${{ steps.bundle_size.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
-          MOCK_LATENCY="${{ env.PERF_MOCK_LATENCY_MS || '50' }}"
+          MOCK_LATENCY="N/A"
           COMMIT_ICON=$( [ "${{ steps.commit_size.outputs.fail }}" = "0" ] && echo "✅" || echo "❌" )
 
           cat > /tmp/metrics_comment.md << COMMENTEOF
@@ -507,7 +541,7 @@ jobs:
           | Tests | ${{ steps.perf_tests.outputs.passed }} passed, ${{ steps.perf_tests.outputs.failed }} failed | 0 failures | $( [ "${{ steps.perf_tests.outputs.failed }}" = "0" ] && echo "✅" || echo "❌" ) |
           | RSS (test process) | ${{ steps.perf_tests.outputs.rss_mb }} MB | ≤ 20 MB | $( echo "${{ steps.perf_tests.outputs.rss_mb }}" | awk '{print ($1 <= 80) ? "✅" : "❌"}' ) |
           | VMS (test process) | ${{ steps.perf_tests.outputs.vms_mb }} MB | — | ℹ️ |
-          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50_us }} µs | ≤ 1000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p50_us }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
+          | Command P50 latency | ${{ steps.perf_tests.outputs.cmd_p50_us }} µs | ≤ 1000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p50_us }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
           | Command P95 latency | ${{ steps.perf_tests.outputs.cmd_p95_us }} µs | ≤ 5000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_p95_us }}" | awk '{print ($1 != "N/A" && $1 <= 5000) ? "✅" : "❌"}' ) |
           | Command max latency | ${{ steps.perf_tests.outputs.cmd_max_us }} µs | ≤ 50000 µs | $( echo "${{ steps.perf_tests.outputs.cmd_max_us }}" | awk '{print ($1 != "N/A" && $1 <= 50000) ? "✅" : "❌"}' ) |
 
@@ -542,15 +576,15 @@ jobs:
 
           </details>
 
-                    ### Home Page Render Probes (mock IPC ${MOCK_LATENCY}ms, cache-first render)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
+                    ### Home Page Render Probes (real IPC)  $( [ "${{ steps.home_perf.outputs.pass }}" = "true" ] && echo "✅" || echo "❌" )
 
           | Probe | Value | Limit | Status |
           |-------|-------|-------|--------|
-          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
-          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
-          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 200 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 200) ? "✅" : "❌"}' ) |
-          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 300 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 300) ? "✅" : "❌"}' ) |
-          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | ≤ 1000 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 <= 1000) ? "✅" : "❌"}' ) |
+          | status | ${{ steps.home_perf.outputs.status_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.status_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | version | ${{ steps.home_perf.outputs.version_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.version_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | agents | ${{ steps.home_perf.outputs.agents_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.agents_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | models | ${{ steps.home_perf.outputs.models_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.models_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
+          | settled | ${{ steps.home_perf.outputs.settled_ms }} ms | ≤ 500 ms | $( echo "${{ steps.home_perf.outputs.settled_ms }}" | awk '{print ($1 != "N/A" && $1 <= 500) ? "✅" : "❌"}' ) |
 
           ### Code Readability
 
@@ -569,9 +603,17 @@ jobs:
 
           echo "gate_fail=${GATE_FAIL}" >> "$GITHUB_OUTPUT"
 
+      - name: Save comment as artifact (for fork PRs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-comment
+          path: /tmp/metrics_comment.md
+          retention-days: 1
+
       - name: Find existing metrics comment
         uses: peter-evans/find-comment@v3
         id: fc
+        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
@@ -579,6 +621,7 @@ jobs:
 
       - name: Create or update metrics comment
         uses: peter-evans/create-or-update-comment@v4
+        if: github.event.pull_request.head.repo.full_name == github.repository
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
