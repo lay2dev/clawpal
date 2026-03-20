@@ -98,7 +98,11 @@ export function Home({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { agents, setAgentsCache } = useInstance();
+  const {
+    agents,
+    setAgentsCache,
+    modelProfiles: sharedModelProfiles,
+  } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<InstanceConfigSnapshot>(ua.persistenceScope, "getInstanceConfigSnapshot", []) ?? null
@@ -130,15 +134,7 @@ export function Home({
   const [version, setVersion] = useState<string | null>(() => initialHomeState.version);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; latest?: string } | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const persistedModelProfiles = useMemo(
-    () => (ua.persistenceResolved && ua.persistenceScope
-      ? readPersistedReadCache<ModelProfile[]>(ua.persistenceScope, "listModelProfiles", []) ?? null
-      : null),
-    [ua.persistenceResolved, ua.persistenceScope],
-  );
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(
-    () => persistedModelProfiles?.filter((m) => m.enabled) ?? [],
-  );
+  const modelProfiles = sharedModelProfiles ?? [];
   const [savingModel, setSavingModel] = useState(false);
   const [fallbackSelectKey, setFallbackSelectKey] = useState(0);
 
@@ -340,7 +336,6 @@ export function Home({
     }
     setUpdateInfo(null);
     setCheckingUpdate(false);
-    setModelProfiles([]);
     retriesRef.current = 0;
     remoteErrorShownRef.current = false;
     remoteUnhealthyStreakRef.current = 0;
@@ -381,10 +376,6 @@ export function Home({
 
     // P0: Fire all initial fetches in parallel (no artificial delays)
     runTick();
-    ua.listModelProfiles()
-      .then((p) => setModelProfiles(p.filter((m) => m.enabled)))
-      .catch((e) => console.error("Failed to load model profiles:", e));
-
     const interval = setInterval(
       runTick,
       computePollIntervalMs({ isRemote: ua.isRemote, statusSettled }),

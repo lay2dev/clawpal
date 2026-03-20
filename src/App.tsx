@@ -35,6 +35,7 @@ import { useSshConnection } from "./hooks/useSshConnection";
 import { useInstancePersistence } from "./hooks/useInstancePersistence";
 import { useChannelCache } from "./hooks/useChannelCache";
 import { useAgentCache } from "./hooks/useAgentCache";
+import { useModelProfileCache } from "./hooks/useModelProfileCache";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useWorkspaceTabs } from "./hooks/useWorkspaceTabs";
 import { useNavItems } from "./hooks/useNavItems";
@@ -251,6 +252,16 @@ export function App() {
     isConnected,
   });
 
+  const modelProfiles = useModelProfileCache({
+    activeInstance,
+    route,
+    instanceToken,
+    persistenceScope,
+    persistenceResolved,
+    isRemote,
+    isConnected,
+  });
+
   // ── App lifecycle ──
   const lifecycle = useAppLifecycle({
     showToast,
@@ -340,8 +351,11 @@ export function App() {
         discordChannelsResolved: channels.discordChannelsResolved,
         agents: agents.agents,
         agentsLoading: agents.agentsLoading,
+        modelProfiles: modelProfiles.modelProfiles,
+        modelProfilesLoading: modelProfiles.modelProfilesLoading,
         setAgentsCache: agents.setAgentsCache,
         refreshAgentsCache: agents.refreshAgentsCache,
+        refreshModelProfilesCache: modelProfiles.refreshModelProfilesCache,
         refreshChannelNodesCache: channels.refreshChannelNodesCache,
         refreshDiscordChannelsCache: channels.refreshDiscordChannelsCache,
       }}>

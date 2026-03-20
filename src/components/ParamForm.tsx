@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import type { ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
-import { readPersistedReadCache } from "@/lib/persistent-read-cache";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -42,26 +41,25 @@ export function ParamForm({
   const ua = useApi();
   const {
     agents,
+    modelProfiles,
     discordChannelsResolved,
-    persistenceScope,
     refreshAgentsCache,
+    refreshModelProfilesCache,
   } = useInstance();
   const discordGuildChannels = ua.discordGuildChannels ?? [];
   const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(() => {
-    if (!persistenceScope) return [];
-    return readPersistedReadCache<ModelProfile[]>(persistenceScope, "listModelProfiles", []) ?? [];
-  });
   const needsAgents = recipe.params.some((p) => p.type === "agent");
 
   // Lazily load model profiles if any param needs them
   const needsProfiles = recipe.params.some((p) => p.type === "model_profile");
   useEffect(() => {
     if (!needsProfiles) return;
-    loadRecipeModelProfiles(ua)
-      .then(setModelProfiles)
+    if (modelProfiles !== null) return;
+    loadRecipeModelProfiles({
+      listRecipeModelProfiles: refreshModelProfilesCache,
+    })
       .catch((e) => console.error("Failed to load model profiles:", e));
-  }, [needsProfiles, ua]);
+  }, [modelProfiles, needsProfiles, refreshModelProfilesCache]);
 
   // Lazily load agents if any param needs them
   useEffect(() => {
@@ -231,7 +229,7 @@ export function ParamForm({
             <SelectItem value="__default__">
               <span className="text-muted-foreground">{t('paramForm.useGlobalDefault')}</span>
             </SelectItem>
-            {modelProfiles.map((p) => (
+            {(modelProfiles ?? []).map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.provider}/{p.model}
               </SelectItem>

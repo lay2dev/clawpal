@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { AgentOverview, ChannelNode, DiscordGuildChannel } from "./types";
+import type { AgentOverview, ChannelNode, DiscordGuildChannel, ModelProfile } from "./types";
 
 interface InstanceContextValue {
   instanceId: string;
@@ -19,8 +19,11 @@ interface InstanceContextValue {
   discordChannelsResolved: boolean;
   agents: AgentOverview[] | null;
   agentsLoading: boolean;
+  modelProfiles: ModelProfile[] | null;
+  modelProfilesLoading: boolean;
   setAgentsCache: Dispatch<SetStateAction<AgentOverview[] | null>>;
   refreshAgentsCache: () => Promise<AgentOverview[]>;
+  refreshModelProfilesCache: () => Promise<ModelProfile[]>;
   refreshChannelNodesCache: () => Promise<ChannelNode[]>;
   refreshDiscordChannelsCache: () => Promise<DiscordGuildChannel[]>;
 }
@@ -42,8 +45,11 @@ export const InstanceContext = createContext<InstanceContextValue>({
   discordChannelsResolved: false,
   agents: null,
   agentsLoading: false,
+  modelProfiles: null,
+  modelProfilesLoading: false,
   setAgentsCache: () => null,
   refreshAgentsCache: async () => [],
+  refreshModelProfilesCache: async () => [],
   refreshChannelNodesCache: async () => [],
   refreshDiscordChannelsCache: async () => [],
 });

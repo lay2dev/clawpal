@@ -80,6 +80,7 @@ export function Channels({
     discordChannelsResolved,
     agents: sharedAgents,
     setAgentsCache,
+    modelProfiles: sharedModelProfiles,
   } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
@@ -100,7 +101,7 @@ export function Channels({
   const agents = sharedAgents ?? initialChannelsState.agents;
   const [bindings, setBindings] = useState<Binding[]>(() => initialChannelsState.bindings);
   const [channelNodes, setChannelNodes] = useState<ChannelNode[]>(() => initialChannelsState.channels);
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const modelProfiles = sharedModelProfiles ?? [];
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [channelsLoaded, setChannelsLoaded] = useState(() => initialChannelsState.loaded);
@@ -180,7 +181,6 @@ export function Channels({
     if (liveReadsReady) {
       void loadChannelsConfig();
       void loadChannelsRuntime();
-      ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
     }
   }, [liveReadsReady, loadChannelsConfig, loadChannelsRuntime, persistedConfigSnapshot, persistedRuntimeSnapshot, ua]);
 
