@@ -1782,6 +1782,7 @@ fn append_config_patch_commands(
 fn channel_persona_patch(
     channel_type: &str,
     guild_id: Option<&str>,
+    account_id: Option<&str>,
     peer_id: &str,
     persona: &str,
 ) -> Result<Value, String> {
@@ -1793,14 +1794,25 @@ fn channel_persona_patch(
                 .ok_or_else(|| {
                     "set_channel_persona requires guildId for discord channels".to_string()
                 })?;
+            // The openclaw config schema nests guilds under
+            // channels.discord.accounts.<account>.guilds, not under a
+            // top-level channels.discord.guilds key.
+            let account_id = account_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default");
             Ok(json!({
                 "channels": {
                     "discord": {
-                        "guilds": {
-                            guild_id: {
-                                "channels": {
-                                    peer_id: {
-                                        "systemPrompt": persona,
+                        "accounts": {
+                            account_id: {
+                                "guilds": {
+                                    guild_id: {
+                                        "channels": {
+                                            peer_id: {
+                                                "systemPrompt": persona,
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1814,6 +1826,23 @@ fn channel_persona_patch(
             other
         )),
     }
+}
+
+/// Find which discord account owns a given guild_id by reading the config.
+fn resolve_discord_account_for_guild(guild_id: &str) -> Option<String> {
+    let paths = resolve_paths();
+    let cfg = crate::config_io::read_openclaw_config(&paths).ok()?;
+    let accounts = cfg
+        .pointer("/channels/discord/accounts")
+        .and_then(Value::as_object)?;
+    for (account_name, account_val) in accounts {
+        if let Some(guilds) = account_val.get("guilds").and_then(Value::as_object) {
+            if guilds.contains_key(guild_id) {
+                return Some(account_name.clone());
+            }
+        }
+    }
+    None
 }
 
 fn rewrite_binding_entries(
@@ -2369,8 +2398,25 @@ async fn materialize_recipe_action_commands(
             let persona = action_content_string(args.get("persona"))
                 .ok_or_else(|| "set_channel_persona requires persona".to_string())?;
             let guild_id = action_string(args.get("guildId"));
-            let patch =
-                channel_persona_patch(&channel_type, guild_id.as_deref(), &peer_id, &persona)?;
+            let account_id = action_string(args.get("accountId")).or_else(|| {
+                // Only resolve from local config when executing locally —
+                // remote hosts have different configs, so the lookup would
+                // return the wrong account.
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
+            });
+            let patch = channel_persona_patch(
+                &channel_type,
+                guild_id.as_deref(),
+                account_id.as_deref(),
+                &peer_id,
+                &persona,
+            )?;
             let mut commands = Vec::new();
             append_config_patch_commands(&patch, "", &mut commands)?;
             Ok(commands)
@@ -2381,7 +2427,22 @@ async fn materialize_recipe_action_commands(
             let peer_id = action_string(args.get("peerId"))
                 .ok_or_else(|| "clear_channel_persona requires peerId".to_string())?;
             let guild_id = action_string(args.get("guildId"));
-            let patch = channel_persona_patch(&channel_type, guild_id.as_deref(), &peer_id, "")?;
+            let account_id = action_string(args.get("accountId")).or_else(|| {
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
+            });
+            let patch = channel_persona_patch(
+                &channel_type,
+                guild_id.as_deref(),
+                account_id.as_deref(),
+                &peer_id,
+                "",
+            )?;
             let mut commands = Vec::new();
             append_config_patch_commands(&patch, "", &mut commands)?;
             Ok(commands)
@@ -2891,7 +2952,7 @@ mod recipe_action_materializer_tests {
                     && command[1] == "config"
                     && command[2] == "set"
                     && command[3]
-                        == "channels.discord.guilds.guild-1.channels.channel-1.systemPrompt"
+                        .ends_with(".guilds.guild-1.channels.channel-1.systemPrompt")
             })
             .map(|(_, command)| command[4].clone())
             .expect("systemPrompt config set command");
