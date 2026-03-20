@@ -381,7 +381,7 @@ async function runDedicatedAgent(driver) {
 
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
-  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make"], 60_000);
+  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
   await waitForAnyText(
@@ -457,7 +457,7 @@ async function runChannelPersonaPack(driver) {
 
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
-  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make"], 60_000);
+  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
   await waitForAnyText(
@@ -516,7 +516,7 @@ async function runAgentPersonaPack(driver) {
 
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
-  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make"], 60_000);
+  await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
   await waitForAnyText(
