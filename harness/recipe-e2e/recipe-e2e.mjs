@@ -271,11 +271,12 @@ async function enterRemoteInstance(driver) {
   await waitForText(driver, "Recipe E2E Docker", 45_000);
 
   // Step 1: Click "Check" button on the instance card to initiate SSH connection
+  await shot(driver, "debug", "start-page-before-check");
   console.log("Looking for Check button on instance card...");
   try {
     const checkBtn = await waitForDisplayed(
       driver,
-      By.xpath(`//*[normalize-space()=${xpathLiteral("Recipe E2E Docker")}]/ancestor::*[contains(@class,'card') or @role='button' or @data-slot='card'][1]//button[normalize-space()='Check']`),
+      By.xpath(`//button[normalize-space()='Check']`),
       10_000,
     );
     console.log("Clicking Check button to initiate SSH connection");
@@ -296,7 +297,7 @@ async function enterRemoteInstance(driver) {
       await sleep(driver, 2000);
       continue;
     }
-    if (body.includes("agent") || body.includes("Agent") || body.includes("healthy") || body.includes("Gateway")) {
+    if (body.includes("Main Agent") || body.includes("healthy") || body.includes("Gateway ready") || body.includes("1 agent")) {
       console.log("SSH connection indicators found");
       connected = true;
       break;

@@ -29,7 +29,7 @@ cleanup() {
     docker logs "${OPENCLAW_CONTAINER_NAME}" 2>&1 || true
     echo "--- inner OpenClaw gateway log ---"
     docker exec "${OPENCLAW_CONTAINER_NAME}" cat /tmp/openclaw-gateway.log 2>&1 || true
-    docker exec "${OPENCLAW_CONTAINER_NAME}" cat /tmp/openclaw/openclaw-*.log 2>&1 | tail -50 || true
+    docker exec "${OPENCLAW_CONTAINER_NAME}" bash -c "cat /tmp/openclaw/openclaw-*.log 2>/dev/null | tail -50" || true
     echo "--- end gateway log ---"
     echo "--- end inner logs ---"
     docker rm -f "${OPENCLAW_CONTAINER_NAME}" >/dev/null 2>&1 || true
