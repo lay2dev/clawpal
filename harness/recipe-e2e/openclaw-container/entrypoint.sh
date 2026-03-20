@@ -6,17 +6,9 @@ export PATH="/root/.local/bin:/usr/local/bin:${PATH}"
 mkdir -p /var/run/sshd
 /usr/sbin/sshd
 
-nohup openclaw gateway start >/tmp/openclaw-gateway.log 2>&1 &
-GATEWAY_PID=$!
+# Start the gateway in background (daemon mode)
+openclaw gateway start >/tmp/openclaw-gateway.log 2>&1 || true
 
-cleanup() {
-  kill "${GATEWAY_PID}" 2>/dev/null || true
-}
-
-trap cleanup EXIT
-
-while kill -0 "${GATEWAY_PID}" 2>/dev/null; do
-  sleep 2
-done
-
-wait "${GATEWAY_PID}"
+# Keep container alive — sshd runs in background, gateway runs as daemon
+# The harness will stop this container when tests complete
+exec sleep infinity
