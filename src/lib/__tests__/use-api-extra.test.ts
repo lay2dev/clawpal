@@ -9,6 +9,7 @@ import {
   invalidateGlobalReadCache,
   shouldLogRemoteInvokeMetric,
 } from "../use-api";
+import { api } from "../api";
 
 describe("hasGuidanceEmitted", () => {
   test("returns true when _guidanceEmitted is true", () => {
@@ -164,5 +165,19 @@ describe("shouldLogRemoteInvokeMetric", () => {
     // This is probabilistic (5% chance of true), so just verify it returns a boolean
     const result = shouldLogRemoteInvokeMetric(true, 100);
     expect(typeof result).toBe("boolean");
+  });
+});
+
+describe("remote doctor api bindings", () => {
+  test("exposes startRemoteDoctorRepair binding", () => {
+    expect(typeof api.startRemoteDoctorRepair).toBe("function");
+  });
+
+  test("exposes remote doctor gateway url preference binding", () => {
+    expect(typeof api.setRemoteDoctorGatewayUrlPreference).toBe("function");
+  });
+
+  test("exposes remote doctor gateway auth token preference binding", () => {
+    expect(typeof api.setRemoteDoctorGatewayAuthTokenPreference).toBe("function");
   });
 });

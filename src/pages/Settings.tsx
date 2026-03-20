@@ -30,6 +30,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsAlphaFeaturesCard } from "@/components/SettingsAlphaFeaturesCard";
+import {
+  consumePendingRemoteDoctorSettingsFocus,
+  OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+} from "@/lib/remote-doctor-navigation";
 import { getSettingsProfileUiState } from "./settings-profile-ui";
 import {
   Select,
@@ -105,11 +109,44 @@ export function Settings({
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
+  const [remoteDoctorGatewayUrl, setRemoteDoctorGatewayUrl] = useState("");
+  const [remoteDoctorGatewayAuthToken, setRemoteDoctorGatewayAuthToken] = useState("");
+  const remoteDoctorGatewayUrlInputRef = useRef<HTMLInputElement | null>(null);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
   // ClawPal app version & self-update
   const { appVersion, appUpdate, appUpdateChecking, appUpdating, appUpdateProgress, handleCheckForUpdates, handleAppUpdate } = useAppUpdate(hasAppUpdate, onAppUpdateSeen);
+
+  const focusRemoteDoctorGatewayUrlInput = useCallback(() => {
+    const input = remoteDoctorGatewayUrlInputRef.current;
+    if (!input) return;
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 60);
+  }, []);
+
+  useEffect(() => {
+    if (section !== "all" && section !== "preferences") return;
+    if (consumePendingRemoteDoctorSettingsFocus()) {
+      focusRemoteDoctorGatewayUrlInput();
+    }
+    const handleOpenRemoteDoctorSettings = () => {
+      focusRemoteDoctorGatewayUrlInput();
+    };
+    window.addEventListener(
+      OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+      handleOpenRemoteDoctorSettings as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+        handleOpenRemoteDoctorSettings as EventListener,
+      );
+    };
+  }, [focusRemoteDoctorGatewayUrlInput, section]);
 
   // Extract profiles from config on first load
   useEffect(() => {
@@ -149,6 +186,8 @@ export function Settings({
     ua.getAppPreferences()
       .then((prefs) => {
         setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
+        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
+        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
@@ -442,6 +481,32 @@ export function Settings({
       });
   }, [t, ua]);
 
+  const handleRemoteDoctorGatewayUrlSave = useCallback(() => {
+    const nextValue = remoteDoctorGatewayUrl.trim();
+    ua.setRemoteDoctorGatewayUrlPreference(nextValue || null)
+      .then((prefs) => {
+        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
+        toast.success(t("settings.remoteDoctorGatewayUrlSaved"));
+      })
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.remoteDoctorGatewayUrlSaveFailed", { error: errorText }));
+      });
+  }, [remoteDoctorGatewayUrl, t, ua]);
+
+  const handleRemoteDoctorGatewayAuthTokenSave = useCallback(() => {
+    const nextValue = remoteDoctorGatewayAuthToken.trim();
+    ua.setRemoteDoctorGatewayAuthTokenPreference(nextValue || null)
+      .then((prefs) => {
+        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
+        toast.success(t("settings.remoteDoctorGatewayAuthTokenSaved"));
+      })
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t("settings.remoteDoctorGatewayAuthTokenSaveFailed", { error: errorText }));
+      });
+  }, [remoteDoctorGatewayAuthToken, t, ua]);
+
   return (
     <section>
       <h2 className="text-2xl font-bold mb-4">{t('settings.title')}</h2>
@@ -672,7 +737,14 @@ export function Settings({
             {showPreferences && (
               <SettingsAlphaFeaturesCard
                 showSshTransferSpeedUi={showSshTransferSpeedUi}
+                remoteDoctorGatewayUrl={remoteDoctorGatewayUrl}
+                remoteDoctorGatewayAuthToken={remoteDoctorGatewayAuthToken}
+                remoteDoctorGatewayUrlInputRef={remoteDoctorGatewayUrlInputRef}
                 onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
+                onRemoteDoctorGatewayUrlChange={setRemoteDoctorGatewayUrl}
+                onRemoteDoctorGatewayUrlSave={handleRemoteDoctorGatewayUrlSave}
+                onRemoteDoctorGatewayAuthTokenChange={setRemoteDoctorGatewayAuthToken}
+                onRemoteDoctorGatewayAuthTokenSave={handleRemoteDoctorGatewayAuthTokenSave}
               />
             )}
 

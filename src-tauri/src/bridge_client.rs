@@ -8,9 +8,9 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use indexmap::IndexMap;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::net::TcpStream;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::models::resolve_paths;
@@ -24,7 +24,7 @@ type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 const NODE_COMMANDS: &[&str] = &["clawpal", "openclaw"];
 
 /// Maximum number of pending invoke requests kept in memory.
-const MAX_PENDING_INVOKES: usize = 50;
+const MAX_PENDING_INVOKES: usize = 10;
 
 /// Seconds before auto-rejecting an invoke with USER_PENDING.
 /// Must be less than the gateway's 30s invoke timeout so the agent
@@ -45,9 +45,11 @@ struct BridgeClientInner {
 /// commands (read_file, run_command, etc.) on the local or remote machine.
 /// Uses the same WebSocket port as the operator connection (18789) but with
 /// a different role.
+#[derive(Clone)]
 pub struct BridgeClient {
     inner: Arc<Mutex<Option<BridgeClientInner>>>,
     pending_invokes: Arc<Mutex<IndexMap<String, Value>>>,
+    invoke_events: broadcast::Sender<Value>,
     /// Invoke IDs that were auto-rejected with USER_PENDING after the timeout.
     /// These invokes remain in pending_invokes so the user can still execute them,
     /// but the result must be sent as a chat message (gateway discards late results).
@@ -60,6 +62,7 @@ impl BridgeClient {
         Self {
             inner: Arc::new(Mutex::new(None)),
             pending_invokes: Arc::new(Mutex::new(IndexMap::new())),
+            invoke_events: broadcast::channel(64).0,
             expired_invokes: Arc::new(Mutex::new(HashSet::new())),
             credentials: Arc::new(Mutex::new(None)),
         }
@@ -67,10 +70,10 @@ impl BridgeClient {
 
     /// Connect to the gateway as a node via WebSocket.
     /// Uses the same URL as the operator connection but with `role: "node"`.
-    pub async fn connect(
+    pub async fn connect<R: Runtime>(
         &self,
         url: &str,
-        app: AppHandle,
+        app: AppHandle<R>,
         creds: Option<GatewayCredentials>,
     ) -> Result<(), String> {
         self.disconnect().await?;
@@ -104,6 +107,7 @@ impl BridgeClient {
         // Spawn reader task
         let inner_ref = Arc::clone(&self.inner);
         let invokes_ref = Arc::clone(&self.pending_invokes);
+        let invoke_events = self.invoke_events.clone();
         let expired_ref = Arc::clone(&self.expired_invokes);
         let app_clone = app.clone();
 
@@ -111,16 +115,26 @@ impl BridgeClient {
             while let Some(msg) = rx.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        if let Ok(frame) = serde_json::from_str::<Value>(&text) {
-                            Self::handle_frame(
-                                frame,
-                                &inner_ref,
-                                &invokes_ref,
-                                &expired_ref,
-                                &app_clone,
-                            )
-                            .await;
-                        }
+                        Self::handle_message_payload(
+                            text.as_bytes(),
+                            &inner_ref,
+                            &invokes_ref,
+                            &invoke_events,
+                            &expired_ref,
+                            &app_clone,
+                        )
+                        .await;
+                    }
+                    Ok(Message::Binary(bytes)) => {
+                        Self::handle_message_payload(
+                            &bytes,
+                            &inner_ref,
+                            &invokes_ref,
+                            &invoke_events,
+                            &expired_ref,
+                            &app_clone,
+                        )
+                        .await;
                     }
                     Ok(Message::Close(_)) => {
                         let _ = app_clone.emit(
@@ -252,6 +266,10 @@ impl BridgeClient {
         Some((val, expired))
     }
 
+    pub fn subscribe_invokes(&self) -> broadcast::Receiver<Value> {
+        self.invoke_events.subscribe()
+    }
+
     // ── Private helpers ──────────────────────────────────────────────
 
     /// Send a request and wait for the response.
@@ -332,7 +350,7 @@ impl BridgeClient {
     }
 
     /// Perform the connect handshake as a node.
-    async fn do_handshake(&self, _app: &AppHandle) -> Result<(), String> {
+    async fn do_handshake<R: Runtime>(&self, _app: &AppHandle<R>) -> Result<(), String> {
         let creds = self.credentials.lock().await.clone();
 
         let (token, device_id, signing_key, public_key_b64) = if let Some(c) = creds {
@@ -442,13 +460,38 @@ impl BridgeClient {
         Ok(())
     }
 
+    async fn handle_message_payload<R: Runtime>(
+        payload: &[u8],
+        inner_ref: &Arc<Mutex<Option<BridgeClientInner>>>,
+        invokes_ref: &Arc<Mutex<IndexMap<String, Value>>>,
+        invoke_events: &broadcast::Sender<Value>,
+        expired_ref: &Arc<Mutex<HashSet<String>>>,
+        app: &AppHandle<R>,
+    ) {
+        let Ok(text) = std::str::from_utf8(payload) else {
+            return;
+        };
+        if let Ok(frame) = serde_json::from_str::<Value>(text) {
+            Self::handle_frame(
+                frame,
+                inner_ref,
+                invokes_ref,
+                invoke_events,
+                expired_ref,
+                app,
+            )
+            .await;
+        }
+    }
+
     /// Handle a single parsed JSON frame from the gateway.
-    async fn handle_frame(
+    async fn handle_frame<R: Runtime>(
         frame: Value,
         inner_ref: &Arc<Mutex<Option<BridgeClientInner>>>,
         invokes_ref: &Arc<Mutex<IndexMap<String, Value>>>,
+        invoke_events: &broadcast::Sender<Value>,
         expired_ref: &Arc<Mutex<HashSet<String>>>,
-        app: &AppHandle,
+        app: &AppHandle<R>,
     ) {
         let frame_type = frame.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -571,7 +614,8 @@ impl BridgeClient {
                             return;
                         }
 
-                        let _ = app.emit("doctor:invoke", invoke_payload);
+                        let _ = app.emit("doctor:invoke", invoke_payload.clone());
+                        let _ = invoke_events.send(invoke_payload);
 
                         // Spawn auto-reject timer: after INVOKE_AUTO_REJECT_SECS, send
                         // USER_PENDING error so the agent knows the user is still reviewing

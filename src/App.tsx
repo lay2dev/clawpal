@@ -1,4 +1,4 @@
-import { Suspense, lazy, startTransition, useCallback, useMemo, useState } from "react";
+import { Suspense, lazy, startTransition, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MessageCircleIcon,
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { Route } from "./lib/routes";
 import type { SshHost } from "./lib/types";
+import { OPEN_REMOTE_DOCTOR_SETTINGS_EVENT } from "@/lib/remote-doctor-navigation";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
@@ -274,6 +275,24 @@ export function App() {
     }, 1400);
   }, [navigateRoute, setDoctorNavPulse, setInStart]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOpenRemoteDoctorSettings = () => {
+      setInStart(true);
+      setStartSection("settings");
+      navigateRoute("home");
+    };
+    window.addEventListener(
+      OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+      handleOpenRemoteDoctorSettings as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        OPEN_REMOTE_DOCTOR_SETTINGS_EVENT,
+        handleOpenRemoteDoctorSettings as EventListener,
+      );
+    };
+  }, [navigateRoute]);
   // ── Navigation items ──
   const navItems = useNavItems({ inStart, startSection, setStartSection, route, navigateRoute, openDoctor, doctorNavPulse });
 

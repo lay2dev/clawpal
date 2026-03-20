@@ -1,0 +1,28 @@
+[package]
+name = "openclaw-gateway-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "openclaw_gateway_client"
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+futures = "0.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
+tokio-tungstenite = "0.28"
+tracing = "0.1"
+thiserror = "2"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"

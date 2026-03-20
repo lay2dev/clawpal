@@ -8,7 +8,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -49,6 +49,7 @@ struct NodeClientInner {
 pub struct NodeClient {
     inner: Arc<Mutex<Option<NodeClientInner>>>,
     credentials: Arc<Mutex<Option<GatewayCredentials>>>,
+    pending_chat_final: Arc<Mutex<Option<oneshot::Sender<String>>>>,
 }
 
 impl NodeClient {
@@ -56,13 +57,14 @@ impl NodeClient {
         Self {
             inner: Arc::new(Mutex::new(None)),
             credentials: Arc::new(Mutex::new(None)),
+            pending_chat_final: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub async fn connect(
+    pub async fn connect<R: Runtime>(
         &self,
         url: &str,
-        app: AppHandle,
+        app: AppHandle<R>,
         creds: Option<GatewayCredentials>,
     ) -> Result<(), String> {
         // Disconnect existing connection if any
@@ -92,14 +94,23 @@ impl NodeClient {
         // Spawn reader task
         let inner_ref = Arc::clone(&self.inner);
         let app_clone = app.clone();
+        let chat_ref = Arc::clone(&self.pending_chat_final);
 
         tokio::spawn(async move {
             while let Some(msg) = rx.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        if let Ok(frame) = serde_json::from_str::<Value>(&text) {
-                            Self::handle_frame(frame, &inner_ref, &app_clone).await;
-                        }
+                        Self::handle_message_payload(
+                            text.as_bytes(),
+                            &inner_ref,
+                            &chat_ref,
+                            &app_clone,
+                        )
+                        .await;
+                    }
+                    Ok(Message::Binary(bytes)) => {
+                        Self::handle_message_payload(&bytes, &inner_ref, &chat_ref, &app_clone)
+                            .await;
                     }
                     Ok(Message::Close(_)) => {
                         let _ = app_clone
@@ -229,7 +240,68 @@ impl NodeClient {
         Ok(())
     }
 
-    async fn do_handshake(&self, _app: &AppHandle) -> Result<(), String> {
+    pub async fn run_agent_request(
+        &self,
+        agent_id: &str,
+        session_key: &str,
+        message: &str,
+    ) -> Result<String, String> {
+        let rx = self
+            .start_agent_request(agent_id, session_key, message)
+            .await?;
+        self.await_agent_final(rx).await
+    }
+
+    pub async fn start_agent_request(
+        &self,
+        agent_id: &str,
+        session_key: &str,
+        message: &str,
+    ) -> Result<oneshot::Receiver<String>, String> {
+        let (tx, rx) = oneshot::channel::<String>();
+        {
+            let mut guard = self.pending_chat_final.lock().await;
+            if guard.is_some() {
+                return Err("Another agent request is already waiting for a final response".into());
+            }
+            *guard = Some(tx);
+        }
+
+        let send_result = self
+            .send_request_fire(
+                "agent",
+                json!({
+                    "message": message,
+                    "idempotencyKey": uuid::Uuid::new_v4().to_string(),
+                    "agentId": agent_id,
+                    "sessionKey": session_key,
+                }),
+            )
+            .await;
+
+        if let Err(error) = send_result {
+            *self.pending_chat_final.lock().await = None;
+            return Err(error);
+        }
+
+        Ok(rx)
+    }
+
+    pub async fn await_agent_final(&self, rx: oneshot::Receiver<String>) -> Result<String, String> {
+        match tokio::time::timeout(std::time::Duration::from_secs(180), rx).await {
+            Ok(Ok(text)) => Ok(text),
+            Ok(Err(_)) => {
+                *self.pending_chat_final.lock().await = None;
+                Err("Agent request ended before a final chat response was received".into())
+            }
+            Err(_) => {
+                *self.pending_chat_final.lock().await = None;
+                Err("Timed out waiting for final agent response".into())
+            }
+        }
+    }
+
+    async fn do_handshake<R: Runtime>(&self, _app: &AppHandle<R>) -> Result<(), String> {
         let creds = self.credentials.lock().await.clone();
 
         let (token, device_id, signing_key, public_key_b64) = if let Some(c) = creds {
@@ -335,10 +407,25 @@ impl NodeClient {
         Ok(())
     }
 
-    async fn handle_frame(
+    async fn handle_message_payload<R: Runtime>(
+        payload: &[u8],
+        inner_ref: &Arc<Mutex<Option<NodeClientInner>>>,
+        chat_ref: &Arc<Mutex<Option<oneshot::Sender<String>>>>,
+        app: &AppHandle<R>,
+    ) {
+        let Ok(text) = std::str::from_utf8(payload) else {
+            return;
+        };
+        if let Ok(frame) = serde_json::from_str::<Value>(text) {
+            Self::handle_frame(frame, inner_ref, chat_ref, app).await;
+        }
+    }
+
+    async fn handle_frame<R: Runtime>(
         frame: Value,
         inner_ref: &Arc<Mutex<Option<NodeClientInner>>>,
-        app: &AppHandle,
+        chat_ref: &Arc<Mutex<Option<oneshot::Sender<String>>>>,
+        app: &AppHandle<R>,
     ) {
         let frame_type = frame.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -378,6 +465,9 @@ impl NodeClient {
                             .and_then(|t| t.as_str())
                             .unwrap_or("");
                         if is_final {
+                            if let Some(waiter) = chat_ref.lock().await.take() {
+                                let _ = waiter.send(text.to_string());
+                            }
                             let _ = app.emit("doctor:chat-final", json!({"text": text}));
                         } else {
                             let _ = app.emit("doctor:chat-delta", json!({"text": text}));

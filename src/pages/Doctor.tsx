@@ -12,16 +12,28 @@ import { DoctorLogsDialog } from "@/components/DoctorLogsDialog";
 import { DoctorRecoveryOverview } from "@/components/DoctorRecoveryOverview";
 import { DoctorTempProviderDialog } from "@/components/DoctorTempProviderDialog";
 import { RescueAsciiHeader } from "@/components/RescueAsciiHeader";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useInstance } from "@/lib/instance-context";
 import { localizeDoctorReportText } from "@/lib/doctor-report-i18n";
+import { requestRemoteDoctorSettingsFocus } from "@/lib/remote-doctor-navigation";
 import {
   createDataLoadRequestId,
   emitDataLoadMetric,
 } from "@/lib/data-load-log";
 import type {
   ModelProfile,
+  RemoteDoctorProgressEvent,
   RescueBotRuntimeState,
   RescuePrimaryDiagnosisResult,
   RescuePrimaryRepairResult,
@@ -78,6 +90,8 @@ export function Doctor(_: DoctorProps) {
   const [statusProgress, setStatusProgress] = useState(0.16);
   const [tempProviderDialogOpen, setTempProviderDialogOpen] = useState(false);
   const [tempProviderProfileId, setTempProviderProfileId] = useState<string | null>(null);
+  const [activeRepairMode, setActiveRepairMode] = useState<"localRepair" | "remoteDoctor" | null>(null);
+  const [remoteDoctorConfigPromptOpen, setRemoteDoctorConfigPromptOpen] = useState(false);
 
   const busy = diagnosisLoading || repairing;
   const liveReadsReady = ua.instanceToken !== 0;
@@ -135,6 +149,26 @@ export function Doctor(_: DoctorProps) {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<RemoteDoctorProgressEvent>("doctor:remote-repair-progress", (event) => {
+      if (disposed) return;
+      const payload = event.payload;
+      setStatusLine(payload.line?.trim() || null);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!busy && diagnosis && !needsRepair && !error && !pendingTempProviderSetup) {
       setStatusLine(null);
     }
@@ -145,8 +179,8 @@ export function Doctor(_: DoctorProps) {
     setLogsOpen(true);
   }, []);
 
-  const runDiagnosis = useCallback(async () => {
-    if (!liveReadsReady || busy) return;
+  const runDiagnosis = useCallback(async (options?: { force?: boolean }) => {
+    if (!liveReadsReady || (busy && !options?.force)) return;
     if (isRemote && !isConnected) {
       setError(t("doctor.rescueBotConnectRequired", { defaultValue: "Connect to SSH first." }));
       return;
@@ -218,6 +252,7 @@ export function Doctor(_: DoctorProps) {
       return;
     }
     setRepairing(true);
+    setActiveRepairMode("localRepair");
     setError(null);
     setStatusLine(
       t("doctor.fixSafeIssues", {
@@ -295,15 +330,56 @@ export function Doctor(_: DoctorProps) {
       });
     } finally {
       setRepairing(false);
+      setActiveRepairMode(null);
     }
   }, [busy, diagnosis, isConnected, isRemote, liveReadsReady, repairableCount, t, tempProviderProfileId, ua]);
+
+  const runRemoteDoctorRepair = useCallback(async () => {
+    if (!liveReadsReady || busy || !diagnosis) return;
+    if (isRemote && !isConnected) {
+      setError(t("doctor.rescueBotConnectRequired", { defaultValue: "Connect to SSH first." }));
+      return;
+    }
+    const prefs = await ua.getAppPreferences();
+    if (!prefs.remoteDoctorGatewayUrl?.trim()) {
+      setRemoteDoctorConfigPromptOpen(true);
+      return;
+    }
+    setRepairing(true);
+    setActiveRepairMode("remoteDoctor");
+    setError(null);
+    setStatusLine(t("doctor.remoteDoctorRepairing", { defaultValue: "Running remote Doctor repair..." }));
+    setStatusProgress(0.18);
+    try {
+      const result = await ua.startRemoteDoctorRepair();
+      setStatusProgress(1);
+      setStatusLine(result.message);
+      if (result.status === "completed" || result.status === "completed_with_warnings") {
+        await runDiagnosis({ force: true });
+      }
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setError(text);
+      setStatusLine(text);
+    } finally {
+      setRepairing(false);
+      setActiveRepairMode(null);
+    }
+  }, [busy, diagnosis, isConnected, isRemote, liveReadsReady, runDiagnosis, t, ua]);
+
+  const handleOpenRemoteDoctorSettings = useCallback(() => {
+    setRemoteDoctorConfigPromptOpen(false);
+    requestRemoteDoctorSettingsFocus();
+  }, []);
 
   const buttonLabel = useMemo(() => {
     if (diagnosisLoading) {
       return t("doctor.analyzing", { defaultValue: "Diagnosing..." });
     }
     if (repairing) {
-      return t("doctor.repairing", { defaultValue: "Repairing..." });
+      return activeRepairMode === "remoteDoctor"
+        ? t("doctor.remoteDoctorRepairing", { defaultValue: "Running remote Doctor repair..." })
+        : t("doctor.repairing", { defaultValue: "Repairing..." });
     }
     if (pendingTempProviderSetup) {
       return t(
@@ -322,7 +398,7 @@ export function Doctor(_: DoctorProps) {
       });
     }
     return t("doctor.diagnose", { defaultValue: "Diagnose" });
-  }, [diagnosisLoading, needsRepair, pendingTempProviderSetup, repairableCount, repairing, t, tempProviderProfileId]);
+  }, [activeRepairMode, diagnosisLoading, needsRepair, pendingTempProviderSetup, repairableCount, repairing, t, tempProviderProfileId]);
 
   const buttonIcon = diagnosisLoading || repairing
     ? <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -455,8 +531,9 @@ export function Doctor(_: DoctorProps) {
               repairResult={repairResult}
               repairError={null}
               onRepairAll={() => void runRepair()}
+              onRemoteDoctorRepair={() => void runRemoteDoctorRepair()}
               onRepairIssue={(_issueId) => void runRepair()}
-              showRepairActions={false}
+              showRepairActions
             />
           ) : null}
         </CardContent>
@@ -474,6 +551,26 @@ export function Doctor(_: DoctorProps) {
         initialProfileId={tempProviderProfileId}
         onSaved={handleTempProviderSaved}
       />
+      <AlertDialog open={remoteDoctorConfigPromptOpen} onOpenChange={setRemoteDoctorConfigPromptOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("doctor.remoteDoctorGatewayRequiredTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("doctor.remoteDoctorGatewayRequiredDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              {t("doctor.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleOpenRemoteDoctorSettings}>
+              {t("doctor.openRemoteDoctorSettings")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
