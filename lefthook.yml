@@ -1,0 +1,17 @@
+pre-commit:
+  commands:
+    frontend:
+      run: ./scripts/ci-frontend.sh
+      glob: "**/*.{ts,tsx,js,jsx,json,css}"
+    rust:
+      run: CLAWPAL_FMT_SCOPE=staged ./scripts/ci-rust.sh
+      glob: "**/*.rs"
+    metrics:
+      run: |
+        ./scripts/ci-metrics.sh
+        if [ $? -ne 0 ]; then
+          echo ""
+          echo "❌ Pre-commit blocked: one or more hard metrics gates failed."
+          echo "   Run ./scripts/precommit.sh for details."
+          exit 1
+        fi

@@ -183,6 +183,7 @@ run_bundle_check() {
 run_perf_metrics_check() {
   if ! command -v cargo >/dev/null 2>&1; then
     PERF_NOTE="cargo is not installed"
+    PERF_STATUS="SKIP"
     return
   fi
 
@@ -210,6 +211,8 @@ run_perf_metrics_check() {
 run_command_perf_check() {
   if ! command -v cargo >/dev/null 2>&1; then
     CMD_PERF_NOTE="cargo is not installed"
+    CMD_PERF_STATUS="SKIP"
+    PERF_STATUS="SKIP"
     return
   fi
 
@@ -386,13 +389,13 @@ fi
 if [ "$BUNDLE_INIT_GZIP_KB" != "N/A" ] && [ "$BUNDLE_INIT_GZIP_KB" -gt 180 ] 2>/dev/null; then
   hard_failures+=("initial-load gzip exceeds 180 KB (got ${BUNDLE_INIT_GZIP_KB} KB)")
 fi
-if [ "$PERF_STATUS" != "PASS" ]; then
+if [ "$PERF_STATUS" != "PASS" ] && [ "$PERF_STATUS" != "SKIP" ]; then
   hard_failures+=("perf_metrics")
 fi
 if [ "$PERF_CMD_P50" != "N/A" ] && [ "$PERF_CMD_P50" -gt 1000 ] 2>/dev/null; then
   hard_failures+=("cmd_p50 exceeds 1000 us (got ${PERF_CMD_P50} us)")
 fi
-if [ "$CMD_PERF_STATUS" != "PASS" ]; then
+if [ "$CMD_PERF_STATUS" != "PASS" ] && [ "$CMD_PERF_STATUS" != "SKIP" ]; then
   hard_failures+=("command_perf_e2e")
 fi
 
