@@ -33,6 +33,7 @@ import type {
   InstanceRuntimeSnapshot,
 } from "../lib/types";
 import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { profileToModelValue } from "@/lib/model-value";
 import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
 import {
@@ -97,6 +98,7 @@ export function Home({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const { agents, setAgentsCache } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<InstanceConfigSnapshot>(ua.persistenceScope, "getInstanceConfigSnapshot", []) ?? null
@@ -128,7 +130,6 @@ export function Home({
   const [version, setVersion] = useState<string | null>(() => initialHomeState.version);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; latest?: string } | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [agents, setAgents] = useState<AgentOverview[] | null>(() => initialHomeState.agents);
   const persistedModelProfiles = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<ModelProfile[]>(ua.persistenceScope, "listModelProfiles", []) ?? null
@@ -200,9 +201,9 @@ export function Home({
   }) => {
     const next = applyConfigSnapshotToHomeState(homeStateRef.current, snapshot);
     setStatus(next.status);
-    setAgents(next.agents);
+    setAgentsCache(next.agents);
     setStatusSettled(next.statusSettled);
-  }, []);
+  }, [setAgentsCache]);
 
   const applyRuntimeSnapshot = useCallback((snapshot: InstanceRuntimeSnapshot) => {
     setStatus({
@@ -210,9 +211,9 @@ export function Home({
       globalDefaultModel: snapshot.globalDefaultModel,
       fallbackModels: snapshot.fallbackModels,
     });
-    setAgents(snapshot.agents);
+    setAgentsCache(snapshot.agents);
     setStatusSettled(true);
-  }, []);
+  }, [setAgentsCache]);
 
   useEffect(() => {
     homeStateRef.current = {
@@ -255,7 +256,7 @@ export function Home({
         } else {
           setStatus(next);
         }
-        setAgents(snapshot.agents);
+        setAgentsCache(snapshot.agents);
         if (ua.isRemote) {
           setStatusSettled(true);
           remoteErrorShownRef.current = false;
@@ -282,7 +283,7 @@ export function Home({
     }).finally(() => {
       statusInFlightRef.current = false;
     });
-  }, [liveReadsReady, ua, showToast, t]);
+  }, [liveReadsReady, setAgentsCache, ua, showToast, t]);
 
   const fetchStatusExtra = useCallback(() => {
     if (!liveReadsReady) return;
@@ -477,7 +478,7 @@ export function Home({
     ).then(() => {
       // Optimistic UI update + pin in cache so polling doesn't overwrite
       const updated = agents?.filter((a) => a.id !== agentId) ?? null;
-      setAgents(updated);
+      setAgentsCache(updated);
       if (updated) ua.pinOptimistic("listAgents", updated);
     }).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
   };
@@ -780,7 +781,7 @@ export function Home({
                               const updated = agents?.map((a) =>
                                 a.id === agent.id ? { ...a, model: modelValue ?? null } : a
                               ) ?? null;
-                              setAgents(updated);
+                              setAgentsCache(updated);
                               if (updated) ua.pinOptimistic("listAgents", updated);
                             } catch (e) {
                               if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error");

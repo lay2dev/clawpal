@@ -76,7 +76,11 @@ export function Channels({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { discordChannelsResolved } = useInstance();
+  const {
+    discordChannelsResolved,
+    agents: sharedAgents,
+    setAgentsCache,
+  } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<ChannelsConfigSnapshot>(ua.persistenceScope, "getChannelsConfigSnapshot", []) ?? null
@@ -93,14 +97,7 @@ export function Channels({
     () => buildInitialChannelsState(persistedConfigSnapshot, persistedRuntimeSnapshot),
     [persistedConfigSnapshot, persistedRuntimeSnapshot],
   );
-  const [agents, setAgents] = useState<AgentOverview[]>(() => {
-    if (initialChannelsState.agents.length > 0) return initialChannelsState.agents;
-    // Fall back to persisted listAgents cache for instant agent dropdown
-    if (ua.persistenceResolved && ua.persistenceScope) {
-      return readPersistedReadCache<AgentOverview[]>(ua.persistenceScope, "listAgents", []) ?? [];
-    }
-    return [];
-  });
+  const agents = sharedAgents ?? initialChannelsState.agents;
   const [bindings, setBindings] = useState<Binding[]>(() => initialChannelsState.bindings);
   const [channelNodes, setChannelNodes] = useState<ChannelNode[]>(() => initialChannelsState.channels);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
@@ -142,13 +139,13 @@ export function Channels({
       const snapshot = await ua.getChannelsRuntimeSnapshot();
       setChannelNodes(snapshot.channels);
       setBindings(snapshot.bindings);
-      setAgents(snapshot.agents);
+      setAgentsCache(snapshot.agents);
     } catch (error) {
       console.error("Failed to load channel runtime snapshot:", error);
     } finally {
       setChannelsLoaded(true);
     }
-  }, [liveReadsReady, ua]);
+  }, [liveReadsReady, setAgentsCache, ua]);
 
   useEffect(() => {
     const initKey = `${ua.instanceId}#${ua.instanceToken}`;

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { RecipePlan } from "@/lib/types";
 import {
+  buildCookPlanningChecks,
   buildCookAuthProfileScope,
   buildCookContextWarnings,
   buildCookRouteSummary,
@@ -108,6 +109,42 @@ const authPlan: RecipePlan = {
   warnings: [],
 };
 
+const personaPlan: RecipePlan = {
+  summary: {
+    recipeId: "agent-persona-pack",
+    recipeName: "Agent Persona Pack",
+    executionKind: "job",
+    actionCount: 1,
+    skippedStepCount: 0,
+  },
+  usedCapabilities: ["agent.identity.write"],
+  concreteClaims: [{ kind: "agent", id: "main" }],
+  executionSpecDigest: "digest-persona-123",
+  executionSpec: {
+    apiVersion: "strategy.platform/v1",
+    kind: "ExecutionSpec",
+    metadata: { name: "agent-persona-pack" },
+    source: {},
+    target: {},
+    execution: { kind: "job" as const },
+    capabilities: { usedCapabilities: ["agent.identity.write"] },
+    resources: { claims: [{ kind: "agent", id: "main" }] },
+    secrets: { bindings: [] },
+    desiredState: {},
+    actions: [
+      {
+        kind: "set_agent_persona",
+        args: {
+          agentId: "main",
+          persona: "You are direct.",
+        },
+      },
+    ],
+    outputs: [],
+  },
+  warnings: [],
+};
+
 describe("cook plan context helpers", () => {
   test("describes remote ssh execution routing", () => {
     expect(
@@ -206,5 +243,25 @@ describe("cook plan context helpers", () => {
     );
 
     expect(issues).toEqual([]);
+  });
+
+  test("derives only the checks needed for the planned recipe", () => {
+    expect(buildCookPlanningChecks(personaPlan)).toEqual({
+      needsAuthCheck: false,
+      needsConfigContext: false,
+      totalChecks: 0,
+    });
+
+    expect(buildCookPlanningChecks(authPlan)).toEqual({
+      needsAuthCheck: true,
+      needsConfigContext: false,
+      totalChecks: 1,
+    });
+
+    expect(buildCookPlanningChecks(samplePlan)).toEqual({
+      needsAuthCheck: false,
+      needsConfigContext: true,
+      totalChecks: 1,
+    });
   });
 });

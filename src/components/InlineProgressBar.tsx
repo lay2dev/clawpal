@@ -6,12 +6,14 @@ export function InlineProgressBar({
   value,
   tone = "primary",
   animated = false,
+  showValue = true,
 }: {
   title: string;
   detail?: string;
   value: number;
   tone?: "primary" | "destructive";
   animated?: boolean;
+  showValue?: boolean;
 }) {
   const clampedValue = Math.max(0, Math.min(100, Math.round(value)));
 
@@ -24,7 +26,9 @@ export function InlineProgressBar({
             <div className="mt-0.5 truncate text-muted-foreground">{detail}</div>
           ) : null}
         </div>
-        <div className="shrink-0 font-mono text-muted-foreground">{clampedValue}%</div>
+        {showValue ? (
+          <div className="shrink-0 font-mono text-muted-foreground">{clampedValue}%</div>
+        ) : null}
       </div>
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
         <div

@@ -911,7 +911,9 @@
   "cook.executionProgressDetail": "已完成 {{complete}} / {{total}} 个步骤",
   "cook.progressValidate": "正在校验 recipe 输入",
   "cook.progressBuild": "正在生成结构化执行计划",
-  "cook.progressChecks": "正在加载鉴权和配置检查",
+  "cook.progressChecksBoth": "正在运行鉴权和配置检查（{{complete}}/{{total}}）",
+  "cook.progressChecksAuth": "正在运行鉴权检查（{{complete}}/{{total}}）",
+  "cook.progressChecksConfig": "正在加载配置上下文（{{complete}}/{{total}}）",
 
   "chat.new": "新对话",
   "chat.thinking": "思考中...",

@@ -6,6 +6,13 @@ export type CookPhase = "params" | "confirm" | "execute" | "done";
 export type CookPhaseState = "complete" | "current" | "upcoming";
 export type CookExecutionState = "running" | "failed" | "done";
 
+export interface CookPlanningCheckProgress {
+  authRequired: boolean;
+  configRequired: boolean;
+  completedCount: number;
+  totalCount: number;
+}
+
 export interface CookPhaseItem {
   key: CookPhase;
   labelKey: string;
@@ -61,17 +68,41 @@ export function markCookFailure(statuses: CookStepStatus[]): CookStepStatus[] {
   });
 }
 
-export function getCookPlanningProgress(stage: CookPlanningStage): {
+export function getCookPlanningProgress(
+  stage: CookPlanningStage,
+  checks?: CookPlanningCheckProgress,
+): {
   value: number;
   labelKey: string;
+  labelArgs?: Record<string, number>;
+  animated: boolean;
 } {
   switch (stage) {
     case "validate":
-      return { value: 20, labelKey: "cook.progressValidate" };
+      return { value: 15, labelKey: "cook.progressValidate", labelArgs: undefined, animated: true };
     case "build":
-      return { value: 70, labelKey: "cook.progressBuild" };
-    case "checks":
-      return { value: 100, labelKey: "cook.progressChecks" };
+      return { value: 52, labelKey: "cook.progressBuild", labelArgs: undefined, animated: true };
+    case "checks": {
+      const totalCount = Math.max(1, checks?.totalCount ?? 1);
+      const completedCount = Math.max(0, Math.min(totalCount, checks?.completedCount ?? 0));
+      const labelKey =
+        checks?.authRequired && checks?.configRequired
+          ? "cook.progressChecksBoth"
+          : checks?.authRequired
+            ? "cook.progressChecksAuth"
+            : checks?.configRequired
+              ? "cook.progressChecksConfig"
+              : "cook.progressChecksBoth";
+      return {
+        value: 74 + Math.round((completedCount / totalCount) * 18),
+        labelKey,
+        labelArgs: {
+          complete: completedCount,
+          total: totalCount,
+        },
+        animated: true,
+      };
+    }
   }
 }
 

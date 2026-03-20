@@ -17,6 +17,12 @@ export type CookAuthProfileScope = {
   autoPrepareProfileIds: string[];
 };
 
+export type CookPlanningChecks = {
+  needsAuthCheck: boolean;
+  needsConfigContext: boolean;
+  totalChecks: number;
+};
+
 type BindingEntry = {
   agentId?: string;
   match?: {
@@ -207,6 +213,21 @@ export function buildCookAuthProfileScope(plan: RecipePlan): CookAuthProfileScop
   return {
     requiredProfileIds: Array.from(requiredProfileIds),
     autoPrepareProfileIds: Array.from(autoPrepareProfileIds),
+  };
+}
+
+export function buildCookPlanningChecks(plan: RecipePlan): CookPlanningChecks {
+  const authScope = buildCookAuthProfileScope(plan);
+  const actions = plan.executionSpec.actions.filter(isRecord) as ActionRecord[];
+  const needsConfigContext = actions.some(
+    (action) => action.kind === "bind_channel" || action.kind === "config_patch",
+  );
+  const needsAuthCheck = authScope.requiredProfileIds.length > 0;
+
+  return {
+    needsAuthCheck,
+    needsConfigContext,
+    totalChecks: Number(needsAuthCheck) + Number(needsConfigContext),
   };
 }
 
