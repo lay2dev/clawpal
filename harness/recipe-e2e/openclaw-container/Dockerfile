@@ -17,9 +17,9 @@ RUN apt-get update && apt-get install -y \
 RUN echo "root:${ROOT_PASSWORD}" | chpasswd \
     && sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
     && sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
-    && echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config 
-    && echo "MaxSessions 20" >> /etc/ssh/sshd_config 
-    && echo "MaxStartups 20:30:60" >> /etc/ssh/sshd_config 
+    && echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config \
+    && echo "MaxSessions 20" >> /etc/ssh/sshd_config \
+    && echo "MaxStartups 20:30:60" >> /etc/ssh/sshd_config \
     && echo "Subsystem sftp /usr/lib/openssh/sftp-server" >> /etc/ssh/sshd_config
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
