@@ -5,10 +5,7 @@
   },
   "gateway": {
     "port": 18789,
-    "mode": "local",
-    "auth": {
-      "token": "gw-test-token-abc123"
-    }
+    "mode": "local"
   },
   "models": {
     "providers": {
