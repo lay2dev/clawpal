@@ -281,7 +281,7 @@ pub struct SessionFile {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAnalysis {
     pub agent: String,
@@ -299,7 +299,7 @@ pub struct SessionAnalysis {
     pub kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionAnalysis {
     pub agent: String,
@@ -508,7 +508,7 @@ pub(crate) struct InternalProviderCredential {
     pub kind: InternalAuthKind,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub name: String,

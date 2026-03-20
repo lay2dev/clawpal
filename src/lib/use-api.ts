@@ -435,6 +435,10 @@ export function useApi() {
         api.analyzeSessions,
         api.remoteAnalyzeSessions,
       ),
+      analyzeSessionsStream: dispatch(
+        api.analyzeSessionsStream,
+        api.remoteAnalyzeSessionsStream,
+      ),
       deleteSessionsByIds: withInvalidation(
         dispatch(
           api.deleteSessionsByIds,
@@ -456,6 +460,11 @@ export function useApi() {
         ["listSessionFiles"],
       ),
       previewSession: dispatch(api.previewSession, api.remotePreviewSession),
+      previewSessionStream: dispatch(
+        api.previewSessionStream,
+        api.remotePreviewSessionStream,
+      ),
+      cancelStream: api.cancelStream,
 
       // Chat
       chatViaOpenclaw: dispatch(
@@ -468,6 +477,10 @@ export function useApi() {
       backupBeforeUpgrade: dispatch(
         api.backupBeforeUpgrade,
         api.remoteBackupBeforeUpgrade,
+      ),
+      backupBeforeUpgradeStream: dispatch(
+        api.backupBeforeUpgradeStream,
+        api.remoteBackupBeforeUpgradeStream,
       ),
       listBackups: dispatchCached(
         "listBackups",

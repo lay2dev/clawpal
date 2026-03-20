@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RemoteDoctorRepairResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RemoteDoctorRepairResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SessionPreviewMessage, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
 
 export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
@@ -140,10 +140,16 @@ export const api = {
     invoke("clear_all_sessions", {}),
   analyzeSessions: (): Promise<AgentSessionAnalysis[]> =>
     invoke("analyze_sessions", {}),
+  analyzeSessionsStream: (batchSize?: number): Promise<string> =>
+    invoke("analyze_sessions_stream", batchSize ? { batchSize } : {}),
   deleteSessionsByIds: (agentId: string, sessionIds: string[]): Promise<number> =>
     invoke("delete_sessions_by_ids", { agentId, sessionIds }),
-  previewSession: (agentId: string, sessionId: string): Promise<{ role: string; content: string }[]> =>
+  previewSession: (agentId: string, sessionId: string): Promise<SessionPreviewMessage[]> =>
     invoke("preview_session", { agentId, sessionId }),
+  previewSessionStream: (agentId: string, sessionId: string, pageSize?: number): Promise<string> =>
+    invoke("preview_session_stream", { agentId, sessionId, pageSize: pageSize ?? null }),
+  cancelStream: (handleId: string): Promise<boolean> =>
+    invoke("cancel_stream", { handleId }),
   runDoctor: (): Promise<DoctorReport> =>
     invoke("run_doctor_command", {}),
   precheckRegistry: (): Promise<PrecheckIssue[]> =>
@@ -164,6 +170,8 @@ export const api = {
     invoke("chat_via_openclaw", { agentId, message, sessionId }),
   backupBeforeUpgrade: (): Promise<BackupInfo> =>
     invoke("backup_before_upgrade", {}),
+  backupBeforeUpgradeStream: (): Promise<string> =>
+    invoke("backup_before_upgrade_stream", {}),
   listBackups: (): Promise<BackupInfo[]> =>
     invoke("list_backups", {}),
   restoreFromBackup: (backupName: string): Promise<string> =>
@@ -305,14 +313,18 @@ export const api = {
     invoke("remote_write_raw_config", { hostId, content }),
   remoteAnalyzeSessions: (hostId: string): Promise<AgentSessionAnalysis[]> =>
     invoke("remote_analyze_sessions", { hostId }),
+  remoteAnalyzeSessionsStream: (hostId: string, batchSize?: number): Promise<string> =>
+    invoke("remote_analyze_sessions_stream", batchSize ? { hostId, batchSize } : { hostId }),
   remoteDeleteSessionsByIds: (hostId: string, agentId: string, sessionIds: string[]): Promise<number> =>
     invoke("remote_delete_sessions_by_ids", { hostId, agentId, sessionIds }),
   remoteListSessionFiles: (hostId: string): Promise<SessionFile[]> =>
     invoke("remote_list_session_files", { hostId }),
   remoteClearAllSessions: (hostId: string): Promise<number> =>
     invoke("remote_clear_all_sessions", { hostId }),
-  remotePreviewSession: (hostId: string, agentId: string, sessionId: string): Promise<{ role: string; content: string }[]> =>
+  remotePreviewSession: (hostId: string, agentId: string, sessionId: string): Promise<SessionPreviewMessage[]> =>
     invoke("remote_preview_session", { hostId, agentId, sessionId }),
+  remotePreviewSessionStream: (hostId: string, agentId: string, sessionId: string, pageSize?: number): Promise<string> =>
+    invoke("remote_preview_session_stream", { hostId, agentId, sessionId, pageSize: pageSize ?? null }),
   remoteListModelProfiles: (hostId: string): Promise<ModelProfile[]> =>
     invoke("remote_list_model_profiles", { hostId }),
   remoteUpsertModelProfile: (hostId: string, profile: ModelProfile): Promise<ModelProfile> =>
@@ -342,6 +354,8 @@ export const api = {
   // Remote backup
   remoteBackupBeforeUpgrade: (hostId: string): Promise<BackupInfo> =>
     invoke("remote_backup_before_upgrade", { hostId }),
+  remoteBackupBeforeUpgradeStream: (hostId: string): Promise<string> =>
+    invoke("remote_backup_before_upgrade_stream", { hostId }),
   remoteListBackups: (hostId: string): Promise<BackupInfo[]> =>
     invoke("remote_list_backups", { hostId }),
   remoteRestoreFromBackup: (hostId: string, backupName: string): Promise<string> =>

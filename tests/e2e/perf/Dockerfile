@@ -24,5 +24,8 @@ RUN mkdir -p /root/.openclaw/agents/main/agent
 COPY tests/e2e/perf/seed/openclaw.json /root/.openclaw/openclaw.json
 COPY tests/e2e/perf/seed/auth-profiles.json /root/.openclaw/agents/main/agent/auth-profiles.json
 
-EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+COPY tests/e2e/perf/docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22 18790
+CMD ["/entrypoint.sh"]

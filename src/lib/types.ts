@@ -177,6 +177,48 @@ export interface AgentSessionAnalysis {
   sessions: SessionAnalysis[];
 }
 
+export interface SessionAnalysisChunkEvent {
+  handleId: string;
+  agent: string;
+  sessions: SessionAnalysis[];
+  totalFiles: number;
+  totalSizeBytes: number;
+  emptyCount: number;
+  lowValueCount: number;
+  valuableCount: number;
+  done: boolean;
+}
+
+export interface SessionStreamDoneEvent {
+  handleId: string;
+  totalAgents: number;
+  totalSessions: number;
+  cancelled: boolean;
+}
+
+export interface SessionPreviewMessage {
+  role: string;
+  content: string;
+}
+
+export interface SessionPreviewPageEvent {
+  handleId: string;
+  page: number;
+  messages: SessionPreviewMessage[];
+  totalMessages: number;
+}
+
+export interface SessionPreviewDoneEvent {
+  handleId: string;
+  totalMessages: number;
+  cancelled: boolean;
+}
+
+export interface SessionStreamErrorEvent {
+  handleId: string;
+  error: string;
+}
+
 export interface ModelProfile {
   id: string;
   name: string;
@@ -359,6 +401,24 @@ export interface BackupInfo {
   path: string;
   createdAt: string;
   sizeBytes: number;
+}
+
+export interface BackupProgressEvent {
+  handleId: string;
+  phase: string;
+  filesCopied: number;
+  bytesCopied: number;
+  currentPath?: string | null;
+}
+
+export interface BackupDoneEvent {
+  handleId: string;
+  info: BackupInfo;
+}
+
+export interface BackupErrorEvent {
+  handleId: string;
+  error: string;
 }
 
 

@@ -51,6 +51,125 @@ pub struct SessionPreviewMessage {
 
 pub type SessionPreview = Vec<SessionPreviewMessage>;
 
+pub fn classify_session(
+    size_bytes: u64,
+    message_count: usize,
+    user_message_count: usize,
+    age_days: f64,
+) -> &'static str {
+    if size_bytes < 500 || message_count == 0 {
+        "empty"
+    } else if user_message_count <= 1 && age_days > 7.0 {
+        "low_value"
+    } else {
+        "valuable"
+    }
+}
+
+fn session_category_order(category: &str) -> u8 {
+    match category {
+        "empty" => 0,
+        "low_value" => 1,
+        _ => 2,
+    }
+}
+
+pub fn sort_sessions(sessions: &mut [SessionAnalysis]) {
+    sessions.sort_by(|a, b| {
+        session_category_order(&a.category)
+            .cmp(&session_category_order(&b.category))
+            .then(
+                b.age_days
+                    .partial_cmp(&a.age_days)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+}
+
+pub fn summarize_agent_sessions(
+    agent: String,
+    mut sessions: Vec<SessionAnalysis>,
+) -> AgentSessionAnalysis {
+    sort_sessions(&mut sessions);
+
+    let total_files = sessions.len();
+    let total_size_bytes = sessions.iter().map(|s| s.size_bytes).sum();
+    let empty_count = sessions.iter().filter(|s| s.category == "empty").count();
+    let low_value_count = sessions
+        .iter()
+        .filter(|s| s.category == "low_value")
+        .count();
+    let valuable_count = sessions.iter().filter(|s| s.category == "valuable").count();
+
+    AgentSessionAnalysis {
+        agent,
+        total_files,
+        total_size_bytes,
+        empty_count,
+        low_value_count,
+        valuable_count,
+        sessions,
+    }
+}
+
+pub fn parse_session_analysis_entry(value: &Value) -> SessionAnalysis {
+    let agent = value
+        .get("agent")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let session_id = value
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let size_bytes = value.get("sizeBytes").and_then(Value::as_u64).unwrap_or(0);
+    let message_count = value
+        .get("messageCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let user_message_count = value
+        .get("userMessageCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let assistant_message_count = value
+        .get("assistantMessageCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let age_days = value.get("ageDays").and_then(Value::as_f64).unwrap_or(0.0);
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("sessions")
+        .to_string();
+
+    SessionAnalysis {
+        agent,
+        session_id,
+        file_path: String::new(),
+        size_bytes,
+        message_count,
+        user_message_count,
+        assistant_message_count,
+        last_activity: None,
+        age_days,
+        total_tokens: 0,
+        model: None,
+        category: classify_session(size_bytes, message_count, user_message_count, age_days)
+            .to_string(),
+        kind,
+    }
+}
+
+pub fn parse_session_analysis_entry_line(line: &str) -> Result<Option<SessionAnalysis>, String> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(line)
+        .map_err(|e| format!("Failed to parse remote session entry: {e}"))?;
+    Ok(Some(parse_session_analysis_entry(&value)))
+}
+
 pub fn parse_session_analysis(raw: &str) -> Result<Vec<AgentSessionAnalysis>, String> {
     let parsed: Vec<Value> = serde_json::from_str(raw.trim()).map_err(|e| {
         format!(
@@ -62,94 +181,16 @@ pub fn parse_session_analysis(raw: &str) -> Result<Vec<AgentSessionAnalysis>, St
     let mut agent_map: BTreeMap<String, Vec<SessionAnalysis>> = BTreeMap::new();
 
     for val in &parsed {
-        let agent = val
-            .get("agent")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        let session_id = val
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let size_bytes = val.get("sizeBytes").and_then(Value::as_u64).unwrap_or(0);
-        let message_count = val.get("messageCount").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let user_message_count = val
-            .get("userMessageCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-        let assistant_message_count = val
-            .get("assistantMessageCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-        let age_days = val.get("ageDays").and_then(Value::as_f64).unwrap_or(0.0);
-        let kind = val
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("sessions")
-            .to_string();
-
-        let category = if size_bytes < 500 || message_count == 0 {
-            "empty"
-        } else if user_message_count <= 1 && age_days > 7.0 {
-            "low_value"
-        } else {
-            "valuable"
-        };
-
+        let session = parse_session_analysis_entry(val);
         agent_map
-            .entry(agent.clone())
+            .entry(session.agent.clone())
             .or_default()
-            .push(SessionAnalysis {
-                agent,
-                session_id,
-                file_path: String::new(),
-                size_bytes,
-                message_count,
-                user_message_count,
-                assistant_message_count,
-                last_activity: None,
-                age_days,
-                total_tokens: 0,
-                model: None,
-                category: category.to_string(),
-                kind,
-            });
+            .push(session);
     }
 
     let mut results = Vec::new();
-    for (agent, mut sessions) in agent_map {
-        sessions.sort_by(|a, b| {
-            let cat_order = |c: &str| match c {
-                "empty" => 0,
-                "low_value" => 1,
-                _ => 2,
-            };
-            cat_order(&a.category).cmp(&cat_order(&b.category)).then(
-                b.age_days
-                    .partial_cmp(&a.age_days)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-        });
-
-        let total_files = sessions.len();
-        let total_size_bytes = sessions.iter().map(|s| s.size_bytes).sum();
-        let empty_count = sessions.iter().filter(|s| s.category == "empty").count();
-        let low_value_count = sessions
-            .iter()
-            .filter(|s| s.category == "low_value")
-            .count();
-        let valuable_count = sessions.iter().filter(|s| s.category == "valuable").count();
-
-        results.push(AgentSessionAnalysis {
-            agent,
-            total_files,
-            total_size_bytes,
-            empty_count,
-            low_value_count,
-            valuable_count,
-            sessions,
-        });
+    for (agent, sessions) in agent_map {
+        results.push(summarize_agent_sessions(agent, sessions));
     }
 
     Ok(results)
@@ -196,36 +237,45 @@ pub fn parse_session_file_list(raw: &str) -> Result<Vec<SessionFileInfo>, String
         .collect())
 }
 
+pub fn parse_session_preview_line(line: &str) -> Result<Option<SessionPreviewMessage>, String> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    let obj: Value = serde_json::from_str(line)
+        .map_err(|e| format!("Failed to parse session preview line: {e}"))?;
+    if obj.get("type").and_then(Value::as_str) != Some("message") {
+        return Ok(None);
+    }
+
+    let role = obj
+        .pointer("/message/role")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let content = obj
+        .pointer("/message/content")
+        .map(|c| {
+            if let Some(arr) = c.as_array() {
+                arr.iter()
+                    .filter_map(|item| item.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else if let Some(s) = c.as_str() {
+                s.to_string()
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
+
+    Ok(Some(SessionPreviewMessage { role, content }))
+}
+
 pub fn parse_session_preview(jsonl: &str) -> Result<SessionPreview, String> {
     let mut messages = Vec::new();
     for line in jsonl.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let obj: Value = serde_json::from_str(line)
-            .map_err(|e| format!("Failed to parse session preview line: {e}"))?;
-        if obj.get("type").and_then(Value::as_str) == Some("message") {
-            let role = obj
-                .pointer("/message/role")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string();
-            let content = obj
-                .pointer("/message/content")
-                .map(|c| {
-                    if let Some(arr) = c.as_array() {
-                        arr.iter()
-                            .filter_map(|item| item.get("text").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else if let Some(s) = c.as_str() {
-                        s.to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .unwrap_or_default();
-            messages.push(SessionPreviewMessage { role, content });
+        if let Some(message) = parse_session_preview_line(line)? {
+            messages.push(message);
         }
     }
     Ok(messages)
@@ -372,5 +422,74 @@ mod tests {
         assert_eq!(out[1].agent, "b");
         assert_eq!(out[1].kind, "cron");
         assert_eq!(out[1].size_bytes, 100);
+    }
+
+    #[test]
+    fn summarize_agent_sessions_counts_and_sorts() {
+        let sessions = vec![
+            SessionAnalysis {
+                agent: "a".to_string(),
+                session_id: "valuable".to_string(),
+                file_path: String::new(),
+                size_bytes: 2_000,
+                message_count: 5,
+                user_message_count: 3,
+                assistant_message_count: 2,
+                last_activity: None,
+                age_days: 1.0,
+                total_tokens: 0,
+                model: None,
+                category: "valuable".to_string(),
+                kind: "sessions".to_string(),
+            },
+            SessionAnalysis {
+                agent: "a".to_string(),
+                session_id: "empty".to_string(),
+                file_path: String::new(),
+                size_bytes: 10,
+                message_count: 0,
+                user_message_count: 0,
+                assistant_message_count: 0,
+                last_activity: None,
+                age_days: 9.0,
+                total_tokens: 0,
+                model: None,
+                category: "empty".to_string(),
+                kind: "sessions".to_string(),
+            },
+        ];
+
+        let out = summarize_agent_sessions("a".to_string(), sessions);
+        assert_eq!(out.total_files, 2);
+        assert_eq!(out.empty_count, 1);
+        assert_eq!(out.valuable_count, 1);
+        assert_eq!(out.sessions[0].session_id, "empty");
+    }
+
+    #[test]
+    fn parse_session_analysis_entry_line_handles_blank_lines() {
+        let out = parse_session_analysis_entry_line("   ").expect("parse");
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn parse_session_preview_line_extracts_message() {
+        let out = parse_session_preview_line(
+            r#"{"type":"message","message":{"role":"assistant","content":"hello"}}"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            out,
+            Some(SessionPreviewMessage {
+                role: "assistant".to_string(),
+                content: "hello".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_session_preview_line_skips_non_message_entries() {
+        let out = parse_session_preview_line(r#"{"type":"metadata","foo":"bar"}"#).expect("parse");
+        assert!(out.is_none());
     }
 }
