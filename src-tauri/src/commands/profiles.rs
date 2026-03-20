@@ -944,6 +944,45 @@ fn upsert_model_registration(cfg: &mut Value, push: &PreparedProfilePush) -> Res
         changed = true;
     }
 
+    // Write provider baseUrl under agents.defaults.models.providers.<provider>.
+    if let Some(base_url) = push
+        .profile
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let providers_val = defaults_obj
+            .entry("providers".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !providers_val.is_object() {
+            *providers_val = Value::Object(serde_json::Map::new());
+            changed = true;
+        }
+        let Some(providers_obj) = providers_val.as_object_mut() else {
+            return Err("failed to prepare provider config map".to_string());
+        };
+        let provider_val = providers_obj
+            .entry(push.provider_key.clone())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !provider_val.is_object() {
+            *provider_val = Value::Object(serde_json::Map::new());
+            changed = true;
+        }
+        let Some(provider_obj) = provider_val.as_object_mut() else {
+            return Err("failed to prepare provider config".to_string());
+        };
+        let needs_update = provider_obj
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map(|current| current != base_url)
+            .unwrap_or(true);
+        if needs_update {
+            provider_obj.insert("baseUrl".to_string(), Value::String(base_url.to_string()));
+            changed = true;
+        }
+    }
+
     Ok(changed)
 }
 
@@ -1551,6 +1590,12 @@ mod tests {
         assert!(
             cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1/model")
                 .is_none()
+        );
+        // Provider baseUrl should be written under agents.defaults.providers.
+        assert_eq!(
+            cfg.pointer("/agents/defaults/providers/openrouter/baseUrl")
+                .and_then(Value::as_str),
+            Some("https://openrouter.example/v1")
         );
     }
 

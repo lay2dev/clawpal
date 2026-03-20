@@ -2399,9 +2399,16 @@ async fn materialize_recipe_action_commands(
                 .ok_or_else(|| "set_channel_persona requires persona".to_string())?;
             let guild_id = action_string(args.get("guildId"));
             let account_id = action_string(args.get("accountId")).or_else(|| {
-                guild_id
-                    .as_deref()
-                    .and_then(resolve_discord_account_for_guild)
+                // Only resolve from local config when executing locally —
+                // remote hosts have different configs, so the lookup would
+                // return the wrong account.
+                if route.target_kind == "local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
             });
             let patch = channel_persona_patch(
                 &channel_type,
@@ -2421,9 +2428,13 @@ async fn materialize_recipe_action_commands(
                 .ok_or_else(|| "clear_channel_persona requires peerId".to_string())?;
             let guild_id = action_string(args.get("guildId"));
             let account_id = action_string(args.get("accountId")).or_else(|| {
-                guild_id
-                    .as_deref()
-                    .and_then(resolve_discord_account_for_guild)
+                if route.target_kind == "local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
             });
             let patch = channel_persona_patch(
                 &channel_type,

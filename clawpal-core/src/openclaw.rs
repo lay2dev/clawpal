@@ -186,55 +186,70 @@ pub fn parse_json_output(output: &CliOutput) -> Result<Value> {
 
     let raw = &strip_ansi(&output.stdout);
 
-    // Find the first top-level JSON value by scanning forward from the first
-    // `[` or `{` and doing balanced bracket matching to find its end.  This
-    // is more robust than the old "rfind" approach which was confused by
-    // stray brackets in plugin log lines (e.g. "[plugins]").
-    let first_brace = raw.find('{');
-    let first_bracket = raw.find('[');
-    let start = match (first_brace, first_bracket) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    };
-    let start = start.ok_or_else(|| OpenclawError::NoJson(raw.to_string()))?;
-    let opener = raw.as_bytes()[start];
-    let closer = if opener == b'[' { b']' } else { b'}' };
-    let mut depth = 0i32;
-    let mut end = None;
-    let mut in_string = false;
-    let mut escape_next = false;
-    for (i, &ch) in raw.as_bytes()[start..].iter().enumerate() {
-        if escape_next {
-            escape_next = false;
-            continue;
+    // Scan forward for balanced `[\xe2\x80\xa6]` or `{\xe2\x80\xa6}` candidates and try to parse
+    // each one.  This handles noise both *before* and *after* the real JSON
+    // payload (e.g. `[plugins] booting\n{"ok":true}\n[plugins] done`).
+    let mut search_from = 0usize;
+    loop {
+        let first_brace = raw[search_from..].find('{').map(|i| i + search_from);
+        let first_bracket = raw[search_from..].find('[').map(|i| i + search_from);
+        let start = match (first_brace, first_bracket) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => return Err(OpenclawError::NoJson(raw.to_string())),
+        };
+        let opener = raw.as_bytes()[start];
+        let closer = if opener == b'[' { b']' } else { b'}' };
+        let mut depth = 0i32;
+        let mut end = None;
+        let mut in_string = false;
+        let mut escape_next = false;
+        for (i, &ch) in raw.as_bytes()[start..].iter().enumerate() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+            if ch == b'\\' && in_string {
+                escape_next = true;
+                continue;
+            }
+            if ch == b'"' {
+                in_string = !in_string;
+                continue;
+            }
+            if in_string {
+                continue;
+            }
+            if ch == opener {
+                depth += 1;
+            } else if ch == closer {
+                depth -= 1;
+            }
+            if depth == 0 {
+                end = Some(start + i);
+                break;
+            }
         }
-        if ch == b'\\' && in_string {
-            escape_next = true;
-            continue;
-        }
-        if ch == b'"' {
-            in_string = !in_string;
-            continue;
-        }
-        if in_string {
-            continue;
-        }
-        if ch == opener {
-            depth += 1;
-        } else if ch == closer {
-            depth -= 1;
-        }
-        if depth == 0 {
-            end = Some(start + i);
-            break;
+
+        let end = match end {
+            Some(e) => e,
+            // Unbalanced \xe2\x80\x94 skip past this opener and try the next candidate.
+            None => {
+                search_from = start + 1;
+                continue;
+            }
+        };
+        let json_str = &raw[start..=end];
+        match serde_json::from_str(json_str) {
+            Ok(value) => return Ok(value),
+            Err(_) => {
+                // Not valid JSON (e.g. `[plugins]`), skip and try next.
+                search_from = end + 1;
+                continue;
+            }
         }
     }
-
-    let end = end.ok_or_else(|| OpenclawError::NoJson(raw.to_string()))?;
-    let json_str = &raw[start..=end];
-    Ok(serde_json::from_str(json_str)?)
 }
 
 fn find_in_path(bin: &str) -> bool {
@@ -371,6 +386,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_json_output_skips_non_json_brackets_before_payload() {
+        // Plugin log lines like "[plugins] booting" appear before the real
+        // JSON payload — the extractor must skip them.
+        let output = CliOutput {
+            stdout: "[plugins] booting\n{"ok":true}\n[plugins] done".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        let value = parse_json_output(&output).expect("skip non-json prefix");
+        assert_eq!(value, serde_json::json!({"ok": true}));
+    }
+
+        #[test]
     fn strip_ansi_removes_escape_sequences() {
         let input = "\x1b[35m[plugins]\x1b[39m hello";
         let cleaned = strip_ansi(input);
