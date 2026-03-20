@@ -1,0 +1,22 @@
+{
+  "instances": [
+    {
+      "id": "ssh:recipe-e2e-docker",
+      "instanceType": "remote_ssh",
+      "label": "Recipe E2E Docker",
+      "openclawHome": null,
+      "clawpalDataDir": null,
+      "sshHostConfig": {
+        "id": "ssh:recipe-e2e-docker",
+        "label": "Recipe E2E Docker",
+        "host": "127.0.0.1",
+        "port": 2222,
+        "username": "root",
+        "authMethod": "password",
+        "keyPath": null,
+        "password": "clawpal-recipe-e2e",
+        "passphrase": null
+      }
+    }
+  ]
+}

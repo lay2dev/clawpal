@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "token",
+      "provider": "anthropic",
+      "token": "test-anthropic-recipe-key"
+    },
+    "openai:default": {
+      "type": "token",
+      "provider": "openai",
+      "token": "test-openai-recipe-key"
+    }
+  }
+}

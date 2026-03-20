@@ -1,0 +1,112 @@
+name: Recipe GUI E2E
+
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: recipe-gui-e2e-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recipe-gui-e2e:
+    name: Recipe GUI E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Build inner OpenClaw image
+        run: |
+          docker build \
+            -t clawpal-recipe-openclaw:latest \
+            -f harness/recipe-e2e/openclaw-container/Dockerfile \
+            .
+
+      - name: Build recipe GUI E2E harness
+        run: |
+          docker build \
+            -t clawpal-recipe-harness:latest \
+            -f harness/recipe-e2e/Dockerfile \
+            .
+
+      - name: Run recipe GUI E2E
+        run: |
+          mkdir -p recipe-gui-e2e/screenshots recipe-gui-e2e/report
+          docker run --rm \
+            --network host \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ${{ github.workspace }}/recipe-gui-e2e/screenshots:/screenshots \
+            -v ${{ github.workspace }}/recipe-gui-e2e/report:/report \
+            -e OPENCLAW_IMAGE=clawpal-recipe-openclaw:latest \
+            clawpal-recipe-harness:latest
+
+      - name: Fix permissions
+        run: sudo chown -R $(id -u):$(id -g) recipe-gui-e2e/
+
+      - name: Upload perf report
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipe-gui-e2e-perf-${{ github.sha }}
+          path: recipe-gui-e2e/report/perf-report.json
+          retention-days: 30
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipe-gui-e2e-screenshots-${{ github.sha }}
+          path: recipe-gui-e2e/screenshots/
+          retention-days: 30
+
+      - name: Generate PR perf comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          node <<'EOF'
+          const fs = require("fs");
+          const report = JSON.parse(fs.readFileSync("recipe-gui-e2e/report/perf-report.json", "utf8"));
+          const rows = report.recipes.map((recipe) =>
+            `| ${recipe.recipe_name} | ${recipe.page_load_ms} | ${recipe.form_fill_ms} | ${recipe.execution_ms} | ${recipe.verification_ms} | ${recipe.total_ms} |`
+          ).join("\n");
+          const body = [
+            "<!-- recipe-gui-e2e -->",
+            "## Recipe GUI E2E Perf",
+            "",
+            `Artifacts: [perf report](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`,
+            "",
+            "| Recipe | Page Load (ms) | Form Fill (ms) | Execution (ms) | Verification (ms) | Total (ms) |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            rows,
+            "",
+            "> Harness: Docker + Xvfb + tauri-driver + Selenium",
+            "",
+          ].join("\n");
+          fs.writeFileSync("/tmp/recipe_gui_e2e_comment.md", body);
+          EOF
+
+      - name: Find existing recipe GUI E2E comment
+        uses: peter-evans/find-comment@v3
+        id: recipe_comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- recipe-gui-e2e -->'
+
+      - name: Create or update recipe GUI E2E comment
+        uses: peter-evans/create-or-update-comment@v4
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          comment-id: ${{ steps.recipe_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/recipe_gui_e2e_comment.md
+          edit-mode: replace

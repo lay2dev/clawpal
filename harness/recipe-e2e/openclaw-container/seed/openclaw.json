@@ -1,0 +1,79 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-20T00:00:00Z"
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "auth": {
+      "token": "gw-test-token-abc123"
+    }
+  },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "baseUrl": "https://api.anthropic.com/v1",
+        "models": [
+          {
+            "id": "claude-sonnet-4-20250514",
+            "name": "Claude Sonnet 4"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "workspace": "~/.openclaw/instances/openclaw-recipe-e2e/workspace"
+    },
+    "list": [
+      {
+        "id": "main",
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "workspace": "~/.openclaw/agents/main/agent",
+        "agentDir": "/root/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "Main Agent",
+          "emoji": "🤖"
+        }
+      }
+    ]
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "streaming": "off",
+      "guilds": {
+        "guild-recipe-lab": {
+          "channels": {
+            "channel-general": {
+              "systemPrompt": ""
+            },
+            "channel-support": {
+              "systemPrompt": ""
+            }
+          }
+        }
+      },
+      "accounts": {
+        "default": {
+          "guilds": {
+            "guild-recipe-lab": {
+              "channels": {
+                "channel-general": {
+                  "systemPrompt": ""
+                },
+                "channel-support": {
+                  "systemPrompt": ""
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
