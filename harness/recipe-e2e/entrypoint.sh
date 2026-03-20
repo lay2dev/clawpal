@@ -105,7 +105,7 @@ for attempt in $(seq 1 60); do
     -o ConnectTimeout=3 \
     -p "${OPENCLAW_SSH_PORT}" \
     "${OPENCLAW_SSH_USER}@${OPENCLAW_SSH_HOST}" \
-    "curl -sf http://127.0.0.1:18789/api/health >/dev/null 2>&1" >/dev/null 2>&1; then
+    "curl -so /dev/null -m 2 http://127.0.0.1:18789/ 2>/dev/null" >/dev/null 2>&1; then
     echo "Gateway ready after ${attempt} attempt(s)"
     break
   fi
