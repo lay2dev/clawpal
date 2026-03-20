@@ -52,9 +52,11 @@ jobs:
             clawpal-recipe-harness:latest
 
       - name: Fix permissions
+        if: always()
         run: sudo chown -R $(id -u):$(id -g) recipe-gui-e2e/
 
       - name: Upload perf report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: recipe-gui-e2e-perf-${{ github.sha }}
@@ -62,6 +64,7 @@ jobs:
           retention-days: 30
 
       - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: recipe-gui-e2e-screenshots-${{ github.sha }}
