@@ -17,6 +17,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify fork workflow files are in sync
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          if ! git diff --quiet origin/${{ github.base_ref }} -- .github/workflows/; then
+            echo ""
+            echo "::error::Your fork's .github/workflows/ files are out of sync with the base branch."
+            echo "::error::Please sync your fork with upstream before pushing:"
+            echo "::error::  git fetch upstream ${{ github.base_ref }}"
+            echo "::error::  git checkout upstream/${{ github.base_ref }} -- .github/workflows/"
+            echo "::error::  git commit -m 'sync: align workflow files with upstream'"
+            echo "::error::  git push"
+            exit 1
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 

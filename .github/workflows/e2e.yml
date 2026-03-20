@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   profile-e2e:
+    # Skip fork PRs — this job requires repo secrets
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     environment: ${{ (github.base_ref == 'main' || github.ref == 'refs/heads/main') && 'production' || 'development' }}
     steps:
