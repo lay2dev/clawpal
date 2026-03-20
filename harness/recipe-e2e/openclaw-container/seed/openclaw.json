@@ -19,7 +19,8 @@
             "id": "claude-sonnet-4-20250514",
             "name": "Claude Sonnet 4"
           }
-        ]
+        ],
+        "apiKey": "sk-ant-fake-key-for-e2e-testing"
       }
     }
   },
@@ -36,7 +37,7 @@
         "agentDir": "/root/.openclaw/agents/main/agent",
         "identity": {
           "name": "Main Agent",
-          "emoji": "🤖"
+          "emoji": "\ud83e\udd16"
         }
       }
     ]
