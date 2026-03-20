@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "release:dry-run": "bash scripts/release.sh --dry-run",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "prepare": "lefthook install || true"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -39,6 +40,7 @@
     "@types/react": "^18.3.2",
     "@types/react-dom": "^18.3.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "lefthook": "^2.1.4",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.5.4",
     "vite": "^5.4.1"

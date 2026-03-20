@@ -50,3 +50,16 @@ The hook uses `CLAWPAL_FMT_SCOPE=staged` when it calls `scripts/ci-rust.sh`, so 
 - Skip the hook for a single commit with `git commit --no-verify`.
 - Run scripts individually if you only want one check, for example `./scripts/ci-metrics.sh`.
 - If `cargo llvm-cov` is missing, install it with `cargo install cargo-llvm-cov` before running `./scripts/ci-coverage.sh`.
+
+## Automatic Hook Installation (lefthook)
+
+This repo uses [lefthook](https://github.com/evilmartians/lefthook) to automatically install git hooks.
+
+After cloning, run `bun install` — lefthook will auto-install the pre-commit hook via the `prepare` script.
+
+The hook runs:
+1. `scripts/ci-frontend.sh` (on `.ts/.tsx/.js/.jsx/.json/.css` changes)
+2. `scripts/ci-rust.sh` with `CLAWPAL_FMT_SCOPE=staged` (on `.rs` changes)
+3. `scripts/ci-metrics.sh` — blocks commit if any hard gate fails
+
+To skip the hook: `git commit --no-verify`

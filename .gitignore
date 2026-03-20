@@ -5,7 +5,6 @@ src-tauri/target/
 src-tauri/.generated/
 .worktrees/
 bun.lockb
-bun.lock
 bun.dlock
 .claude/
 .tmp/
