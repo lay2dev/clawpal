@@ -1,15 +1,9 @@
 {
-  "version": 1,
   "profiles": {
-    "anthropic:default": {
-      "type": "token",
+    "__default__": {
       "provider": "anthropic",
-      "token": "test-anthropic-recipe-key"
-    },
-    "openai:default": {
-      "type": "token",
-      "provider": "openai",
-      "token": "test-openai-recipe-key"
+      "model": "claude-sonnet-4-20250514",
+      "authRef": "ANTHROPIC_API_KEY"
     }
   }
 }

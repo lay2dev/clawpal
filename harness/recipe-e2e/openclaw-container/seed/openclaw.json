@@ -11,18 +11,7 @@
     }
   },
   "models": {
-    "providers": {
-      "anthropic": {
-        "baseUrl": "https://api.anthropic.com/v1",
-        "models": [
-          {
-            "id": "claude-sonnet-4-20250514",
-            "name": "Claude Sonnet 4"
-          }
-        ],
-        "apiKey": "sk-ant-fake-key-for-e2e-testing"
-      }
-    }
+    "providers": {}
   },
   "agents": {
     "defaults": {
