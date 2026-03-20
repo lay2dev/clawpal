@@ -944,7 +944,9 @@ fn upsert_model_registration(cfg: &mut Value, push: &PreparedProfilePush) -> Res
         changed = true;
     }
 
-    // Write provider baseUrl under agents.defaults.models.providers.<provider>.
+    // Write provider baseUrl under the top-level models.providers.<provider>
+    // path — this is where resolve_model_provider_base_url and the profile
+    // extraction path read it from.
     if let Some(base_url) = push
         .profile
         .base_url
@@ -952,7 +954,16 @@ fn upsert_model_registration(cfg: &mut Value, push: &PreparedProfilePush) -> Res
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let providers_val = defaults_obj
+        let models_top_val = root_obj
+            .entry("models".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !models_top_val.is_object() {
+            *models_top_val = Value::Object(serde_json::Map::new());
+        }
+        let models_top_obj = models_top_val
+            .as_object_mut()
+            .ok_or_else(|| "failed to prepare top-level models object".to_string())?;
+        let providers_val = models_top_obj
             .entry("providers".to_string())
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         if !providers_val.is_object() {
@@ -1593,7 +1604,7 @@ mod tests {
         );
         // Provider baseUrl should be written under agents.defaults.providers.
         assert_eq!(
-            cfg.pointer("/agents/defaults/providers/openrouter/baseUrl")
+            cfg.pointer("/models/providers/openrouter/baseUrl")
                 .and_then(Value::as_str),
             Some("https://openrouter.example/v1")
         );

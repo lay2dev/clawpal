@@ -2402,7 +2402,7 @@ async fn materialize_recipe_action_commands(
                 // Only resolve from local config when executing locally —
                 // remote hosts have different configs, so the lookup would
                 // return the wrong account.
-                if route.target_kind == "local" {
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
                     guild_id
                         .as_deref()
                         .and_then(resolve_discord_account_for_guild)
@@ -2428,7 +2428,7 @@ async fn materialize_recipe_action_commands(
                 .ok_or_else(|| "clear_channel_persona requires peerId".to_string())?;
             let guild_id = action_string(args.get("guildId"));
             let account_id = action_string(args.get("accountId")).or_else(|| {
-                if route.target_kind == "local" {
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
                     guild_id
                         .as_deref()
                         .and_then(resolve_discord_account_for_guild)

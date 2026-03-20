@@ -390,7 +390,7 @@ mod tests {
         // Plugin log lines like "[plugins] booting" appear before the real
         // JSON payload — the extractor must skip them.
         let output = CliOutput {
-            stdout: "[plugins] booting\n{"ok":true}\n[plugins] done".to_string(),
+            stdout: "[plugins] booting\n{\"ok\":true}\n[plugins] done".to_string(),
             stderr: String::new(),
             exit_code: 0,
         };
