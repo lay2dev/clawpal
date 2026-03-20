@@ -11,7 +11,11 @@
     }
   },
   "models": {
-    "providers": {}
+    "providers": {
+      "anthropic": {
+        "apiKey": "sk-ant-api03-fake-key-for-e2e-testing-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
   },
   "agents": {
     "defaults": {
