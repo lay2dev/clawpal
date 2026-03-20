@@ -32,11 +32,13 @@ async function resolveProfileToModelValue(
   ctx?: ActionContext,
 ): Promise<string | undefined> {
   if (!profileId || profileId === "__default__") return undefined;
+  const t0 = performance.now();
   const profiles: ModelProfile[] = await callWithLobsterGuidance(
     "resolveProfileToModelValue",
     ctx,
     () => api.listModelProfiles(),
   );
+  console.log(`[cook-perf] resolveProfileToModelValue(listModelProfiles): ${Math.round(performance.now() - t0)}ms`);
   const profile = profiles.find((p) => p.id === profileId);
   if (!profile) return profileId; // fallback: use raw string
   return profileToModelValue(profile);
@@ -89,6 +91,7 @@ const registry: Record<string, ActionDef> = {
         workspace = args.agentId as string;
       } else {
         // Read default workspace from config
+        const t1 = performance.now();
         const rawConfig = await callWithLobsterGuidance(
           "readRawConfig",
           ctx,
@@ -96,6 +99,7 @@ const registry: Record<string, ActionDef> = {
             ? api.remoteReadRawConfig(ctx.instanceId)
             : api.readRawConfig()),
         );
+        console.log(`[cook-perf] create_agent.readRawConfig: ${Math.round(performance.now() - t1)}ms`);
         try {
           const cfg = JSON.parse(rawConfig);
           workspace = cfg?.agents?.defaults?.workspace ?? cfg?.agents?.default?.workspace;
@@ -143,6 +147,7 @@ const registry: Record<string, ActionDef> = {
       const channelType = args.channelType as string;
       const peerId = args.peerId as string;
       // Read current bindings, add new binding, set full array
+      const t2 = performance.now();
       const bindings: unknown[] = await callWithLobsterGuidance(
         "listBindings",
         ctx,
@@ -150,6 +155,7 @@ const registry: Record<string, ActionDef> = {
           ? api.remoteListBindings(ctx.instanceId)
           : api.listBindings()),
       );
+      console.log(`[cook-perf] bind_channel.listBindings: ${Math.round(performance.now() - t2)}ms`);
       // Remove existing binding for same channel+peer
       const filtered = (bindings as Array<Record<string, unknown>>).filter((b) => {
         const m = b.match as Record<string, unknown> | undefined;

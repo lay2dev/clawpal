@@ -120,24 +120,57 @@ export function Cook({
   };
 
   const runFrom = async (startIndex: number, statuses: StepStatus[]) => {
+    const cookStart = performance.now();
+    const timings: { step: number; action: string; resolveMs: number; queueMs: number; totalMs: number; commandCount: number }[] = [];
+
     for (let i = startIndex; i < resolvedStepList.length; i++) {
       if (statuses[i] === "skipped") continue;
       statuses[i] = "running";
       setStepStatuses([...statuses]);
       try {
+        const stepStart = performance.now();
+
+        const resolveStart = performance.now();
         const commands = await stepToCommands(resolvedStepList[i], { instanceId, isRemote });
+        const resolveMs = performance.now() - resolveStart;
+
+        const queueStart = performance.now();
         for (const [label, cmd] of commands) {
           await ua.queueCommand(label, cmd);
         }
+        const queueMs = performance.now() - queueStart;
+
+        const totalMs = performance.now() - stepStart;
+        timings.push({
+          step: i,
+          action: resolvedStepList[i].action,
+          resolveMs: Math.round(resolveMs),
+          queueMs: Math.round(queueMs),
+          totalMs: Math.round(totalMs),
+          commandCount: commands.length,
+        });
+
         statuses[i] = "done";
       } catch (err) {
         statuses[i] = "failed";
         setStepErrors((prev) => ({ ...prev, [i]: String(err) }));
         setStepStatuses([...statuses]);
+        console.error("[cook-perf] step failed at index", i, err);
         return;
       }
       setStepStatuses([...statuses]);
     }
+
+    const cookResolveTotal = performance.now() - cookStart;
+    console.log("[cook-perf] === COOK TIMING REPORT ===");
+    console.log(`[cook-perf] transport: ${isRemote ? "remote_ssh" : "local"}, instance: ${instanceId}`);
+    console.log("[cook-perf] step timings:");
+    for (const t of timings) {
+      console.log(`[cook-perf]   step[${t.step}] ${t.action}: resolve=${t.resolveMs}ms, queue=${t.queueMs}ms (${t.commandCount} cmds), total=${t.totalMs}ms`);
+    }
+    console.log(`[cook-perf] all steps resolve+queue: ${Math.round(cookResolveTotal)}ms`);
+    console.log("[cook-perf] ========================");
+
     setPhase("done");
   };
 

@@ -1773,8 +1773,11 @@ pub async fn remote_apply_queued_commands(
         .await;
 
     // Execute each command
+    let apply_start = std::time::Instant::now();
+    let mut cmd_timings: Vec<(usize, String, u128)> = Vec::new();
     let mut applied_count = 0;
     for cmd in &commands {
+        let cmd_start = std::time::Instant::now();
         // Handle internal commands (__config_write__, __rollback__) — write config directly
         if matches!(
             cmd.command.first().map(|s| s.as_str()),
@@ -1803,6 +1806,7 @@ pub async fn remote_apply_queued_commands(
                     });
                 }
             }
+            cmd_timings.push((applied_count, cmd.label.clone(), cmd_start.elapsed().as_millis()));
             applied_count += 1;
             continue;
         }
@@ -1852,10 +1856,21 @@ pub async fn remote_apply_queued_commands(
                 });
             }
             Ok(_) => {
+                cmd_timings.push((applied_count, cmd.label.clone(), cmd_start.elapsed().as_millis()));
                 applied_count += 1;
             }
         }
     }
+
+    // [cook-perf] Log timing report
+    let total_apply_ms = apply_start.elapsed().as_millis();
+    eprintln!("[cook-perf] === REMOTE APPLY TIMING REPORT ===");
+    eprintln!("[cook-perf] host: {}, total_commands: {}", host_id, total_count);
+    for (idx, label, ms) in &cmd_timings {
+        eprintln!("[cook-perf]   cmd[{}] {}: {}ms", idx, label, ms);
+    }
+    eprintln!("[cook-perf] TOTAL apply: {}ms", total_apply_ms);
+    eprintln!("[cook-perf] ==============================");
 
     queues.clear(&host_id);
     let _ = pool.exec_login(&host_id, "openclaw gateway restart").await;
