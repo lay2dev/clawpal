@@ -291,13 +291,14 @@ async function enterRemoteInstance(driver) {
   let connected = false;
   while (Date.now() < sshDeadline) {
     const body = await pageText(driver);
-    // Look for signs that SSH probe completed: agent count, healthy status, or model info
-    if (body.includes("Checking")) {
-      // Still checking, wait
+    // Look for signs that SSH probe completed
+    // "Testing" or "Checking" = still in progress, keep waiting
+    if (body.includes("Testing") || body.includes("Checking") || body.includes("↻")) {
       await sleep(driver, 2000);
       continue;
     }
-    if (body.includes("Main Agent") || body.includes("healthy") || body.includes("Gateway ready") || body.includes("1 agent")) {
+    // Look for signs that SSH probe completed successfully
+    if (body.includes("Main Agent") || body.includes("healthy") || body.includes("1 agent") || body.includes("model") || body.includes("claude")) {
       console.log("SSH connection indicators found");
       connected = true;
       break;
