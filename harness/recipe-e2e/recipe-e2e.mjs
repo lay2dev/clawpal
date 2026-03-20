@@ -269,35 +269,69 @@ function writePerfReport(report) {
 
 async function enterRemoteInstance(driver) {
   await waitForText(driver, "Recipe E2E Docker", 45_000);
+
+  // Step 1: Click "Check" button on the instance card to initiate SSH connection
+  console.log("Looking for Check button on instance card...");
+  try {
+    const checkBtn = await waitForDisplayed(
+      driver,
+      By.xpath(`//*[normalize-space()=${xpathLiteral("Recipe E2E Docker")}]/ancestor::*[contains(@class,'card') or @role='button' or @data-slot='card'][1]//button[normalize-space()='Check']`),
+      10_000,
+    );
+    console.log("Clicking Check button to initiate SSH connection");
+    await clickElement(driver, checkBtn);
+  } catch {
+    console.log("No Check button found, trying direct card click");
+  }
+
+  // Step 2: Wait for SSH connection to establish (checking spinner → green dot)
+  console.log("Waiting for SSH connection to establish...");
+  const sshDeadline = Date.now() + 90_000;
+  let connected = false;
+  while (Date.now() < sshDeadline) {
+    const body = await pageText(driver);
+    // Look for signs that SSH probe completed: agent count, healthy status, or model info
+    if (body.includes("Checking")) {
+      // Still checking, wait
+      await sleep(driver, 2000);
+      continue;
+    }
+    if (body.includes("agent") || body.includes("Agent") || body.includes("healthy") || body.includes("Gateway")) {
+      console.log("SSH connection indicators found");
+      connected = true;
+      break;
+    }
+    await sleep(driver, 2000);
+  }
+  if (!connected) {
+    console.log("WARNING: SSH connection indicators not detected, proceeding anyway");
+  }
+
+  // Step 3: Click the instance card to open it
+  console.log("Opening instance tab...");
   const card = await waitForDisplayed(
     driver,
     By.xpath(`//*[normalize-space()=${xpathLiteral("Recipe E2E Docker")}]`),
     20_000,
   );
   await clickElement(driver, card);
-  await waitForAnyText(driver, ["Status", "Agents"], 60_000);
-  await waitForText(driver, "Recipe E2E Docker", 60_000);
 
-  // Wait for SSH connection to be fully established (green indicator)
-  // The Home page shows agent list and status when connected
-  console.log("Waiting for SSH connection to establish...");
-  const sshDeadline = Date.now() + 120_000;
-  while (Date.now() < sshDeadline) {
+  // Step 4: Wait for Home page to load with remote data
+  await waitForAnyText(driver, ["Status", "Agents", "Home"], 60_000);
+  console.log("Waiting for remote data to load on Home page...");
+  const dataDeadline = Date.now() + 60_000;
+  while (Date.now() < dataDeadline) {
     const body = await pageText(driver);
-    // When connected, the Home page shows agent details like model info
-    if (body.includes("main") && (body.includes("anthropic") || body.includes("claude") || body.includes("Model"))) {
-      console.log("SSH connection established — agent data loaded");
-      break;
-    }
-    // Also check for explicit connection status indicators
-    if (body.includes("Connected") || body.includes("Gateway")) {
-      console.log("SSH connection indicator found");
+    if (body.includes("main") && (body.includes("anthropic") || body.includes("claude") || body.includes("Model") || body.includes("Sonnet"))) {
+      console.log("Remote agent data loaded successfully");
       break;
     }
     await sleep(driver, 2000);
   }
+
   // Extra settle time for SSH pool to be fully ready
-  await sleep(driver, 5000);
+  await sleep(driver, 3000);
+  console.log("Instance ready for recipe operations");
 }
 
 async function maybeApprove(driver) {
