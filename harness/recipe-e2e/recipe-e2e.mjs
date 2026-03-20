@@ -277,6 +277,27 @@ async function enterRemoteInstance(driver) {
   await clickElement(driver, card);
   await waitForAnyText(driver, ["Status", "Agents"], 60_000);
   await waitForText(driver, "Recipe E2E Docker", 60_000);
+
+  // Wait for SSH connection to be fully established (green indicator)
+  // The Home page shows agent list and status when connected
+  console.log("Waiting for SSH connection to establish...");
+  const sshDeadline = Date.now() + 120_000;
+  while (Date.now() < sshDeadline) {
+    const body = await pageText(driver);
+    // When connected, the Home page shows agent details like model info
+    if (body.includes("main") && (body.includes("anthropic") || body.includes("claude") || body.includes("Model"))) {
+      console.log("SSH connection established — agent data loaded");
+      break;
+    }
+    // Also check for explicit connection status indicators
+    if (body.includes("Connected") || body.includes("Gateway")) {
+      console.log("SSH connection indicator found");
+      break;
+    }
+    await sleep(driver, 2000);
+  }
+  // Extra settle time for SSH pool to be fully ready
+  await sleep(driver, 5000);
 }
 
 async function maybeApprove(driver) {
