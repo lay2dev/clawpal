@@ -906,7 +906,21 @@ fn upsert_model_registration(cfg: &mut Value, push: &PreparedProfilePush) -> Res
     let Some(root_obj) = cfg.as_object_mut() else {
         return Err("failed to prepare config root".to_string());
     };
-    let models_val = root_obj
+    // Models must live under agents.defaults.models — the openclaw config
+    // schema rejects an unrecognised top-level "models" key.
+    let agents_val = root_obj
+        .entry("agents".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let agents_obj = agents_val
+        .as_object_mut()
+        .ok_or_else(|| "failed to prepare agents object".to_string())?;
+    let defaults_val = agents_obj
+        .entry("defaults".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let defaults_obj = defaults_val
+        .as_object_mut()
+        .ok_or_else(|| "failed to prepare agents.defaults object".to_string())?;
+    let models_val = defaults_obj
         .entry("models".to_string())
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
     if !models_val.is_object() {
@@ -916,68 +930,18 @@ fn upsert_model_registration(cfg: &mut Value, push: &PreparedProfilePush) -> Res
         return Err("failed to prepare models object".to_string());
     };
 
+    // The openclaw config schema for agents.defaults.models entries only
+    // allows known fields like "alias".  The provider and model are already
+    // encoded in the map key (e.g. "anthropic/claude-opus-4-5"), so we must
+    // NOT write "provider" or "model" fields into the entry — doing so makes
+    // the config invalid for the openclaw CLI.
     let mut changed = false;
-    let model_entry = models_obj
-        .entry(push.model_ref.clone())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    if !model_entry.is_object() {
-        *model_entry = Value::Object(serde_json::Map::new());
+    if !models_obj.contains_key(&push.model_ref) {
+        models_obj.insert(
+            push.model_ref.clone(),
+            Value::Object(serde_json::Map::new()),
+        );
         changed = true;
-    }
-    let Some(model_obj) = model_entry.as_object_mut() else {
-        return Err("failed to prepare model entry".to_string());
-    };
-    for (field, value) in [
-        ("provider", push.provider_key.as_str()),
-        ("model", push.profile.model.trim()),
-    ] {
-        let needs_update = model_obj
-            .get(field)
-            .and_then(Value::as_str)
-            .map(|current| current != value)
-            .unwrap_or(true);
-        if needs_update {
-            model_obj.insert(field.to_string(), Value::String(value.to_string()));
-            changed = true;
-        }
-    }
-
-    if let Some(base_url) = push
-        .profile
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let providers_val = models_obj
-            .entry("providers".to_string())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if !providers_val.is_object() {
-            *providers_val = Value::Object(serde_json::Map::new());
-            changed = true;
-        }
-        let Some(providers_obj) = providers_val.as_object_mut() else {
-            return Err("failed to prepare provider config map".to_string());
-        };
-        let provider_val = providers_obj
-            .entry(push.provider_key.clone())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if !provider_val.is_object() {
-            *provider_val = Value::Object(serde_json::Map::new());
-            changed = true;
-        }
-        let Some(provider_obj) = provider_val.as_object_mut() else {
-            return Err("failed to prepare provider config".to_string());
-        };
-        let needs_update = provider_obj
-            .get("baseUrl")
-            .and_then(Value::as_str)
-            .map(|current| current != base_url)
-            .unwrap_or(true);
-        if needs_update {
-            provider_obj.insert("baseUrl".to_string(), Value::String(base_url.to_string()));
-            changed = true;
-        }
     }
 
     Ok(changed)
@@ -1572,20 +1536,21 @@ mod tests {
 
         let changed = upsert_model_registration(&mut cfg, &prepared).expect("upsert model");
         assert!(changed);
-        assert_eq!(
-            cfg.pointer("/models/openrouter~1deepseek-r1/provider")
-                .and_then(Value::as_str),
-            Some("openrouter")
+        // Model entry should exist as an empty object — provider/model are
+        // encoded in the key, not as fields (openclaw schema rejects them).
+        assert!(
+            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1")
+                .unwrap()
+                .is_object()
         );
-        assert_eq!(
-            cfg.pointer("/models/openrouter~1deepseek-r1/model")
-                .and_then(Value::as_str),
-            Some("deepseek-r1")
+        // Must NOT contain "provider" or "model" fields.
+        assert!(
+            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1/provider")
+                .is_none()
         );
-        assert_eq!(
-            cfg.pointer("/models/providers/openrouter/baseUrl")
-                .and_then(Value::as_str),
-            Some("https://openrouter.example/v1")
+        assert!(
+            cfg.pointer("/agents/defaults/models/openrouter~1deepseek-r1/model")
+                .is_none()
         );
     }
 
