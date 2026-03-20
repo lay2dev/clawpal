@@ -49,6 +49,12 @@ RUN echo "export ANTHROPIC_API_KEY=test-anthropic-recipe-key" >> /root/.bashrc \
     && echo "export OPENAI_API_KEY=test-openai-recipe-key" >> /root/.profile \
     && echo "export PATH=/root/.local/bin:/usr/local/bin:\$PATH" >> /root/.profile
 
+# Install fast openclaw wrapper that short-circuits slow CLI commands
+# This prevents SSH probe from blocking the semaphore (SSH_OP_MAX_CONCURRENCY_PER_HOST=2)
+RUN mv $(which openclaw) /usr/bin/openclaw-real
+COPY harness/recipe-e2e/openclaw-container/seed/openclaw-wrapper.sh /usr/local/bin/openclaw
+RUN chmod +x /usr/local/bin/openclaw
+
 COPY harness/recipe-e2e/openclaw-container/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
