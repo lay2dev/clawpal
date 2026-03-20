@@ -319,7 +319,7 @@ async function enterRemoteInstance(driver) {
   // Step 4: Wait for Home page to load with remote data
   await waitForAnyText(driver, ["Status", "Agents", "Home"], 60_000);
   console.log("Waiting for remote data to load on Home page...");
-  const dataDeadline = Date.now() + 60_000;
+  const dataDeadline = Date.now() + 15_000;
   while (Date.now() < dataDeadline) {
     const body = await pageText(driver);
     if (body.includes("main") && (body.includes("anthropic") || body.includes("claude") || body.includes("Model") || body.includes("Sonnet"))) {
@@ -329,8 +329,8 @@ async function enterRemoteInstance(driver) {
     await sleep(driver, 2000);
   }
 
-  // Extra settle time for SSH pool to be fully ready
-  await sleep(driver, 3000);
+  // Brief settle time
+  await sleep(driver, 1000);
   console.log("Instance ready for recipe operations");
 }
 
