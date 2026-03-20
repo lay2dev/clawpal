@@ -335,8 +335,8 @@ async function enterRemoteInstance(driver) {
 
   // Debug: verify SSH is reachable from the test process
   try {
-    const sshTest = sshExec("echo SSH_REACHABLE && cat /root/.openclaw/openclaw.json | head -3");
-    console.log("SSH debug check:", sshTest.trim());
+    const sshTest = sshExec("echo SSH_REACHABLE && curl -s http://127.0.0.1:18789/api/status 2>&1 | head -5 && cat /root/.openclaw/openclaw.json | head -3");
+    console.log("SSH + Gateway debug check:", sshTest.trim());
   } catch (e) {
     console.log("SSH debug check FAILED:", e.message);
   }
