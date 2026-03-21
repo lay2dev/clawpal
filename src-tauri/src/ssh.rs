@@ -431,7 +431,7 @@ impl SshConnectionPool {
         let mut bytes = {
             let session = conn.session.lock().await.clone();
             let sftp_fut = session.sftp_read(&resolved);
-            match tokio::time::timeout(std::time::Duration::from_secs(15), sftp_fut).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), sftp_fut).await {
                 Ok(result) => result,
                 Err(_) => {
                     crate::commands::logs::log_dev(format!(
@@ -516,7 +516,7 @@ impl SshConnectionPool {
         let write_res = {
             let session = conn.session.lock().await.clone();
             let sftp_fut = session.sftp_write(&resolved, content.as_bytes());
-            match tokio::time::timeout(std::time::Duration::from_secs(30), sftp_fut).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), sftp_fut).await {
                 Ok(result) => result,
                 Err(_) => {
                     crate::commands::logs::log_dev(format!(
@@ -541,7 +541,7 @@ impl SshConnectionPool {
             );
             let session = conn.session.lock().await.clone();
             let exec_res = match tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(5),
                 session.exec(&write_cmd),
             ).await {
                 Ok(r) => r,
