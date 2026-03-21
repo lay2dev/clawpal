@@ -45,6 +45,7 @@ pub mod backup;
 pub mod config;
 pub mod cron;
 pub mod discover_local;
+pub mod discord;
 pub mod discovery;
 pub mod doctor;
 pub mod doctor_assistant;
@@ -77,6 +78,8 @@ pub use config::*;
 pub use cron::*;
 #[allow(unused_imports)]
 pub use discover_local::*;
+#[allow(unused_imports)]
+pub use discord::*;
 #[allow(unused_imports)]
 pub use discovery::*;
 #[allow(unused_imports)]
