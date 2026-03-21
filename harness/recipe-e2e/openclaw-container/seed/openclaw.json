@@ -26,22 +26,9 @@
         "agentDir": "/root/.openclaw/agents/main/agent",
         "identity": {
           "name": "Main Agent",
-          "emoji": "\ud83e\udd16"
+          "emoji": "🤖"
         }
       }
     ]
-  },
-  "channels": {
-    "discord": {
-      "botToken": "fake-bot-token-for-e2e",
-      "guilds": {
-        "guild-recipe-lab": {
-          "channels": {
-            "channel-support": {},
-            "channel-general": {}
-          }
-        }
-      }
-    }
   }
 }
