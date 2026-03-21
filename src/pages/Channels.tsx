@@ -191,7 +191,7 @@ export function Channels({
 
   const handleRefreshDiscord = () => {
     setRefreshing("discord");
-    ua.refreshDiscordChannelsCache()
+    ua.refreshDiscordChannelsCache(true /* force */)
       .then(() => {
         showToast?.(t('channels.discordRefreshed'), "success");
       })
@@ -368,7 +368,7 @@ export function Channels({
               </Button>
             </div>
 
-            {discordChannels === null ? (
+            {discordChannels === null || (discordGuilds.length === 0 && ua.discordChannelsLoading) ? (
               <p className="text-sm text-muted-foreground animate-pulse">{t('channels.loadingDiscord')}</p>
             ) : discordGuilds.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -381,7 +381,7 @@ export function Channels({
                     <div className="flex items-center gap-1.5 mb-2">
                       <span className="text-sm font-medium">
                         {guildName}
-                        {!discordChannelsResolved && guildName === guildId && (
+                        {!discordChannelsResolved && ua.discordChannelsLoading && guildName === guildId && (
                           <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
                         )}
                       </span>
@@ -391,7 +391,7 @@ export function Channels({
                       {channels.map((ch) => (
                         <div key={ch.channelId} className="rounded-md border px-3 py-2">
                           <div className="text-sm font-medium">
-                            {ch.channelName === ch.channelId && !discordChannelsResolved ? (
+                            {ch.channelName === ch.channelId && !discordChannelsResolved && ua.discordChannelsLoading ? (
                               <span className="text-muted-foreground font-mono text-xs">
                                 {ch.channelId}
                                 <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />

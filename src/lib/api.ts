@@ -223,8 +223,8 @@ export const api = {
     invoke("get_channels_runtime_snapshot", {}),
   listDiscordGuildChannels: (): Promise<DiscordGuildChannel[]> =>
     invoke("list_discord_guild_channels", {}),
-  refreshDiscordGuildChannels: (): Promise<DiscordGuildChannel[]> =>
-    invoke("refresh_discord_guild_channels", {}),
+  refreshDiscordGuildChannels: (forceRefresh = false): Promise<DiscordGuildChannel[]> =>
+    invoke("refresh_discord_guild_channels", { forceRefresh }),
   listDiscordGuildChannelsFast: (): Promise<DiscordGuildChannel[]> =>
     invoke("list_discord_guild_channels_fast", {}),
   restartGateway: (): Promise<boolean> =>
@@ -326,8 +326,8 @@ export const api = {
     invoke("remote_repair_primary_via_rescue", { hostId, targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null, issueIds: issueIds ?? null }),
   remoteApplyConfigPatch: (hostId: string, patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("remote_apply_config_patch", { hostId, patchTemplate, params }),
-  remoteListDiscordGuildChannels: (hostId: string): Promise<DiscordGuildChannel[]> =>
-    invoke("remote_list_discord_guild_channels", { hostId }),
+  remoteListDiscordGuildChannels: (hostId: string, forceRefresh = false): Promise<DiscordGuildChannel[]> =>
+    invoke("remote_list_discord_guild_channels", { hostId, forceRefresh }),
   remoteListDiscordGuildChannelsFast: (hostId: string): Promise<DiscordGuildChannel[]> =>
     invoke("remote_list_discord_guild_channels_fast", { hostId }),
   remoteRunDoctor: (hostId: string): Promise<DoctorReport> =>

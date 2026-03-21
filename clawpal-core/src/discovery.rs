@@ -38,7 +38,8 @@ pub fn parse_guild_channels(raw: &str) -> Result<Vec<GuildChannel>, String> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| guild_id.clone());
 
-            if let Some(channels) = guild_val.get("channels").and_then(Value::as_object) {
+            let channels = guild_val.get("channels").and_then(Value::as_object);
+            if let Some(channels) = channels {
                 for (channel_id, _) in channels {
                     if channel_id.contains('*') || channel_id.contains('?') {
                         continue;
@@ -52,6 +53,18 @@ pub fn parse_guild_channels(raw: &str) -> Result<Vec<GuildChannel>, String> {
                         guild_name: guild_name.clone(),
                         channel_id: channel_id.clone(),
                         channel_name: channel_id.clone(),
+                    });
+                }
+            } else {
+                // Guild is configured but has no explicit channel list — emit a
+                // guild-level placeholder so the Channels page can display it.
+                let key = format!("{guild_id}::{guild_id}");
+                if seen.insert(key) {
+                    out.push(GuildChannel {
+                        guild_id: guild_id.clone(),
+                        guild_name: guild_name.clone(),
+                        channel_id: guild_id.clone(),
+                        channel_name: guild_id.clone(),
                     });
                 }
             }
