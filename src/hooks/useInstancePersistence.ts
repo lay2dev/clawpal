@@ -173,8 +173,13 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
         return;
       }
 
-      setPersistenceResolved(false);
-      setPersistenceScope(null);
+      // Only show the unresolved/null transition on the first resolution for
+      // this instance.  Subsequent re-checks (e.g. triggered by the periodic
+      // registeredInstances refresh) should resolve silently so that
+      // downstream component keys don't flap and cause remounts.
+      if (!persistenceResolved) {
+        setPersistenceScope(null);
+      }
       try {
         const [exists, cliAvailable] = await Promise.all([
           api.localOpenclawConfigExists(openclawHome),
@@ -219,11 +224,11 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
   }, [activeInstance, isConnected, isRemote, persistenceResolved, persistenceScope, sshHosts]);
 
   // Set instance overrides and update instanceToken
+  const prevTokenSeedRef = useRef<string>("");
   useEffect(() => {
     let cancelled = false;
     let nextHome: string | null = null;
     let nextDataDir: string | null = null;
-    setInstanceToken(0);
     const activeRegistered = registeredInstances.find((item) => item.id === activeInstance);
     if (activeInstance === "local" || isRemote) {
       nextHome = null;
@@ -238,6 +243,15 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
       nextDataDir = activeRegistered.clawpalDataDir || null;
     }
     const tokenSeed = `${activeInstance}|${nextHome || ""}|${nextDataDir || ""}`;
+
+    // Only reset token to 0 when the seed actually changes (e.g. instance
+    // switch).  Skip the reset for no-op re-runs (e.g. periodic
+    // registeredInstances refresh with identical data).
+    const seedChanged = prevTokenSeedRef.current !== tokenSeed;
+    prevTokenSeedRef.current = tokenSeed;
+    if (seedChanged) {
+      setInstanceToken(0);
+    }
 
     const applyOverrides = async () => {
       if (nextHome === null && nextDataDir === null) {
