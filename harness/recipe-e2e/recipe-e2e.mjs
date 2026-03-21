@@ -374,6 +374,7 @@ async function runDedicatedAgent(driver) {
   await fillById(driver, "agent_id", "test-e2e-agent");
   await selectByTriggerId(driver, "model", ["Use global default"]);
   await fillById(driver, "name", "E2E Test Agent");
+  await fillById(driver, "emoji", "🧪");
   await fillById(driver, "persona", "You are a helpful test agent");
   timings.form_fill_ms = roundMs(performance.now() - fillStart);
 
