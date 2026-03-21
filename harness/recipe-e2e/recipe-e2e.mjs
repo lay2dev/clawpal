@@ -594,6 +594,18 @@ async function main() {
       } catch (error) {
         const slug = recipeRun.name.replace(/^run/, "").replace(/[A-Z]/g, (m, i) => `${i ? "-" : ""}${m.toLowerCase()}`);
         await shot(driver, "errors", slug).catch(() => {});
+        // Channel/Agent Persona Packs require Discord — skip gracefully if unavailable
+        const isDiscordRequired = ["runChannelPersonaPack", "runAgentPersonaPack"].includes(recipeRun.name);
+        if (isDiscordRequired && /guild_id|channel_id|Unable to select/.test(error.message)) {
+          console.log(`  ⚠ SKIPPED ${slug}: Discord not configured (${error.message})`);
+          report.recipes.push({
+            recipe_name: slug,
+            skipped: true,
+            reason: "Discord not configured in E2E environment",
+          });
+          writePerfReport(report);
+          continue;
+        }
         throw error;
       }
     }
