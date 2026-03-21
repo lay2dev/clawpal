@@ -1,57 +1,13 @@
-# Local mode: ClawPal + OpenClaw in the same container (no SSH)
-# Uses the same builder stage as the SSH test
-FROM ubuntu:24.04 AS builder
+# Local mode: reuse the SSH harness builder, add OpenClaw to runtime
+# This avoids rebuilding ClawPal from scratch
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/root/.cargo/bin:${PATH}"
+ARG BASE_IMAGE=clawpal-recipe-harness:latest
+FROM ${BASE_IMAGE}
 
-RUN apt-get update && apt-get install -y \
-    build-essential curl git pkg-config \
-    libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-    libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-    libglib2.0-dev librsvg2-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-RUN cargo install tauri-driver --locked
-
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm install
-COPY . .
-RUN npx @tauri-apps/cli build --no-bundle 2>&1 | tail -30
-
-FROM ubuntu:24.04 AS runtime
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV DISPLAY=:99
-ENV SCREENSHOT_DIR=/screenshots
-ENV REPORT_DIR=/report
-ENV APP_BINARY=/usr/local/bin/clawpal
 ENV RECIPE_MODE=local
 
-# Install runtime deps + OpenClaw
-RUN apt-get update && apt-get install -y \
-    xvfb xauth dbus-x11 \
-    libgtk-3-0 libwebkit2gtk-4.1-0 libsoup-3.0-0 \
-    libjavascriptcoregtk-4.1-0 gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good libgstreamer-gl1.0-0 \
-    curl ca-certificates jq \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js + OpenClaw
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g openclaw
-
-# Copy ClawPal binary and tauri-driver
-COPY --from=builder /app/src-tauri/target/release/clawpal /usr/local/bin/clawpal
-COPY --from=builder /root/.cargo/bin/tauri-driver /usr/local/bin/tauri-driver
+# Install OpenClaw (Node.js is already installed in the base image)
+RUN npm install -g openclaw 2>/dev/null || true
 
 # Seed OpenClaw config for local instance
 RUN mkdir -p /root/.openclaw/agents/main/agent /root/.openclaw/instances/openclaw-recipe-e2e/workspace
@@ -63,13 +19,8 @@ COPY harness/recipe-e2e/openclaw-container/seed/discord-guild-channels.json /roo
 # Copy recipe library
 COPY examples/recipe-library /root/.clawpal/recipe-library
 
-# Copy test harness
-COPY harness/recipe-e2e/recipe-e2e.mjs /harness/recipe-e2e.mjs
-COPY harness/recipe-e2e/mock-data/ /harness/mock-data/
+# Override entrypoint for local mode
+COPY harness/recipe-e2e/entrypoint-local.sh /entrypoint-local.sh
+RUN chmod +x /entrypoint-local.sh
 
-# Copy entrypoint
-COPY harness/recipe-e2e/entrypoint-local.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-WORKDIR /harness
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint-local.sh"]
