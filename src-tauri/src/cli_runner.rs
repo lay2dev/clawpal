@@ -2713,6 +2713,10 @@ pub async fn remote_apply_queued_commands_with_services(
             }
             Ok(_) => {
                 applied_count += 1;
+                // Re-read config after CLI commands that may have modified it
+                if let Ok(updated) = pool.sftp_read(&host_id, "~/.openclaw/openclaw.json").await {
+                    cached_cfg = serde_json::from_str(&updated).ok();
+                }
             }
         }
     }
