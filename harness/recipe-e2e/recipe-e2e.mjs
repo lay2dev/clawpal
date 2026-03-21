@@ -14,6 +14,8 @@ const SSH_PASSWORD = process.env.OPENCLAW_SSH_PASSWORD || "clawpal-recipe-e2e";
 const REMOTE_IDENTITY_MAIN = "~/.openclaw/agents/main/agent/IDENTITY.md";
 const REMOTE_CONFIG = "~/.openclaw/openclaw.json";
 const BOOT_WAIT_MS = parseInt(process.env.BOOT_WAIT_MS || "6000", 10);
+const RECIPE_MODE = process.argv.includes("--mode=local") ? "local" : "ssh";
+const IS_LOCAL = RECIPE_MODE === "local";
 const STEP_WAIT_MS = parseInt(process.env.STEP_WAIT_MS || "800", 10);
 const LONG_WAIT_MS = parseInt(process.env.LONG_WAIT_MS || "1500", 10);
 
@@ -231,6 +233,9 @@ async function clickWorkspaceCook(driver, recipeName) {
 }
 
 function sshExec(command) {
+  if (IS_LOCAL) {
+    return execFileSync("bash", ["-c", command], { encoding: "utf8", timeout: 30_000 }).trim();
+  }
   return execFileSync(
     "sshpass",
     [
@@ -256,10 +261,18 @@ function sshExec(command) {
 }
 
 function sshReadJson(remotePath) {
+  if (IS_LOCAL) {
+    const resolved = remotePath.replace(/^~/, process.env.HOME || "/root");
+    return JSON.parse(fs.readFileSync(resolved, "utf8"));
+  }
   return JSON.parse(sshExec(`cat ${remotePath}`));
 }
 
 function resetSshd() {
+  if (IS_LOCAL) {
+    console.log("  ✓ Local mode — no SSH connections to reset");
+    return;
+  }
   // Kill all SSH connections in inner container to force ClawPal to reconnect fresh
   // This prevents russh channel degradation between recipe executions
   try {
@@ -348,12 +361,21 @@ async function enterRemoteInstance(driver) {
   await sleep(driver, 1000);
   console.log("Instance ready for recipe operations");
 
-  // Debug: verify SSH is reachable from the test process
-  try {
-    const sshTest = sshExec("echo SSH_REACHABLE && curl -s http://127.0.0.1:18789/api/status 2>&1 | head -5 && cat /root/.openclaw/openclaw.json | head -3");
-    console.log("SSH + Gateway debug check:", sshTest.trim());
-  } catch (e) {
-    console.log("SSH debug check FAILED:", e.message);
+  // Debug: verify connectivity from the test process
+  if (IS_LOCAL) {
+    try {
+      const localTest = execFileSync("bash", ["-c", "echo LOCAL_OK && cat /root/.openclaw/openclaw.json | head -3"], { encoding: "utf8", timeout: 5000 });
+      console.log("Local connectivity check:", localTest.trim());
+    } catch (e) {
+      console.log("Local check FAILED:", e.message);
+    }
+  } else {
+    try {
+      const sshTest = sshExec("echo SSH_REACHABLE && curl -s http://127.0.0.1:18789/api/status 2>&1 | head -5 && cat /root/.openclaw/openclaw.json | head -3");
+      console.log("SSH + Gateway debug check:", sshTest.trim());
+    } catch (e) {
+      console.log("SSH debug check FAILED:", e.message);
+    }
   }
 }
 
@@ -576,7 +598,8 @@ async function main() {
     generated_at: new Date().toISOString(),
     app_binary: APP_BINARY,
     webdriver_url: "http://127.0.0.1:4444/",
-    ssh_target: `${SSH_USER}@${SSH_HOST}:${SSH_PORT}`,
+    mode: RECIPE_MODE,
+    ssh_target: IS_LOCAL ? "local" : `${SSH_USER}@${SSH_HOST}:${SSH_PORT}`,
     recipes: [],
   };
 

@@ -71,6 +71,37 @@ jobs:
           path: recipe-gui-e2e/screenshots/
           retention-days: 30
 
+      - name: Build local mode harness
+        if: always() && !cancelled()
+        run: |
+          docker build             -t clawpal-recipe-local:latest             -f harness/recipe-e2e/Dockerfile.local             .
+
+      - name: Run recipe GUI E2E (local mode)
+        if: always() && !cancelled()
+        run: |
+          mkdir -p recipe-gui-e2e-local/screenshots recipe-gui-e2e-local/report
+          docker run --rm             -v ${{ github.workspace }}/recipe-gui-e2e-local/screenshots:/screenshots             -v ${{ github.workspace }}/recipe-gui-e2e-local/report:/report             clawpal-recipe-local:latest
+
+      - name: Fix local permissions
+        if: always()
+        run: sudo chown -R $(id -u):$(id -g) recipe-gui-e2e-local/ 2>/dev/null || true
+
+      - name: Upload local perf report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipe-gui-e2e-local-perf-${{ github.sha }}
+          path: recipe-gui-e2e-local/report/perf-report.json
+          retention-days: 30
+
+      - name: Upload local screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recipe-gui-e2e-local-screenshots-${{ github.sha }}
+          path: recipe-gui-e2e-local/screenshots/
+          retention-days: 30
+
       - name: Generate PR perf comment
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
