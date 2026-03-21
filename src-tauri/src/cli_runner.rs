@@ -2621,12 +2621,18 @@ pub async fn remote_apply_queued_commands_with_services(
     )
     .await;
 
-    // Parse config once for all internal commands to avoid redundant SSH reads
-    let cached_cfg: Option<serde_json::Value> = serde_json::from_str(&config_before).ok();
+    // Parse config for internal commands — updated after each __config_write__
+    let mut cached_cfg: Option<serde_json::Value> = serde_json::from_str(&config_before).ok();
 
     // Execute each command
     let mut applied_count = 0;
     for cmd in &commands {
+        // Update cached config when a __config_write__ is about to execute
+        if cmd.command.first().map(|s| s.as_str()) == Some("__config_write__") {
+            if let Ok(new_content) = rollback_command_content(&cmd.command) {
+                cached_cfg = serde_json::from_str(&new_content).ok();
+            }
+        }
         match apply_internal_remote_command(&pool, &host_id, &cmd.command, cached_cfg.as_ref()).await {
             Ok(true) => {
                 applied_count += 1;
