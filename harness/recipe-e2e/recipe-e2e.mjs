@@ -382,11 +382,13 @@ async function runDedicatedAgent(driver) {
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
   await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
+  await shot(driver, slug, "review-page");
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
+  await shot(driver, slug, "after-execute-click");
   await waitForAnyText(
     driver,
-    ["Created dedicated agent E2E Test Agent (test-e2e-agent)", "Your recipe changes were applied"],
+    ["Created dedicated agent E2E Test Agent (test-e2e-agent)", "Your recipe changes were applied", "All set", "What changed", "Execution failed"],
     120_000,
   );
   timings.execution_ms = roundMs(performance.now() - executionStart);
@@ -458,8 +460,10 @@ async function runChannelPersonaPack(driver) {
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
   await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
+  await shot(driver, slug, "review-page");
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
+  await shot(driver, slug, "after-execute-click");
   await waitForAnyText(
     driver,
     ["Updated persona for channel channel-support", "Your recipe changes were applied"],
@@ -517,8 +521,10 @@ async function runAgentPersonaPack(driver) {
   const executionStart = performance.now();
   await clickButtonText(driver, ["Next"], 10_000);
   await waitForAnyText(driver, ["Review what this recipe will do", "Planned changes", "change(s) to make", "Resolve auth"], 120_000);
+  await shot(driver, slug, "review-page");
   await maybeApprove(driver);
   await clickButtonText(driver, ["Execute"], 10_000);
+  await shot(driver, slug, "after-execute-click");
   await waitForAnyText(
     driver,
     ["Updated persona for agent main", "Your recipe changes were applied"],
