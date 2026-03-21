@@ -31,7 +31,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 RUN npm install -g openclaw@latest
 
-RUN mkdir -p \
+RUN mkdir -p /root/.clawpal/snapshots \
+    /root/.clawpal \
     /root/.openclaw/agents/main/agent \
     /root/.openclaw/agents/test-e2e-agent/agent \
     /root/.openclaw/instances/openclaw-recipe-e2e/workspace
