@@ -1744,6 +1744,7 @@ async fn apply_internal_remote_command(
     pool: &SshConnectionPool,
     host_id: &str,
     command: &[String],
+    cached_config: Option<&serde_json::Value>,
 ) -> Result<bool, String> {
     fn content(command: &[String]) -> Result<String, String> {
         rollback_command_content(command)
@@ -1765,13 +1766,14 @@ async fn apply_internal_remote_command(
                 .get("agentId")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
-            crate::agent_identity::write_remote_agent_identity(
+            crate::agent_identity::write_remote_agent_identity_with_config(
                 pool,
                 host_id,
                 agent_id,
                 payload.get("name").and_then(serde_json::Value::as_str),
                 payload.get("emoji").and_then(serde_json::Value::as_str),
                 payload.get("persona").and_then(serde_json::Value::as_str),
+                cached_config,
             )
             .await?;
             Ok(true)
@@ -1811,7 +1813,7 @@ async fn apply_internal_remote_command(
                     .get("persona")
                     .and_then(serde_json::Value::as_str)
                     .ok_or_else(|| "agent persona command missing persona".to_string())?;
-                crate::agent_identity::set_remote_agent_persona(pool, host_id, agent_id, persona)
+                crate::agent_identity::set_remote_agent_persona_with_config(pool, host_id, agent_id, persona, cached_config)
                     .await?;
             }
             Ok(true)
@@ -2619,10 +2621,13 @@ pub async fn remote_apply_queued_commands_with_services(
     )
     .await;
 
+    // Parse config once for all internal commands to avoid redundant SSH reads
+    let cached_cfg: Option<serde_json::Value> = serde_json::from_str(&config_before).ok();
+
     // Execute each command
     let mut applied_count = 0;
     for cmd in &commands {
-        match apply_internal_remote_command(&pool, &host_id, &cmd.command).await {
+        match apply_internal_remote_command(&pool, &host_id, &cmd.command, cached_cfg.as_ref()).await {
             Ok(true) => {
                 applied_count += 1;
                 continue;

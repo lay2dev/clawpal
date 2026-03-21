@@ -323,7 +323,7 @@ async fn resolve_remote_identity_path(
     host_id: &str,
     cfg: &Value,
     agent_id: &str,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     let fallback_root = "~/.openclaw/agents";
     let candidate_dirs = resolve_identity_dir_candidates(cfg, agent_id, Some(fallback_root))?;
     let candidate_dirs: Vec<String> = candidate_dirs
@@ -334,7 +334,7 @@ async fn resolve_remote_identity_path(
     for dir in &candidate_dirs {
         let identity_path = format!("{dir}/IDENTITY.md");
         match pool.sftp_read(host_id, &identity_path).await {
-            Ok(_) => return Ok(identity_path),
+            Ok(text) => return Ok((identity_path, Some(text))),
             Err(error) if error.contains("No such file") || error.contains("not found") => continue,
             Err(error) => return Err(error),
         }
@@ -355,7 +355,7 @@ async fn resolve_remote_identity_path(
         .or_else(|| Some(format!("{fallback_root}/{agent_id}/agent")));
 
     create_dir
-        .map(|dir| format!("{}/IDENTITY.md", normalize_remote_dir(&dir)))
+        .map(|dir| (format!("{}/IDENTITY.md", normalize_remote_dir(&dir)), None))
         .ok_or_else(|| format!("Agent '{}' has no identity path candidates", agent_id))
 }
 
@@ -405,13 +405,32 @@ pub async fn write_remote_agent_identity(
     emoji: Option<&str>,
     persona: Option<&str>,
 ) -> Result<(), String> {
-    let (_config_path, _raw, cfg) =
-        crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
-            .await
-            .map_err(|error| format!("Failed to parse config: {error}"))?;
+    self::write_remote_agent_identity_with_config(pool, host_id, agent_id, name, emoji, persona, None).await
+}
 
-    let identity_path = resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
-    let defaults = resolve_identity_defaults(&cfg, agent_id)?;
+pub async fn write_remote_agent_identity_with_config(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    agent_id: &str,
+    name: Option<&str>,
+    emoji: Option<&str>,
+    persona: Option<&str>,
+    cached_config: Option<&Value>,
+) -> Result<(), String> {
+    let owned_cfg;
+    let cfg = if let Some(c) = cached_config {
+        c
+    } else {
+        let (_config_path, _raw, c) =
+            crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
+                .await
+                .map_err(|error| format!("Failed to parse config: {error}"))?;
+        owned_cfg = c;
+        &owned_cfg
+    };
+
+    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
+    let defaults = resolve_identity_defaults(cfg, agent_id)?;
     let remote_workspace = identity_path
         .strip_suffix("/IDENTITY.md")
         .ok_or_else(|| "Failed to resolve remote identity directory".to_string())?;
@@ -420,11 +439,6 @@ pub async fn write_remote_agent_identity(
         &format!("mkdir -p {}", shell_escape(&remote_workspace)),
     )
     .await?;
-    let existing = match pool.sftp_read(host_id, &identity_path).await {
-        Ok(text) => Some(text),
-        Err(error) if error.contains("No such file") || error.contains("not found") => None,
-        Err(error) => return Err(error),
-    };
     pool.sftp_write(
         host_id,
         &identity_path,
@@ -503,13 +517,30 @@ pub async fn set_remote_agent_persona(
     agent_id: &str,
     persona: &str,
 ) -> Result<(), String> {
-    let (_config_path, _raw, cfg) =
-        crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
-            .await
-            .map_err(|error| format!("Failed to parse config: {error}"))?;
-    let identity_path = resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
-    let explicit_defaults = resolve_identity_explicit_defaults(&cfg, agent_id)?;
-    let defaults = resolve_identity_defaults(&cfg, agent_id)?;
+    self::set_remote_agent_persona_with_config(pool, host_id, agent_id, persona, None).await
+}
+
+pub async fn set_remote_agent_persona_with_config(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    agent_id: &str,
+    persona: &str,
+    cached_config: Option<&Value>,
+) -> Result<(), String> {
+    let owned_cfg;
+    let cfg = if let Some(c) = cached_config {
+        c
+    } else {
+        let (_config_path, _raw, c) =
+            crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
+                .await
+                .map_err(|error| format!("Failed to parse config: {error}"))?;
+        owned_cfg = c;
+        &owned_cfg
+    };
+    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
+    let explicit_defaults = resolve_identity_explicit_defaults(cfg, agent_id)?;
+    let defaults = resolve_identity_defaults(cfg, agent_id)?;
     let remote_workspace = identity_path
         .strip_suffix("/IDENTITY.md")
         .ok_or_else(|| "Failed to resolve remote identity directory".to_string())?;
@@ -518,11 +549,6 @@ pub async fn set_remote_agent_persona(
         &format!("mkdir -p {}", shell_escape(remote_workspace)),
     )
     .await?;
-    let existing = match pool.sftp_read(host_id, &identity_path).await {
-        Ok(text) => Some(text),
-        Err(error) if error.contains("No such file") || error.contains("not found") => None,
-        Err(error) => return Err(error),
-    };
     pool.sftp_write(
         host_id,
         &identity_path,
@@ -548,7 +574,7 @@ pub async fn clear_remote_agent_persona(
         crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
             .await
             .map_err(|error| format!("Failed to parse config: {error}"))?;
-    let identity_path = resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
+    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
     let explicit_defaults = resolve_identity_explicit_defaults(&cfg, agent_id)?;
     let defaults = resolve_identity_defaults(&cfg, agent_id)?;
     let remote_workspace = identity_path
@@ -559,11 +585,6 @@ pub async fn clear_remote_agent_persona(
         &format!("mkdir -p {}", shell_escape(remote_workspace)),
     )
     .await?;
-    let existing = match pool.sftp_read(host_id, &identity_path).await {
-        Ok(text) => Some(text),
-        Err(error) if error.contains("No such file") || error.contains("not found") => None,
-        Err(error) => return Err(error),
-    };
     pool.sftp_write(
         host_id,
         &identity_path,
