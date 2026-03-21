@@ -97,18 +97,50 @@ describe("cook execution helpers", () => {
     expect(request.spec.target).toEqual({ kind: "local" });
   });
 
-  test("maps planning stages to determinate progress values", () => {
+  test("maps planning stages without marking in-flight checks as 100 percent", () => {
     expect(getCookPlanningProgress("validate")).toEqual({
-      value: 20,
+      value: 15,
       labelKey: "cook.progressValidate",
+      labelArgs: undefined,
+      animated: true,
     });
     expect(getCookPlanningProgress("build")).toEqual({
-      value: 70,
+      value: 52,
       labelKey: "cook.progressBuild",
+      labelArgs: undefined,
+      animated: true,
     });
-    expect(getCookPlanningProgress("checks")).toEqual({
-      value: 100,
-      labelKey: "cook.progressChecks",
+    expect(
+      getCookPlanningProgress("checks", {
+        authRequired: true,
+        configRequired: true,
+        completedCount: 0,
+        totalCount: 2,
+      }),
+    ).toEqual({
+      value: 74,
+      labelKey: "cook.progressChecksBoth",
+      labelArgs: {
+        complete: 0,
+        total: 2,
+      },
+      animated: true,
+    });
+    expect(
+      getCookPlanningProgress("checks", {
+        authRequired: true,
+        configRequired: true,
+        completedCount: 1,
+        totalCount: 2,
+      }),
+    ).toEqual({
+      value: 83,
+      labelKey: "cook.progressChecksBoth",
+      labelArgs: {
+        complete: 1,
+        total: 2,
+      },
+      animated: true,
     });
   });
 

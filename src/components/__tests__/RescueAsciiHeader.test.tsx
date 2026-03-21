@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import doctorImage from "@/assets/doctor.png";
+import doctorImage from "@/assets/doctor.webp";
 import { RescueAsciiHeader } from "../RescueAsciiHeader";
 
 describe("RescueAsciiHeader", () => {

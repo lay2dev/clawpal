@@ -41,21 +41,41 @@ impl DiscordIdCache {
     /// Return a cached guild name if it exists and is within TTL.
     pub fn get_guild_name(&self, guild_id: &str, now: u64, force: bool) -> Option<&str> {
         let entry = self.guilds.get(guild_id)?;
-        if Self::is_fresh(entry, now, force) { Some(&entry.name) } else { None }
+        if Self::is_fresh(entry, now, force) {
+            Some(&entry.name)
+        } else {
+            None
+        }
     }
 
     /// Return a cached channel name if it exists and is within TTL.
     pub fn get_channel_name(&self, channel_id: &str, now: u64, force: bool) -> Option<&str> {
         let entry = self.channels.get(channel_id)?;
-        if Self::is_fresh(entry, now, force) { Some(&entry.name) } else { None }
+        if Self::is_fresh(entry, now, force) {
+            Some(&entry.name)
+        } else {
+            None
+        }
     }
 
     pub fn put_guild(&mut self, guild_id: String, name: String, now: u64) {
-        self.guilds.insert(guild_id, CachedIdEntry { name, cached_at: now });
+        self.guilds.insert(
+            guild_id,
+            CachedIdEntry {
+                name,
+                cached_at: now,
+            },
+        );
     }
 
     pub fn put_channel(&mut self, channel_id: String, name: String, now: u64) {
-        self.channels.insert(channel_id, CachedIdEntry { name, cached_at: now });
+        self.channels.insert(
+            channel_id,
+            CachedIdEntry {
+                name,
+                cached_at: now,
+            },
+        );
     }
 }
 
@@ -323,7 +343,10 @@ mod discord_directory_parse_tests {
         let mut cache = DiscordIdCache::default();
         let now = 1_000_000u64;
         cache.put_guild("g1".into(), "My Guild".into(), now);
-        assert_eq!(cache.get_guild_name("g1", now + 60, false), Some("My Guild"));
+        assert_eq!(
+            cache.get_guild_name("g1", now + 60, false),
+            Some("My Guild")
+        );
     }
 
     #[test]
@@ -349,7 +372,10 @@ mod discord_directory_parse_tests {
         let mut cache = DiscordIdCache::default();
         let now = 1_000_000u64;
         cache.put_channel("c1".into(), "general".into(), now);
-        assert_eq!(cache.get_channel_name("c1", now + 10, false), Some("general"));
+        assert_eq!(
+            cache.get_channel_name("c1", now + 10, false),
+            Some("general")
+        );
         let stale = now + DISCORD_ID_CACHE_TTL_SECS + 1;
         assert_eq!(cache.get_channel_name("c1", stale, false), None);
     }
@@ -362,8 +388,14 @@ mod discord_directory_parse_tests {
         cache.put_channel("c1".into(), "general".into(), now);
         let json = cache.to_json();
         let loaded = DiscordIdCache::from_str(&json);
-        assert_eq!(loaded.get_guild_name("g1", now + 1, false), Some("Guild One"));
-        assert_eq!(loaded.get_channel_name("c1", now + 1, false), Some("general"));
+        assert_eq!(
+            loaded.get_guild_name("g1", now + 1, false),
+            Some("Guild One")
+        );
+        assert_eq!(
+            loaded.get_channel_name("c1", now + 1, false),
+            Some("general")
+        );
     }
 
     #[test]

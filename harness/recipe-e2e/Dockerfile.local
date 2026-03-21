@@ -1,0 +1,26 @@
+# Local mode: reuse the SSH harness builder, add OpenClaw to runtime
+# This avoids rebuilding ClawPal from scratch
+
+ARG BASE_IMAGE=clawpal-recipe-harness:latest
+FROM ${BASE_IMAGE}
+
+ENV RECIPE_MODE=local
+
+# Install OpenClaw (Node.js is already installed in the base image)
+RUN npm install -g openclaw 2>/dev/null || true
+
+# Seed OpenClaw config for local instance
+RUN mkdir -p /root/.openclaw/agents/main/agent /root/.openclaw/instances/openclaw-recipe-e2e/workspace
+COPY harness/recipe-e2e/openclaw-container/seed/openclaw.json /root/.openclaw/openclaw.json
+COPY harness/recipe-e2e/openclaw-container/seed/model-profiles.json /root/.openclaw/model-profiles.json
+COPY harness/recipe-e2e/openclaw-container/seed/auth-profiles.json /root/.openclaw/auth-profiles.json
+COPY harness/recipe-e2e/openclaw-container/seed/discord-guild-channels.json /root/.openclaw/discord-guild-channels.json
+
+# Copy recipe library
+COPY examples/recipe-library /root/.clawpal/recipe-library
+
+# Override entrypoint for local mode
+COPY harness/recipe-e2e/entrypoint-local.sh /entrypoint-local.sh
+RUN chmod +x /entrypoint-local.sh
+
+ENTRYPOINT ["/entrypoint-local.sh"]

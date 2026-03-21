@@ -28,7 +28,6 @@ fn extract_discord_bot_token(discord_cfg: Option<&Value>) -> Option<String> {
                 })
         })
 }
-
 fn discord_sections_from_openclaw_config(cfg: &Value) -> (Value, Value) {
     let discord_section = cfg
         .pointer("/channels/discord")
@@ -102,16 +101,17 @@ pub async fn remote_list_discord_guild_channels(
     // The openclaw CLI schema validator may strip 'guilds'/'botToken' from the
     // discord section even on exit_code 0.  Fall back to raw SFTP config read
     // whenever the CLI output lacks guilds/accounts so we don't miss channels.
-    let cli_has_discord = cli_discord.get("guilds").is_some()
-        || cli_discord.get("accounts").is_some();
-    let config_fallback = if cli_has_discord && output.exit_code == 0 && bindings_output.exit_code == 0 {
-        None
-    } else {
-        remote_read_openclaw_config_text_and_json(&pool, &host_id)
-            .await
-            .ok()
-            .map(|(_, _, cfg)| cfg)
-    };
+    let cli_has_discord =
+        cli_discord.get("guilds").is_some() || cli_discord.get("accounts").is_some();
+    let config_fallback =
+        if cli_has_discord && output.exit_code == 0 && bindings_output.exit_code == 0 {
+            None
+        } else {
+            remote_read_openclaw_config_text_and_json(&pool, &host_id)
+                .await
+                .ok()
+                .map(|(_, _, cfg)| cfg)
+        };
     let (fallback_discord_section, fallback_bindings_section) = config_fallback
         .as_ref()
         .map(discord_sections_from_openclaw_config)
@@ -122,8 +122,7 @@ pub async fn remote_list_discord_guild_channels(
         fallback_discord_section
     };
     let bindings_section = if bindings_output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&bindings_output)
-            .unwrap_or(fallback_bindings_section)
+        crate::cli_runner::parse_json_output(&bindings_output).unwrap_or(fallback_bindings_section)
     } else {
         fallback_bindings_section
     };
@@ -288,7 +287,9 @@ pub async fn remote_list_discord_guild_channels(
         // Apply cached channel names immediately.
         for entry in &mut entries {
             if entry.channel_name == entry.channel_id {
-                if let Some(name) = id_cache.get_channel_name(&entry.channel_id, now_secs, force_refresh) {
+                if let Some(name) =
+                    id_cache.get_channel_name(&entry.channel_id, now_secs, force_refresh)
+                {
                     entry.channel_name = name.to_string();
                 }
             }
@@ -296,7 +297,11 @@ pub async fn remote_list_discord_guild_channels(
         // Collect IDs that still need CLI resolution.
         let uncached_ids: Vec<String> = channel_ids
             .iter()
-            .filter(|id| id_cache.get_channel_name(id, now_secs, force_refresh).is_none())
+            .filter(|id| {
+                id_cache
+                    .get_channel_name(id, now_secs, force_refresh)
+                    .is_none()
+            })
             .cloned()
             .collect();
         if !uncached_ids.is_empty() {
@@ -311,7 +316,11 @@ pub async fn remote_list_discord_guild_channels(
                         for entry in &mut entries {
                             if let Some(name) = name_map.get(&entry.channel_id) {
                                 entry.channel_name = name.clone();
-                                id_cache.put_channel(entry.channel_id.clone(), name.clone(), now_secs);
+                                id_cache.put_channel(
+                                    entry.channel_id.clone(),
+                                    name.clone(),
+                                    now_secs,
+                                );
                             }
                         }
                     }
@@ -332,14 +341,22 @@ pub async fn remote_list_discord_guild_channels(
                                         if entry.channel_id == *channel_id {
                                             if let Some(name) = name_map.get(channel_id) {
                                                 entry.channel_name = name.clone();
-                                                id_cache.put_channel(channel_id.clone(), name.clone(), now_secs);
+                                                id_cache.put_channel(
+                                                    channel_id.clone(),
+                                                    name.clone(),
+                                                    now_secs,
+                                                );
                                             }
                                         }
                                     }
                                 }
                             } else {
-                                eprintln!("[discord] channels resolve single {} exit={} stderr={:?}",
-                                    channel_id, sr.exit_code, sr.stderr.trim());
+                                eprintln!(
+                                    "[discord] channels resolve single {} exit={} stderr={:?}",
+                                    channel_id,
+                                    sr.exit_code,
+                                    sr.stderr.trim()
+                                );
                             }
                         }
                     }
@@ -369,7 +386,9 @@ pub async fn remote_list_discord_guild_channels(
         // Apply already-cached names.
         for entry in &mut entries {
             if entry.guild_name == entry.guild_id {
-                if let Some(name) = id_cache.get_guild_name(&entry.guild_id, now_secs, force_refresh) {
+                if let Some(name) =
+                    id_cache.get_guild_name(&entry.guild_id, now_secs, force_refresh)
+                {
                     entry.guild_name = name.to_string();
                 }
             }
@@ -378,7 +397,11 @@ pub async fn remote_list_discord_guild_channels(
         // Fetch from Discord REST for guilds still unresolved after cache check.
         let needs_rest: Vec<String> = unresolved
             .into_iter()
-            .filter(|gid| id_cache.get_guild_name(gid, now_secs, force_refresh).is_none())
+            .filter(|gid| {
+                id_cache
+                    .get_guild_name(gid, now_secs, force_refresh)
+                    .is_none()
+            })
             .collect();
 
         if let Some(token) = bot_token {
@@ -752,16 +775,17 @@ pub async fn remote_list_discord_guild_channels_fast(
     } else {
         Value::Null
     };
-    let cli_has_discord = cli_discord.get("guilds").is_some()
-        || cli_discord.get("accounts").is_some();
-    let config_fallback = if cli_has_discord && output.exit_code == 0 && bindings_output.exit_code == 0 {
-        None
-    } else {
-        remote_read_openclaw_config_text_and_json(&pool, &host_id)
-            .await
-            .ok()
-            .map(|(_, _, cfg)| cfg)
-    };
+    let cli_has_discord =
+        cli_discord.get("guilds").is_some() || cli_discord.get("accounts").is_some();
+    let config_fallback =
+        if cli_has_discord && output.exit_code == 0 && bindings_output.exit_code == 0 {
+            None
+        } else {
+            remote_read_openclaw_config_text_and_json(&pool, &host_id)
+                .await
+                .ok()
+                .map(|(_, _, cfg)| cfg)
+        };
     let (fallback_discord_section, fallback_bindings_section) = config_fallback
         .as_ref()
         .map(discord_sections_from_openclaw_config)
@@ -772,8 +796,7 @@ pub async fn remote_list_discord_guild_channels_fast(
         fallback_discord_section
     };
     let bindings_section = if bindings_output.exit_code == 0 {
-        crate::cli_runner::parse_json_output(&bindings_output)
-            .unwrap_or(fallback_bindings_section)
+        crate::cli_runner::parse_json_output(&bindings_output).unwrap_or(fallback_bindings_section)
     } else {
         fallback_bindings_section
     };
@@ -868,7 +891,10 @@ pub async fn refresh_discord_guild_channels(
         // TTL gate: return cached data if it is fresh and caller did not force a refresh.
         if !force_refresh && cache_file.exists() {
             if let Ok(meta) = fs::metadata(&cache_file) {
-                if let Ok(elapsed) = meta.modified().and_then(|m| m.elapsed().map_err(|e| std::io::Error::other(e.to_string()))) {
+                if let Ok(elapsed) = meta.modified().and_then(|m| {
+                    m.elapsed()
+                        .map_err(|e| std::io::Error::other(e.to_string()))
+                }) {
                     if elapsed.as_secs() < DISCORD_CACHE_TTL_SECS {
                         let text = fs::read_to_string(&cache_file).unwrap_or_default();
                         let entries: Vec<DiscordGuildChannel> =
@@ -1090,23 +1116,28 @@ pub async fn refresh_discord_guild_channels(
 
         // Load id→name cache to avoid repeated network requests for known IDs.
         let id_cache_path = paths.clawpal_dir.join("discord-id-cache.json");
-        let mut id_cache = DiscordIdCache::from_str(
-            &fs::read_to_string(&id_cache_path).unwrap_or_default(),
-        );
+        let mut id_cache =
+            DiscordIdCache::from_str(&fs::read_to_string(&id_cache_path).unwrap_or_default());
         let now_secs = unix_now_secs();
 
         // Resolve channel names: apply id cache first, then call CLI for misses.
         {
             for entry in &mut entries {
                 if entry.channel_name == entry.channel_id {
-                    if let Some(name) = id_cache.get_channel_name(&entry.channel_id, now_secs, force_refresh) {
+                    if let Some(name) =
+                        id_cache.get_channel_name(&entry.channel_id, now_secs, force_refresh)
+                    {
                         entry.channel_name = name.to_string();
                     }
                 }
             }
             let uncached_ids: Vec<String> = channel_ids
                 .iter()
-                .filter(|id| id_cache.get_channel_name(id, now_secs, force_refresh).is_none())
+                .filter(|id| {
+                    id_cache
+                        .get_channel_name(id, now_secs, force_refresh)
+                        .is_none()
+                })
                 .cloned()
                 .collect();
             if !uncached_ids.is_empty() {
@@ -1126,7 +1157,11 @@ pub async fn refresh_discord_guild_channels(
                         for entry in &mut entries {
                             if let Some(name) = name_map.get(&entry.channel_id) {
                                 entry.channel_name = name.clone();
-                                id_cache.put_channel(entry.channel_id.clone(), name.clone(), now_secs);
+                                id_cache.put_channel(
+                                    entry.channel_id.clone(),
+                                    name.clone(),
+                                    now_secs,
+                                );
                             }
                         }
                     }
@@ -1147,7 +1182,9 @@ pub async fn refresh_discord_guild_channels(
             // Apply already-cached names.
             for entry in &mut entries {
                 if entry.guild_name == entry.guild_id {
-                    if let Some(name) = id_cache.get_guild_name(&entry.guild_id, now_secs, force_refresh) {
+                    if let Some(name) =
+                        id_cache.get_guild_name(&entry.guild_id, now_secs, force_refresh)
+                    {
                         entry.guild_name = name.to_string();
                     }
                 }
@@ -1156,7 +1193,11 @@ pub async fn refresh_discord_guild_channels(
             // Fetch from Discord REST for guilds still unresolved after cache check.
             let needs_rest: Vec<String> = unresolved
                 .into_iter()
-                .filter(|gid| id_cache.get_guild_name(gid, now_secs, force_refresh).is_none())
+                .filter(|gid| {
+                    id_cache
+                        .get_guild_name(gid, now_secs, force_refresh)
+                        .is_none()
+                })
                 .collect();
             if let Some(token) = &bot_token {
                 if !needs_rest.is_empty() {
@@ -1331,13 +1372,19 @@ mod tests {
     #[test]
     fn extract_bot_token_from_top_level_bot_token_field() {
         let cfg = json!({ "botToken": "token-abc" });
-        assert_eq!(extract_discord_bot_token(Some(&cfg)).as_deref(), Some("token-abc"));
+        assert_eq!(
+            extract_discord_bot_token(Some(&cfg)).as_deref(),
+            Some("token-abc")
+        );
     }
 
     #[test]
     fn extract_bot_token_from_top_level_token_field() {
         let cfg = json!({ "token": "token-xyz" });
-        assert_eq!(extract_discord_bot_token(Some(&cfg)).as_deref(), Some("token-xyz"));
+        assert_eq!(
+            extract_discord_bot_token(Some(&cfg)).as_deref(),
+            Some("token-xyz")
+        );
     }
 
     #[test]
@@ -1347,7 +1394,10 @@ mod tests {
                 "acct1": { "token": "acct-token" }
             }
         });
-        assert_eq!(extract_discord_bot_token(Some(&cfg)).as_deref(), Some("acct-token"));
+        assert_eq!(
+            extract_discord_bot_token(Some(&cfg)).as_deref(),
+            Some("acct-token")
+        );
     }
 
     #[test]
@@ -1358,7 +1408,10 @@ mod tests {
                 "acct2": { "token": "real-token" }
             }
         });
-        assert_eq!(extract_discord_bot_token(Some(&cfg)).as_deref(), Some("real-token"));
+        assert_eq!(
+            extract_discord_bot_token(Some(&cfg)).as_deref(),
+            Some("real-token")
+        );
     }
 
     #[test]

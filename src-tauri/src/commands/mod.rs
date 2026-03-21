@@ -1,3 +1,27 @@
+/// Macro for wrapping synchronous command bodies with timing.
+/// Uses a closure to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_sync {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = (|| $body)();
+        let __elapsed_us = __start.elapsed().as_micros() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_us);
+        __result
+    }};
+}
+
+/// Macro for wrapping async command bodies with timing.
+/// Uses an async block to capture `?` early-returns so timing is always recorded.
+macro_rules! timed_async {
+    ($name:expr, $body:block) => {{
+        let __start = std::time::Instant::now();
+        let __result = async $body.await;
+        let __elapsed_us = __start.elapsed().as_micros() as u64;
+        crate::commands::perf::record_timing($name, __elapsed_us);
+        __result
+    }};
+}
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -39,13 +63,19 @@ use clawpal_core::ssh::diagnostic::{
     from_any_error, SshDiagnosticReport, SshDiagnosticStatus, SshErrorCode, SshIntent, SshStage,
 };
 
+pub mod channels;
+pub mod cli;
+pub mod credentials;
+pub mod discord;
+pub mod perf;
+pub mod version;
+
 pub mod agent;
 pub mod app_logs;
 pub mod backup;
 pub mod config;
 pub mod cron;
 pub mod discover_local;
-pub mod discord;
 pub mod discovery;
 pub mod doctor;
 pub mod doctor_assistant;
@@ -73,13 +103,19 @@ pub use app_logs::*;
 #[allow(unused_imports)]
 pub use backup::*;
 #[allow(unused_imports)]
+pub use channels::*;
+#[allow(unused_imports)]
+pub use cli::*;
+#[allow(unused_imports)]
 pub use config::*;
+#[allow(unused_imports)]
+pub use credentials::*;
 #[allow(unused_imports)]
 pub use cron::*;
 #[allow(unused_imports)]
-pub use discover_local::*;
-#[allow(unused_imports)]
 pub use discord::*;
+#[allow(unused_imports)]
+pub use discover_local::*;
 #[allow(unused_imports)]
 pub use discovery::*;
 #[allow(unused_imports)]
@@ -96,6 +132,8 @@ pub use logs::*;
 pub use model::*;
 #[allow(unused_imports)]
 pub use overview::*;
+#[allow(unused_imports)]
+pub use perf::*;
 #[allow(unused_imports)]
 pub use precheck::*;
 #[allow(unused_imports)]
@@ -114,6 +152,8 @@ pub use ssh::*;
 pub use upgrade::*;
 #[allow(unused_imports)]
 pub use util::*;
+#[allow(unused_imports)]
+pub use version::*;
 #[allow(unused_imports)]
 pub use watchdog::*;
 #[allow(unused_imports)]
@@ -423,7 +463,7 @@ pub struct SessionFile {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAnalysis {
     pub agent: String,
@@ -441,7 +481,7 @@ pub struct SessionAnalysis {
     pub kind: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionAnalysis {
     pub agent: String,
@@ -1785,6 +1825,7 @@ fn append_config_patch_commands(
 fn channel_persona_patch(
     channel_type: &str,
     guild_id: Option<&str>,
+    account_id: Option<&str>,
     peer_id: &str,
     persona: &str,
 ) -> Result<Value, String> {
@@ -1796,14 +1837,25 @@ fn channel_persona_patch(
                 .ok_or_else(|| {
                     "set_channel_persona requires guildId for discord channels".to_string()
                 })?;
+            // The openclaw config schema nests guilds under
+            // channels.discord.accounts.<account>.guilds, not under a
+            // top-level channels.discord.guilds key.
+            let account_id = account_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default");
             Ok(json!({
                 "channels": {
                     "discord": {
-                        "guilds": {
-                            guild_id: {
-                                "channels": {
-                                    peer_id: {
-                                        "systemPrompt": persona,
+                        "accounts": {
+                            account_id: {
+                                "guilds": {
+                                    guild_id: {
+                                        "channels": {
+                                            peer_id: {
+                                                "systemPrompt": persona,
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1817,6 +1869,23 @@ fn channel_persona_patch(
             other
         )),
     }
+}
+
+/// Find which discord account owns a given guild_id by reading the config.
+fn resolve_discord_account_for_guild(guild_id: &str) -> Option<String> {
+    let paths = resolve_paths();
+    let cfg = crate::config_io::read_openclaw_config(&paths).ok()?;
+    let accounts = cfg
+        .pointer("/channels/discord/accounts")
+        .and_then(Value::as_object)?;
+    for (account_name, account_val) in accounts {
+        if let Some(guilds) = account_val.get("guilds").and_then(Value::as_object) {
+            if guilds.contains_key(guild_id) {
+                return Some(account_name.clone());
+            }
+        }
+    }
+    None
 }
 
 fn rewrite_binding_entries(
@@ -2372,8 +2441,25 @@ async fn materialize_recipe_action_commands(
             let persona = action_content_string(args.get("persona"))
                 .ok_or_else(|| "set_channel_persona requires persona".to_string())?;
             let guild_id = action_string(args.get("guildId"));
-            let patch =
-                channel_persona_patch(&channel_type, guild_id.as_deref(), &peer_id, &persona)?;
+            let account_id = action_string(args.get("accountId")).or_else(|| {
+                // Only resolve from local config when executing locally —
+                // remote hosts have different configs, so the lookup would
+                // return the wrong account.
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
+            });
+            let patch = channel_persona_patch(
+                &channel_type,
+                guild_id.as_deref(),
+                account_id.as_deref(),
+                &peer_id,
+                &persona,
+            )?;
             let mut commands = Vec::new();
             append_config_patch_commands(&patch, "", &mut commands)?;
             Ok(commands)
@@ -2384,7 +2470,22 @@ async fn materialize_recipe_action_commands(
             let peer_id = action_string(args.get("peerId"))
                 .ok_or_else(|| "clear_channel_persona requires peerId".to_string())?;
             let guild_id = action_string(args.get("guildId"));
-            let patch = channel_persona_patch(&channel_type, guild_id.as_deref(), &peer_id, "")?;
+            let account_id = action_string(args.get("accountId")).or_else(|| {
+                if route.target_kind == "local" || route.target_kind == "docker_local" {
+                    guild_id
+                        .as_deref()
+                        .and_then(resolve_discord_account_for_guild)
+                } else {
+                    None
+                }
+            });
+            let patch = channel_persona_patch(
+                &channel_type,
+                guild_id.as_deref(),
+                account_id.as_deref(),
+                &peer_id,
+                "",
+            )?;
             let mut commands = Vec::new();
             append_config_patch_commands(&patch, "", &mut commands)?;
             Ok(commands)
@@ -2893,8 +2994,7 @@ mod recipe_action_materializer_tests {
                     && command[0] == "openclaw"
                     && command[1] == "config"
                     && command[2] == "set"
-                    && command[3]
-                        == "channels.discord.guilds.guild-1.channels.channel-1.systemPrompt"
+                    && command[3].ends_with(".guilds.guild-1.channels.channel-1.systemPrompt")
             })
             .map(|(_, command)| command[4].clone())
             .expect("systemPrompt config set command");
@@ -10915,7 +11015,7 @@ fn resolve_full_api_key(profile_id: String) -> Result<String, String> {
 
 // ---- Backup / Restore ----
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub name: String,

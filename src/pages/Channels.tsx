@@ -76,7 +76,12 @@ export function Channels({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { discordChannelsResolved } = useInstance();
+  const {
+    discordChannelsResolved,
+    agents: sharedAgents,
+    setAgentsCache,
+    modelProfiles: sharedModelProfiles,
+  } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<ChannelsConfigSnapshot>(ua.persistenceScope, "getChannelsConfigSnapshot", []) ?? null
@@ -93,17 +98,10 @@ export function Channels({
     () => buildInitialChannelsState(persistedConfigSnapshot, persistedRuntimeSnapshot),
     [persistedConfigSnapshot, persistedRuntimeSnapshot],
   );
-  const [agents, setAgents] = useState<AgentOverview[]>(() => {
-    if (initialChannelsState.agents.length > 0) return initialChannelsState.agents;
-    // Fall back to persisted listAgents cache for instant agent dropdown
-    if (ua.persistenceResolved && ua.persistenceScope) {
-      return readPersistedReadCache<AgentOverview[]>(ua.persistenceScope, "listAgents", []) ?? [];
-    }
-    return [];
-  });
+  const agents = sharedAgents ?? initialChannelsState.agents;
   const [bindings, setBindings] = useState<Binding[]>(() => initialChannelsState.bindings);
   const [channelNodes, setChannelNodes] = useState<ChannelNode[]>(() => initialChannelsState.channels);
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const modelProfiles = sharedModelProfiles ?? [];
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [channelsLoaded, setChannelsLoaded] = useState(() => initialChannelsState.loaded);
@@ -142,13 +140,13 @@ export function Channels({
       const snapshot = await ua.getChannelsRuntimeSnapshot();
       setChannelNodes(snapshot.channels);
       setBindings(snapshot.bindings);
-      setAgents(snapshot.agents);
+      setAgentsCache(snapshot.agents);
     } catch (error) {
       console.error("Failed to load channel runtime snapshot:", error);
     } finally {
       setChannelsLoaded(true);
     }
-  }, [liveReadsReady, ua]);
+  }, [liveReadsReady, setAgentsCache, ua]);
 
   useEffect(() => {
     const initKey = `${ua.instanceId}#${ua.instanceToken}`;
@@ -183,7 +181,6 @@ export function Channels({
     if (liveReadsReady) {
       void loadChannelsConfig();
       void loadChannelsRuntime();
-      ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
     }
   }, [liveReadsReady, loadChannelsConfig, loadChannelsRuntime, persistedConfigSnapshot, persistedRuntimeSnapshot, ua]);
 
@@ -191,7 +188,7 @@ export function Channels({
 
   const handleRefreshDiscord = () => {
     setRefreshing("discord");
-    ua.refreshDiscordChannelsCache(true /* force */)
+    ua.refreshDiscordChannelsCache()
       .then(() => {
         showToast?.(t('channels.discordRefreshed'), "success");
       })
@@ -368,7 +365,7 @@ export function Channels({
               </Button>
             </div>
 
-            {discordChannels === null || (discordGuilds.length === 0 && ua.discordChannelsLoading) ? (
+            {discordChannels === null ? (
               <p className="text-sm text-muted-foreground animate-pulse">{t('channels.loadingDiscord')}</p>
             ) : discordGuilds.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -381,7 +378,7 @@ export function Channels({
                     <div className="flex items-center gap-1.5 mb-2">
                       <span className="text-sm font-medium">
                         {guildName}
-                        {!discordChannelsResolved && ua.discordChannelsLoading && guildName === guildId && (
+                        {!discordChannelsResolved && guildName === guildId && (
                           <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
                         )}
                       </span>
@@ -391,7 +388,7 @@ export function Channels({
                       {channels.map((ch) => (
                         <div key={ch.channelId} className="rounded-md border px-3 py-2">
                           <div className="text-sm font-medium">
-                            {ch.channelName === ch.channelId && !discordChannelsResolved && ua.discordChannelsLoading ? (
+                            {ch.channelName === ch.channelId && !discordChannelsResolved ? (
                               <span className="text-muted-foreground font-mono text-xs">
                                 {ch.channelId}
                                 <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />

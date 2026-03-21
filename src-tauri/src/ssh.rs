@@ -1,3 +1,4 @@
+use base64::Engine;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -429,7 +430,20 @@ impl SshConnectionPool {
         }
         let mut bytes = {
             let session = conn.session.lock().await.clone();
-            session.sftp_read(&resolved).await
+            let sftp_fut = session.sftp_read(&resolved);
+            match tokio::time::timeout(std::time::Duration::from_secs(5), sftp_fut).await {
+                Ok(result) => result,
+                Err(_) => {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_read timeout id={} path={}",
+                        id, resolved
+                    ));
+                    self.set_sftp_read_backoff(id, Self::now_ms()).await;
+                    Err(clawpal_core::ssh::SshError::Sftp(
+                        "sftp_read timed out".into(),
+                    ))
+                }
+            }
         };
         if let Err(err) = &bytes {
             crate::commands::logs::log_dev(format!(
@@ -501,29 +515,93 @@ impl SshConnectionPool {
             ));
             message
         })?;
-        let mut write_res = {
+        // Check if we should skip SFTP entirely (backoff from previous timeout)
+        let write_backoff_active = self.is_sftp_read_backoff_active(id, Self::now_ms()).await;
+        let write_res = if write_backoff_active {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_write skipped (backoff active) id={} path={} — going straight to exec",
+                id, resolved
+            ));
+            Err(clawpal_core::ssh::SshError::Sftp(
+                "sftp_write skipped (backoff)".into(),
+            ))
+        } else {
             let session = conn.session.lock().await.clone();
-            session.sftp_write(&resolved, content.as_bytes()).await
-        };
-        if let Err(err) = &write_res {
-            crate::commands::logs::log_dev(format!(
-                "[dev][ssh_pool] sftp_write primary error id={} path={} error={}",
-                id, resolved, err
-            ));
-            if is_retryable_session_error(&err.to_string()) {
-                self.refresh_session(&conn).await?;
-                let session = conn.session.lock().await.clone();
-                write_res = session.sftp_write(&resolved, content.as_bytes()).await;
+            let sftp_fut = session.sftp_write(&resolved, content.as_bytes());
+            match tokio::time::timeout(std::time::Duration::from_secs(5), sftp_fut).await {
+                Ok(result) => result,
+                Err(_) => {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write timeout id={} path={} — falling back to exec",
+                        id, resolved
+                    ));
+                    self.set_sftp_read_backoff(id, Self::now_ms()).await;
+                    Err(clawpal_core::ssh::SshError::Sftp(
+                        "sftp_write timed out".into(),
+                    ))
+                }
             }
-        }
-        write_res.map_err(|e| {
-            let message = e.to_string();
+        };
+        if let Err(ref _err) = write_res {
             crate::commands::logs::log_dev(format!(
-                "[dev][ssh_pool] sftp_write failed id={} path={} error={}",
-                id, resolved, message
+                "[dev][ssh_pool] sftp_write failed/timed-out id={} path={} — using exec tee fallback",
+                id, resolved
             ));
-            message
-        })?;
+            // Exec-based write fallback: base64 encode content, decode on remote, write via tee
+            let b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+            let write_cmd = format!(
+                "printf '%s' '{}' | base64 -d > {}",
+                b64,
+                shell_quote(&resolved)
+            );
+            let session = conn.session.lock().await.clone();
+            let exec_res = match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                session.exec(&write_cmd),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write exec-fallback ALSO timed out id={} path={} — reconnecting",
+                        id, resolved
+                    ));
+                    // Force reconnect by dropping the connection
+                    drop(session);
+                    return Err("sftp_write: both SFTP and exec fallback timed out".to_string());
+                }
+            };
+            match exec_res {
+                Ok(result) if result.exit_code == 0 => {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write exec-fallback success id={} path={}",
+                        id, resolved
+                    ));
+                }
+                Ok(result) => {
+                    let message = format!(
+                        "exec tee write failed (exit {}): {}",
+                        result.exit_code, result.stderr
+                    );
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write exec-fallback error id={} path={} error={}",
+                        id, resolved, message
+                    ));
+                    return Err(message);
+                }
+                Err(e) => {
+                    let message = format!("exec tee write failed: {}", e);
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write exec-fallback error id={} path={} error={}",
+                        id, resolved, message
+                    ));
+                    return Err(message);
+                }
+            }
+        } else {
+            write_res.map_err(|e| e.to_string())?;
+        }
         crate::commands::logs::log_dev(format!(
             "[dev][ssh_pool] sftp_write success id={} path={}",
             id, resolved

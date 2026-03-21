@@ -914,7 +914,9 @@
   "cook.executionProgressDetail": "{{complete}} / {{total}} steps complete",
   "cook.progressValidate": "Validating recipe inputs",
   "cook.progressBuild": "Building structured execution plan",
-  "cook.progressChecks": "Loading auth and config checks",
+  "cook.progressChecksBoth": "Running auth and config checks ({{complete}}/{{total}})",
+  "cook.progressChecksAuth": "Running auth checks ({{complete}}/{{total}})",
+  "cook.progressChecksConfig": "Loading config context ({{complete}}/{{total}})",
 
   "chat.new": "New",
   "chat.thinking": "Thinking...",

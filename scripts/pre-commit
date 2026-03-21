@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+cd "$REPO_ROOT"
+
+printf "\n== pre-commit ==\n"
+printf "Repo root          %s\n" "$REPO_ROOT"
+
+printf "\n== Frontend CI ==\n"
+"$REPO_ROOT/scripts/ci-frontend.sh"
+
+printf "\n== Rust CI ==\n"
+CLAWPAL_FMT_SCOPE=staged "$REPO_ROOT/scripts/ci-rust.sh"
+
+printf "\n== Metrics CI ==\n"
+if ! "$REPO_ROOT/scripts/ci-metrics.sh"; then
+  printf "\npre-commit blocked: one or more hard metrics gates failed.\n" >&2
+  printf "Use 'git commit --no-verify' to bypass this hook when needed.\n" >&2
+  exit 1
+fi

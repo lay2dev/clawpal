@@ -13,7 +13,7 @@ import type {
 
 export function buildInstanceCardSummary(
   configSnapshot: { agents?: { id: string }[] } | null,
-  runtimeSnapshot: { status: { healthy: boolean; activeAgents: number } } | null,
+  runtimeSnapshot: { status: { healthy: boolean | null; activeAgents: number } } | null,
 ): { healthy: boolean | null; agentCount: number } {
   if (runtimeSnapshot) {
     return {
@@ -67,7 +67,7 @@ export function buildInitialHomeState(
   if (configSnapshot) {
     return {
       status: {
-        healthy: false,
+        healthy: null,
         activeAgents: configSnapshot.agents.length,
         globalDefaultModel: configSnapshot.globalDefaultModel,
         fallbackModels: configSnapshot.fallbackModels,
@@ -115,7 +115,7 @@ export function applyConfigSnapshotToHomeState(
 
   return {
     status: {
-      healthy: false,
+      healthy: null,
       activeAgents: snapshot.agents.length,
       globalDefaultModel: snapshot.globalDefaultModel,
       fallbackModels: snapshot.fallbackModels,
@@ -236,4 +236,63 @@ export function shouldShowLatestReleaseBadge({
     updateInfo,
     version,
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// P0: Skip redundant ConfigSnapshot when RuntimeSnapshot is already cached
+// ---------------------------------------------------------------------------
+
+export function shouldSkipConfigSnapshot(
+  persistedRuntimeSnapshot: { globalDefaultModel?: string | null } | null,
+): boolean {
+  if (persistedRuntimeSnapshot == null) return false;
+  // Only skip if the cached runtime snapshot actually has model data.
+  // The remote SSH path had a bug where globalDefaultModel was always null
+  // due to a JSON pointer mismatch, so we must not skip ConfigSnapshot
+  // when the cached data is incomplete.
+  return persistedRuntimeSnapshot.globalDefaultModel != null;
+}
+
+// ---------------------------------------------------------------------------
+// P0: Unified poll interval computation
+// ---------------------------------------------------------------------------
+
+export type HomePollContext = {
+  isRemote: boolean;
+  statusSettled: boolean;
+};
+
+/**
+ * Compute the poll interval in ms for the unified Home data refresh loop.
+ * - Remote instances always poll slowly (30s) to avoid SSH overhead.
+ * - Local unsettled: fast-poll (2s) until health resolves.
+ * - Local settled: slow-poll (10s).
+ */
+export function computePollIntervalMs(ctx: HomePollContext): number {
+  if (ctx.isRemote) return 30_000;
+  return ctx.statusSettled ? 10_000 : 2_000;
+}
+
+export type PollResource =
+  | "runtimeSnapshot"
+  | "queuedCommandsCount"
+  | "statusExtra";
+
+/**
+ * Decide which resources to refresh on a given poll tick.
+ * - `runtimeSnapshot` and `queuedCommandsCount`: every tick.
+ * - `statusExtra`: every 3rd tick (it changes rarely).
+ */
+export function shouldPollResource(
+  resource: PollResource,
+  tick: number,
+): boolean {
+  switch (resource) {
+    case "runtimeSnapshot":
+    case "queuedCommandsCount":
+      return true;
+    case "statusExtra":
+      return tick % 3 === 0;
+  }
 }

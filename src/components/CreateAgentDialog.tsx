@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,6 +43,7 @@ export function CreateAgentDialog({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const { agents } = useInstance();
   const [agentId, setAgentId] = useState("");
   const [model, setModel] = useState("");
   const [persona, setPersona] = useState("");
@@ -83,7 +85,7 @@ export function CreateAgentDialog({
         }
 
         try {
-          const existingAgents = await ua.listAgents();
+          const existingAgents = agents ?? await ua.listAgents();
           const absoluteWorkspace = existingAgents.find(
             (agent) => agent.workspace && !agent.workspace.startsWith("~"),
           )?.workspace;

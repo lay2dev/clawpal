@@ -33,6 +33,7 @@ import type {
   InstanceRuntimeSnapshot,
 } from "../lib/types";
 import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { profileToModelValue } from "@/lib/model-value";
 import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
 import {
@@ -41,12 +42,17 @@ import {
   shouldShowAvailableUpdateBadge,
   shouldStartDeferredUpdateCheck,
   shouldShowLatestReleaseBadge,
+  shouldSkipConfigSnapshot,
+  computePollIntervalMs,
+  shouldPollResource,
 } from "./overview-loading";
 import {
   createDataLoadRequestId,
   emitDataLoadMetric,
 } from "@/lib/data-load-log";
 import { readPersistedReadCache } from "@/lib/persistent-read-cache";
+import { RenderProbe } from "@/lib/render-probe";
+import { useHomeGuidance } from "../hooks/useHomeGuidance";
 
 type OpenclawUpdateLatch = {
   checkedAt: number;
@@ -92,6 +98,11 @@ export function Home({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const {
+    agents,
+    setAgentsCache,
+    modelProfiles: sharedModelProfiles,
+  } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<InstanceConfigSnapshot>(ua.persistenceScope, "getInstanceConfigSnapshot", []) ?? null
@@ -123,8 +134,7 @@ export function Home({
   const [version, setVersion] = useState<string | null>(() => initialHomeState.version);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; latest?: string } | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [agents, setAgents] = useState<AgentOverview[] | null>(() => initialHomeState.agents);
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const modelProfiles = sharedModelProfiles ?? [];
   const [savingModel, setSavingModel] = useState(false);
   const [fallbackSelectKey, setFallbackSelectKey] = useState(0);
 
@@ -137,6 +147,9 @@ export function Home({
     persistenceScope: ua.persistenceScope,
     isRemote: ua.isRemote,
   });
+
+  // Render probe: measures time from mount to each section's first data render
+  const probe = useMemo(() => new RenderProbe("home"), []);
 
   const resolveModelValue = (profileId: string | null): string | null => {
     if (!profileId) return null;
@@ -157,16 +170,7 @@ export function Home({
     hasPendingRef.current = true;
   }, []);
 
-  useEffect(() => {
-    const check = () => { ua.queuedCommandsCount().then((n) => {
-      // Don't clear the flag if we're within the optimistic lock window
-      if (optimisticLockedUntilRef.current > Date.now()) return;
-      hasPendingRef.current = n > 0;
-    }).catch(() => {}); };
-    check();
-    const interval = setInterval(check, ua.isRemote ? 10000 : 3000);
-    return () => clearInterval(interval);
-  }, [ua]);
+  // queuedCommandsCount is now part of the unified poll loop below
 
   // Health status with grace period: retry quickly when unhealthy, then slow-poll
   const [statusSettled, setStatusSettled] = useState(() => initialHomeState.statusSettled);
@@ -174,71 +178,17 @@ export function Home({
   const retriesRef = useRef(0);
   const remoteErrorShownRef = useRef(false);
   const remoteUnhealthyStreakRef = useRef(0);
-  const duplicateInstallGuidanceSigRef = useRef<string>("");
-  const onboardingGuidanceSigRef = useRef<string>("");
 
   const statusInFlightRef = useRef(false);
 
-  useEffect(() => {
-    const entries = statusExtra?.duplicateInstalls || [];
-    if (entries.length === 0) return;
-    const signature = `${ua.instanceId}:${entries.join("|")}`;
-    if (duplicateInstallGuidanceSigRef.current === signature) return;
-    duplicateInstallGuidanceSigRef.current = signature;
-    const transport = ua.isRemote ? "remote_ssh" : (ua.isDocker ? "docker_local" : "local");
-    const rawError = `Duplicate openclaw installs detected: ${entries.join(" ; ")}`;
-    window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
-      detail: {
-        message: t("home.duplicateInstalls"),
-        summary: t("home.duplicateInstalls"),
-        actions: [
-          t("home.fixInDoctor"),
-          "Run `which -a openclaw` and keep only one valid binary in PATH",
-        ],
-        source: "status-extra",
-        operation: "status.extra.duplicate_installs",
-        instanceId: ua.instanceId,
-        transport,
-        rawError,
-        createdAt: Date.now(),
-      },
-    }));
-  }, [statusExtra?.duplicateInstalls, t, ua.instanceId, ua.isDocker, ua.isRemote]);
+  useHomeGuidance({ statusExtra, statusSettled, status, modelProfiles, instanceId: ua.instanceId, isRemote: ua.isRemote, isDocker: ua.isDocker });
 
-  // Post-install onboarding guidance: when status settles and instance needs setup,
-  // emit guidance so the Help surface can walk the user through remaining configuration.
-  useEffect(() => {
-    if (!statusSettled || !status) return;
-    const remote = ua.isRemote;
-    // Model profiles/default model are global host-level concerns, not remote-instance-local setup.
-    const needsSetup = !status.healthy || (!remote && (modelProfiles.length === 0 || !status.globalDefaultModel));
-    if (!needsSetup) return;
-    const issues: string[] = [];
-    if (!status.healthy) issues.push("unhealthy");
-    if (!remote && modelProfiles.length === 0) issues.push("no_profiles");
-    if (!remote && !status.globalDefaultModel) issues.push("no_default_model");
-    const signature = `${ua.instanceId}:onboarding:${issues.join(",")}`;
-    if (onboardingGuidanceSigRef.current === signature) return;
-    onboardingGuidanceSigRef.current = signature;
-    const transport = ua.isRemote ? "remote_ssh" : (ua.isDocker ? "docker_local" : "local");
-    const actions: string[] = [];
-    if (!status.healthy) actions.push(t("onboarding.actionCheckDoctor"));
-    if (!remote && modelProfiles.length === 0) actions.push(t("onboarding.actionAddProfile"));
-    if (!remote && !status.globalDefaultModel && modelProfiles.length > 0) actions.push(t("onboarding.actionSetDefault"));
-    window.dispatchEvent(new CustomEvent("clawpal:agent-guidance", {
-      detail: {
-        message: t("onboarding.summary"),
-        summary: t("onboarding.summary"),
-        actions,
-        source: "onboarding",
-        operation: "post_install.onboarding",
-        instanceId: ua.instanceId,
-        transport,
-        rawError: `Instance needs setup: ${issues.join(", ")}`,
-        createdAt: Date.now(),
-      },
-    }));
-  }, [statusSettled, status, modelProfiles, t, ua.instanceId, ua.isDocker, ua.isRemote]);
+  // Render probe: record first-render of each data section
+  useEffect(() => { if (status) probe.hit("status"); }, [status, probe]);
+  useEffect(() => { if (version) probe.hit("version"); }, [version, probe]);
+  useEffect(() => { if (agents) probe.hit("agents"); }, [agents, probe]);
+  useEffect(() => { if (modelProfiles.length > 0) probe.hit("models"); }, [modelProfiles, probe]);
+  useEffect(() => { if (statusSettled) probe.settled(); }, [statusSettled, probe]);
 
   const applyConfigSnapshot = useCallback((snapshot: {
     globalDefaultModel?: string;
@@ -247,9 +197,9 @@ export function Home({
   }) => {
     const next = applyConfigSnapshotToHomeState(homeStateRef.current, snapshot);
     setStatus(next.status);
-    setAgents(next.agents);
+    setAgentsCache(next.agents);
     setStatusSettled(next.statusSettled);
-  }, []);
+  }, [setAgentsCache]);
 
   const applyRuntimeSnapshot = useCallback((snapshot: InstanceRuntimeSnapshot) => {
     setStatus({
@@ -257,9 +207,9 @@ export function Home({
       globalDefaultModel: snapshot.globalDefaultModel,
       fallbackModels: snapshot.fallbackModels,
     });
-    setAgents(snapshot.agents);
+    setAgentsCache(snapshot.agents);
     setStatusSettled(true);
-  }, []);
+  }, [setAgentsCache]);
 
   useEffect(() => {
     homeStateRef.current = {
@@ -302,7 +252,7 @@ export function Home({
         } else {
           setStatus(next);
         }
-        setAgents(snapshot.agents);
+        setAgentsCache(snapshot.agents);
         if (ua.isRemote) {
           setStatusSettled(true);
           remoteErrorShownRef.current = false;
@@ -329,7 +279,7 @@ export function Home({
     }).finally(() => {
       statusInFlightRef.current = false;
     });
-  }, [liveReadsReady, ua, showToast, t]);
+  }, [liveReadsReady, setAgentsCache, ua, showToast, t]);
 
   const fetchStatusExtra = useCallback(() => {
     if (!liveReadsReady) return;
@@ -356,96 +306,82 @@ export function Home({
     fetchRuntimeSnapshot();
   }, [applyConfigSnapshot, fetchRuntimeSnapshot, liveReadsReady, ua]);
 
+  // P0: Skip ConfigSnapshot when RuntimeSnapshot is already cached (they overlap)
   useEffect(() => {
     if (!liveReadsReady) return;
     if (ua.isRemote && !ua.isConnected) return;
+    if (shouldSkipConfigSnapshot(persistedRuntimeSnapshot)) return;
     ua.getInstanceConfigSnapshot()
       .then(applyConfigSnapshot)
       .catch((e) => {
         console.error("Failed to fetch instance config snapshot:", e);
       });
-  }, [applyConfigSnapshot, liveReadsReady, ua]);
+  }, [applyConfigSnapshot, liveReadsReady, persistedRuntimeSnapshot, ua]);
 
   useEffect(() => {
-    if (!liveReadsReady) return;
-    if (ua.isRemote && !ua.isConnected) return;
-    fetchStatusExtra();
-  }, [fetchStatusExtra, liveReadsReady, ua.isConnected, ua.isRemote]);
-
-  useEffect(() => {
-    if (persistedConfigSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceConfigSnapshot"),
-        resource: "getInstanceConfigSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedRuntimeSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getInstanceRuntimeSnapshot"),
-        resource: "getInstanceRuntimeSnapshot",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-
-    if (persistedStatusExtra) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getStatusExtra"),
-        resource: "getStatusExtra",
-        page: "home",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
+    // Emit persisted-cache metrics for each pre-loaded resource
+    for (const [resource, data] of [
+      ["getInstanceConfigSnapshot", persistedConfigSnapshot],
+      ["getInstanceRuntimeSnapshot", persistedRuntimeSnapshot],
+      ["getStatusExtra", persistedStatusExtra],
+    ] as const) {
+      if (data) {
+        emitDataLoadMetric({
+          requestId: createDataLoadRequestId(resource),
+          resource, page: "home",
+          instanceId: ua.instanceId, instanceToken: ua.instanceToken,
+          source: "persisted", phase: "success", elapsedMs: 0, cacheHit: true,
+        });
+      }
     }
     setUpdateInfo(null);
     setCheckingUpdate(false);
-    setModelProfiles([]);
     retriesRef.current = 0;
     remoteErrorShownRef.current = false;
     remoteUnhealthyStreakRef.current = 0;
     statusInFlightRef.current = false;
-    duplicateInstallGuidanceSigRef.current = "";
-    onboardingGuidanceSigRef.current = "";
   }, [persistedConfigSnapshot, persistedRuntimeSnapshot, persistedStatusExtra, ua.instanceId, ua.instanceToken]);
 
+  // P0: Unified poll loop — replaces 3 separate intervals + delayed model fetch.
+  // All initial fetches fire in parallel on mount; subsequent ticks use shouldPollResource.
   useEffect(() => {
     remoteErrorShownRef.current = false;
     remoteUnhealthyStreakRef.current = 0;
     if (!liveReadsReady) return;
-    const initial = setTimeout(fetchRuntimeSnapshot, ua.isRemote ? 400 : 250);
-    // Poll fast (2s) while not settled, slow (10s) once settled; remote always slow
-    const interval = setInterval(fetchRuntimeSnapshot, ua.isRemote ? 30000 : (statusSettled ? 10000 : 2000));
-    return () => {
-      clearTimeout(initial);
-      clearInterval(interval);
-    };
-  }, [fetchRuntimeSnapshot, liveReadsReady, statusSettled, ua.isRemote]);
-
-  useEffect(() => {
-    if (!liveReadsReady) return;
     if (ua.isRemote && !ua.isConnected) return;
-    const timer = setTimeout(() => {
-      ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [liveReadsReady, ua]);
+
+    let tickCount = 0;
+
+    const runTick = () => {
+      const tick = tickCount++;
+
+      // queuedCommandsCount — every tick
+      if (shouldPollResource("queuedCommandsCount", tick)) {
+        ua.queuedCommandsCount().then((n) => {
+          if (optimisticLockedUntilRef.current > Date.now()) return;
+          hasPendingRef.current = n > 0;
+        }).catch(() => {});
+      }
+
+      // runtimeSnapshot — every tick
+      if (shouldPollResource("runtimeSnapshot", tick)) {
+        fetchRuntimeSnapshot();
+      }
+
+      // statusExtra — every 3rd tick
+      if (shouldPollResource("statusExtra", tick)) {
+        fetchStatusExtra();
+      }
+    };
+
+    // P0: Fire all initial fetches in parallel (no artificial delays)
+    runTick();
+    const interval = setInterval(
+      runTick,
+      computePollIntervalMs({ isRemote: ua.isRemote, statusSettled }),
+    );
+    return () => clearInterval(interval);
+  }, [fetchRuntimeSnapshot, fetchStatusExtra, liveReadsReady, statusSettled, ua]);
 
   // Match current global model value to a profile ID
   const currentModelProfileId = useMemo(() => {
@@ -533,7 +469,7 @@ export function Home({
     ).then(() => {
       // Optimistic UI update + pin in cache so polling doesn't overwrite
       const updated = agents?.filter((a) => a.id !== agentId) ?? null;
-      setAgents(updated);
+      setAgentsCache(updated);
       if (updated) ua.pinOptimistic("listAgents", updated);
     }).catch((e) => { if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error"); });
   };
@@ -567,9 +503,9 @@ export function Home({
                 <span className="w-2 h-2 rounded-full bg-muted-foreground/30 animate-pulse" />
                 ...
               </span>
-            ) : status.healthy ? (
+            ) : status.healthy === true ? (
               <Badge className="bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">{t('home.healthy')}</Badge>
-            ) : !statusSettled ? (
+            ) : status.healthy === null || !statusSettled ? (
               <Badge className="bg-amber-500/10 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">{t('home.checking')}</Badge>
             ) : (
               <Badge className="bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400">{t('home.unhealthy')}</Badge>
@@ -836,7 +772,7 @@ export function Home({
                               const updated = agents?.map((a) =>
                                 a.id === agent.id ? { ...a, model: modelValue ?? null } : a
                               ) ?? null;
-                              setAgents(updated);
+                              setAgentsCache(updated);
                               if (updated) ua.pinOptimistic("listAgents", updated);
                             } catch (e) {
                               if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error");

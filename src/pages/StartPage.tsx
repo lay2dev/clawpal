@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { deriveDockerPaths, normalizePathForCompare, dockerPathKey, dockerIdKey } from "../lib/start-page-utils";
 import { listen } from "@tauri-apps/api/event";
 import { PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,57 +43,8 @@ import type {
 import { shouldShowLocalNotInstalled } from "./start-page-instance-health";
 import { buildInstanceCardSummary } from "./overview-loading";
 
-const DEFAULT_DOCKER_OPENCLAW_HOME = "~/.clawpal/docker-local";
-const DEFAULT_DOCKER_CLAWPAL_DATA_DIR = "~/.clawpal/docker-local/data";
+
 const SSH_PROBE_WATCHDOG_MS = 48_000;
-
-function deriveDockerPaths(instanceId: string): { openclawHome: string; clawpalDataDir: string } {
-  if (instanceId === "docker:local") {
-    return {
-      openclawHome: DEFAULT_DOCKER_OPENCLAW_HOME,
-      clawpalDataDir: DEFAULT_DOCKER_CLAWPAL_DATA_DIR,
-    };
-  }
-  const suffixRaw = instanceId.startsWith("docker:") ? instanceId.slice(7) : instanceId;
-  const suffix = suffixRaw === "local"
-    ? "docker-local"
-    : suffixRaw.startsWith("docker-")
-      ? suffixRaw
-      : `docker-${suffixRaw || "local"}`;
-  const openclawHome = `~/.clawpal/${suffix}`;
-  return {
-    openclawHome,
-    clawpalDataDir: `${openclawHome}/data`,
-  };
-}
-
-function normalizePathForCompare(raw: string): string {
-  const trimmed = raw.trim().replace(/\\/g, "/");
-  if (!trimmed) return "";
-  return trimmed.replace(/\/+$/, "");
-}
-
-function dockerPathKey(raw: string): string {
-  const normalized = normalizePathForCompare(raw);
-  if (!normalized) return "";
-  const segments = normalized.split("/").filter(Boolean);
-  const clawpalIdx = segments.lastIndexOf(".clawpal");
-  if (clawpalIdx >= 0 && clawpalIdx + 1 < segments.length) {
-    const dir = segments[clawpalIdx + 1];
-    if (dir.startsWith("docker-")) return `docker-dir:${dir.toLowerCase()}`;
-  }
-  const last = segments[segments.length - 1] || "";
-  if (last.startsWith("docker-")) return `docker-dir:${last.toLowerCase()}`;
-  return `path:${normalized.toLowerCase()}`;
-}
-
-function dockerIdKey(rawId: string): string {
-  if (!rawId.startsWith("docker:")) return "";
-  let slug = rawId.slice("docker:".length).trim().toLowerCase();
-  if (!slug) slug = "local";
-  if (slug.startsWith("docker-")) slug = slug.slice("docker-".length);
-  return `docker-id:${slug}`;
-}
 
 interface StartPageProps {
   dockerInstances: DockerInstance[];

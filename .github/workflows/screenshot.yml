@@ -1,0 +1,165 @@
+name: UI Screenshots
+
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: screenshot-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshot:
+    name: Capture UI Screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Build screenshot Docker image
+        run: |
+          docker build \
+            -t clawpal-screenshot \
+            -f harness/screenshot/Dockerfile .
+
+      - name: Capture screenshots
+        run: |
+          mkdir -p screenshots
+          docker run --rm \
+            -v ${{ github.workspace }}/screenshots:/screenshots \
+            -v ${{ github.workspace }}/harness/screenshot/capture.mjs:/harness/capture.mjs:ro \
+            clawpal-screenshot all
+
+      - name: Fix permissions
+        run: sudo chown -R $(id -u):$(id -g) screenshots/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots-${{ github.sha }}
+          path: screenshots/
+          retention-days: 30
+
+      # Push screenshots to a ref so we can embed them in the PR comment
+      - name: Push screenshots to ref
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        id: push_ref
+        run: |
+          REF_NAME="screenshots/pr-${{ github.event.pull_request.number || 'manual' }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Save screenshots before clearing the worktree
+          cp -r screenshots /tmp/pr-screenshots
+
+          # Create orphan branch with only screenshots
+          git checkout --orphan "${REF_NAME}"
+          git rm -rf . > /dev/null 2>&1 || true
+          cp -r /tmp/pr-screenshots/* .
+          git add -A
+          git commit -m "Screenshots for ${{ github.sha }}" --allow-empty
+          git push origin "${REF_NAME}" --force
+
+          echo "ref=${REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          # Return to PR branch
+          git checkout "${{ github.event.pull_request.head.ref }}" 2>/dev/null || git checkout "${{ github.sha }}"
+
+      - name: Generate PR comment body
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        id: comment
+        run: |
+          REF="${{ steps.push_ref.outputs.ref }}"
+          SHA="${{ steps.push_ref.outputs.sha }}"
+          BASE="https://raw.githubusercontent.com/${{ github.repository }}/${REF}"
+
+          cat > /tmp/screenshot_comment.md << COMMENTEOF
+          <!-- pr-screenshot-bot -->
+          ## 📸 UI Screenshots
+
+          **Commit**: \`${{ github.sha }}\` | **Screenshots**: [Download artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ### Light Mode — Core Pages
+
+          | Start Page | Home | Channels |
+          |:---:|:---:|:---:|
+          | ![start](${BASE}/01-start-page/01-overview.png) | ![home](${BASE}/02-home/01-dashboard.png) | ![channels](${BASE}/03-channels/01-list.png) |
+
+          | Recipes | Cron | Doctor |
+          |:---:|:---:|:---:|
+          | ![recipes](${BASE}/04-recipes/01-list.png) | ![cron](${BASE}/05-cron/01-list.png) | ![doctor](${BASE}/06-doctor/01-main.png) |
+
+          | Context | History | Chat Panel |
+          |:---:|:---:|:---:|
+          | ![context](${BASE}/07-context/01-main.png) | ![history](${BASE}/08-history/01-list.png) | ![chat](${BASE}/09-chat/01-open.png) |
+
+          <details><summary>Settings (4 scroll positions)</summary>
+
+          | Main | Appearance | Advanced | Bottom |
+          |:---:|:---:|:---:|:---:|
+          | ![s1](${BASE}/10-settings/01-main.png) | ![s2](${BASE}/10-settings/02-appearance.png) | ![s3](${BASE}/10-settings/03-advanced.png) | ![s4](${BASE}/10-settings/04-bottom.png) |
+
+          </details>
+
+          <details><summary>Start Page Sections</summary>
+
+          | Overview | Profiles | Settings |
+          |:---:|:---:|:---:|
+          | ![sp1](${BASE}/01-start-page/01-overview.png) | ![sp2](${BASE}/01-start-page/02-profiles.png) | ![sp3](${BASE}/01-start-page/03-settings.png) |
+
+          </details>
+
+          ### Dark Mode
+
+          | Start | Home | Channels | Doctor |
+          |:---:|:---:|:---:|:---:|
+          | ![d1](${BASE}/11-dark-mode/01-start-page.png) | ![d2](${BASE}/11-dark-mode/02-home.png) | ![d3](${BASE}/11-dark-mode/03-channels.png) | ![d4](${BASE}/11-dark-mode/04-doctor.png) |
+
+          <details><summary>Dark mode — more pages</summary>
+
+          | Recipes | Cron | Settings |
+          |:---:|:---:|:---:|
+          | ![d5](${BASE}/11-dark-mode/05-recipes.png) | ![d6](${BASE}/11-dark-mode/06-cron.png) | ![d7](${BASE}/11-dark-mode/07-settings.png) |
+
+          </details>
+
+          ### Responsive + Dialogs
+
+          | Home 1024×680 | Chat 1024×680 | Create Agent |
+          |:---:|:---:|:---:|
+          | ![r1](${BASE}/12-responsive/01-home-1024x680.png) | ![r2](${BASE}/12-responsive/02-chat-1024x680.png) | ![d1](${BASE}/13-dialogs/01-create-agent.png) |
+
+          ---
+          > 🔧 Harness: Docker + Xvfb + tauri-driver + Selenium | 28 screenshots, 13 flows
+          COMMENTEOF
+
+          sed -i 's/^          //' /tmp/screenshot_comment.md
+
+      - name: Find existing screenshot comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- pr-screenshot-bot -->'
+
+      - name: Create or update screenshot comment
+        uses: peter-evans/create-or-update-comment@v4
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/screenshot_comment.md
+          edit-mode: replace

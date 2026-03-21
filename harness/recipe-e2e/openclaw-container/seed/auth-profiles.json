@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "__default__": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "authRef": "ANTHROPIC_API_KEY"
+    }
+  }
+}

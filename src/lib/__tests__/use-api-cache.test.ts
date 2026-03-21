@@ -48,6 +48,22 @@ describe("resolveReadCacheScopeKey", () => {
         "getCronRuntimeSnapshot",
       ),
     ).toBe("ssh:hetzner");
+
+    expect(
+      resolveReadCacheScopeKey(
+        "ssh:hetzner#333",
+        "ssh:hetzner",
+        "listDiscordGuildChannels",
+      ),
+    ).toBe("ssh:hetzner");
+
+    expect(
+      resolveReadCacheScopeKey(
+        "ssh:hetzner#444",
+        "ssh:hetzner",
+        "listRecipeModelProfiles",
+      ),
+    ).toBe("ssh:hetzner");
   });
 
   test("keeps token-scoped keys for non-shared methods", () => {

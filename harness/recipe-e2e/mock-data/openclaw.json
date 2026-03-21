@@ -1,0 +1,38 @@
+{
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "auth": {
+      "token": "local-harness-token"
+    }
+  },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "models": [
+          {
+            "id": "claude-sonnet-4-20250514",
+            "name": "Claude Sonnet 4"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-20250514"
+    },
+    "list": [
+      {
+        "id": "main",
+        "model": "anthropic/claude-sonnet-4-20250514"
+      }
+    ]
+  },
+  "channels": {
+    "discord": {
+      "botToken": "mock-local-bot-token",
+      "guildId": "guild-recipe-lab"
+    }
+  }
+}

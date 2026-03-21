@@ -31,6 +31,7 @@ import {
   type CookStepStatus,
 } from "./cook-execution";
 import {
+  buildCookPlanningChecks,
   buildCookAuthProfileScope,
   buildCookContextWarnings,
   buildCookRouteSummary,
@@ -84,6 +85,12 @@ export function Cook({
   const [executionResult, setExecutionResult] = useState<ExecuteRecipeResult | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planningStage, setPlanningStage] = useState<CookPlanningStage | null>(null);
+  const [planningChecks, setPlanningChecks] = useState({
+    authRequired: false,
+    configRequired: false,
+    completedCount: 0,
+    totalCount: 0,
+  });
   const [resolvedStepList, setResolvedStepList] = useState<ResolvedStep[]>([]);
   const [stepStatuses, setStepStatuses] = useState<CookStepStatus[]>([]);
   const [authIssues, setAuthIssues] = useState<PrecheckIssue[]>([]);
@@ -98,7 +105,7 @@ export function Cook({
   );
   const blockingAuthIssues = hasBlockingAuthIssues(authIssues);
   const approvalRequired = Boolean(recipeWorkspaceSlug && workspaceEntry?.approvalRequired);
-  const planningProgress = planningStage ? getCookPlanningProgress(planningStage) : null;
+  const planningProgress = planningStage ? getCookPlanningProgress(planningStage, planningChecks) : null;
   const phaseItems = useMemo(
     () => buildCookPhaseItems(phase as CookPhase),
     [phase],
@@ -224,6 +231,12 @@ export function Cook({
   const handleNext = async () => {
     setPlanning(true);
     setPlanningStage("validate");
+    setPlanningChecks({
+      authRequired: false,
+      configRequired: false,
+      completedCount: 0,
+      totalCount: 0,
+    });
     setPlanError(null);
     await waitForNextPaint();
 
@@ -232,20 +245,38 @@ export function Cook({
       const nextPlan = recipeSourceText
         ? await ua.planRecipeSource(recipe.id, params, recipeSourceText)
         : await ua.planRecipe(recipe.id, params, recipeSource);
-      setPlanningStage("checks");
-      await waitForNextPaint();
-      const [authResult, configResult] = await Promise.allSettled([
-        ua.precheckAuth(instanceId),
-        ua.readRawConfig(),
-      ]);
-      const steps = resolveSteps(recipe.steps, params);
       const authScope = buildCookAuthProfileScope(nextPlan);
+      const checkPlan = buildCookPlanningChecks(nextPlan);
+      setPlanningChecks({
+        authRequired: checkPlan.needsAuthCheck,
+        configRequired: checkPlan.needsConfigContext,
+        completedCount: 0,
+        totalCount: checkPlan.totalChecks,
+      });
+      const markPlanningCheckComplete = () => {
+        setPlanningChecks((current) => ({
+          ...current,
+          completedCount: Math.min(current.totalCount, current.completedCount + 1),
+        }));
+      };
+      const authPromise: Promise<PrecheckIssue[] | null> = checkPlan.needsAuthCheck
+        ? ua.precheckAuth(instanceId).finally(markPlanningCheckComplete)
+        : Promise.resolve(null);
+      const configPromise: Promise<string | null> = checkPlan.needsConfigContext
+        ? ua.readRawConfig().finally(markPlanningCheckComplete)
+        : Promise.resolve(null);
+      if (checkPlan.totalChecks > 0) {
+        setPlanningStage("checks");
+        await waitForNextPaint();
+      }
+      const [authResult, configResult] = await Promise.allSettled([authPromise, configPromise]);
+      const steps = resolveSteps(recipe.steps, params);
       const nextAuthIssues =
-        authResult.status === "fulfilled"
+        checkPlan.needsAuthCheck && authResult.status === "fulfilled" && authResult.value
           ? filterCookAuthIssues(authResult.value, authScope)
           : [];
       const nextContextWarnings =
-        configResult.status === "fulfilled"
+        checkPlan.needsConfigContext && configResult.status === "fulfilled" && configResult.value
           ? buildCookContextWarnings(nextPlan, configResult.value)
           : [];
       setPlan(nextPlan);
@@ -264,6 +295,12 @@ export function Cook({
     } finally {
       setPlanning(false);
       setPlanningStage(null);
+      setPlanningChecks({
+        authRequired: false,
+        configRequired: false,
+        completedCount: 0,
+        totalCount: 0,
+      });
     }
   };
 
@@ -400,9 +437,10 @@ export function Cook({
             <div className="mb-3">
               <InlineProgressBar
                 title={t("cook.planningProgressTitle")}
-                detail={t(planningProgress.labelKey)}
+                detail={t(planningProgress.labelKey, planningProgress.labelArgs)}
                 value={planningProgress.value}
-                animated={planningProgress.value < 100}
+                animated={planningProgress.animated}
+                showValue={false}
               />
             </div>
           )}

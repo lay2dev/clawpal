@@ -1,0 +1,98 @@
+name: Home Perf E2E
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: home-perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  home-perf:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright
+        run: |
+          bun add -d @playwright/test
+          npx playwright install chromium --with-deps
+
+      - name: Install sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Build Docker OpenClaw container
+        run: docker build -t clawpal-perf-e2e -f tests/e2e/perf/Dockerfile .
+
+      - name: Start container
+        run: |
+          docker run -d --name oc-perf -p 2299:22 -p 18789:18790 clawpal-perf-e2e
+          for i in $(seq 1 15); do
+            sshpass -p clawpal-perf-e2e ssh -o StrictHostKeyChecking=no -p 2299 root@localhost echo ok 2>/dev/null && break
+            sleep 1
+          done
+          # Wait for OpenClaw gateway HTTP API (port 18789 exposed to host)
+          for i in $(seq 1 60); do
+            GW=$(curl -sf http://localhost:18789/ 2>/dev/null || true)
+            if [ -n "$GW" ]; then echo "Gateway HTTP ready after ${i}s"; break; fi
+            sleep 1
+          done
+          # Wait for gateway API to be fully ready (not just dashboard)
+          for j in $(seq 1 30); do
+            API=$(curl -sf http://localhost:18789/api/status 2>/dev/null || true)
+            if [ -n "$API" ]; then echo "Gateway API ready after additional ${j}s"; break; fi
+            sleep 1
+          done
+
+      - name: Start IPC bridge server
+        run: |
+          node tests/e2e/perf/ipc-bridge-server.mjs &
+          # Wait for bridge to be ready
+          for i in $(seq 1 60); do
+            RESP=$(curl -s http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_instance_runtime_snapshot","args":{}}' 2>/dev/null || true)
+            if echo "$RESP" | jq -e '.ok == true and .result != null' > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Verify an SSH-backed command returned real data (get_status_extra calls openclaw --version via SSH)
+          VERIFY=$(curl -sf http://localhost:3399/invoke -X POST -H 'Content-Type: application/json' -d '{"cmd":"get_status_extra","args":{}}') || { echo "Bridge readiness check failed: SSH-backed command errored"; exit 1; }
+          echo "$VERIFY" | jq -e '.ok == true and .result.openclawVersion != null and .result.openclawVersion != "unknown"' || { echo "Bridge readiness check failed: SSH did not return a valid openclaw version"; exit 1; }
+        env:
+          CLAWPAL_PERF_SSH_PORT: "2299"
+          PERF_SETTLED_GATE_MS: "500"
+
+      - name: Start Vite dev server
+        run: |
+          bun run dev &
+          for i in $(seq 1 20); do
+            curl -s http://localhost:1420 > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Run render probe E2E
+        run: npx playwright test --config tests/e2e/perf/playwright.config.mjs
+        env:
+          PERF_BRIDGE_URL: "http://localhost:3399"
+          PERF_SETTLED_GATE_MS: "500"
+
+      - name: Ensure report exists
+        if: always()
+        run: |
+          if [ ! -f tests/e2e/perf/report.md ]; then
+            echo '## 🏠 Home Page Render Probes' > tests/e2e/perf/report.md
+            echo '' >> tests/e2e/perf/report.md
+            echo '⚠️ E2E run failed before probe collection. Check workflow logs.' >> tests/e2e/perf/report.md
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f oc-perf 2>/dev/null || true

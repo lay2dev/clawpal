@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { AgentOverview, ModelProfile, Recipe, RecipeParam } from "../lib/types";
+import type { ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
-import { readPersistedReadCache } from "@/lib/persistent-read-cache";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -40,34 +39,34 @@ export function ParamForm({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const { discordChannelsResolved, persistenceScope } = useInstance();
+  const {
+    agents,
+    modelProfiles,
+    discordChannelsResolved,
+    refreshAgentsCache,
+    refreshModelProfilesCache,
+  } = useInstance();
   const discordGuildChannels = ua.discordGuildChannels ?? [];
   const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(() => {
-    if (!persistenceScope) return [];
-    return readPersistedReadCache<ModelProfile[]>(persistenceScope, "listModelProfiles", []) ?? [];
-  });
-  // Initialize agents from persisted cache to avoid loading delay
-  const [agents, setAgents] = useState<AgentOverview[]>(() => {
-    if (!persistenceScope) return [];
-    return readPersistedReadCache<AgentOverview[]>(persistenceScope, "listAgents", []) ?? [];
-  });
+  const needsAgents = recipe.params.some((p) => p.type === "agent");
 
   // Lazily load model profiles if any param needs them
   const needsProfiles = recipe.params.some((p) => p.type === "model_profile");
   useEffect(() => {
     if (!needsProfiles) return;
-    loadRecipeModelProfiles(ua)
-      .then(setModelProfiles)
+    if (modelProfiles !== null) return;
+    loadRecipeModelProfiles({
+      listRecipeModelProfiles: refreshModelProfilesCache,
+    })
       .catch((e) => console.error("Failed to load model profiles:", e));
-  }, [needsProfiles, ua]);
+  }, [modelProfiles, needsProfiles, refreshModelProfilesCache]);
 
   // Lazily load agents if any param needs them
-  const needsAgents = recipe.params.some((p) => p.type === "agent");
   useEffect(() => {
     if (!needsAgents) return;
-    ua.listAgents().then(setAgents).catch((e) => console.error("Failed to load agents:", e));
-  }, [needsAgents, ua]);
+    if (agents !== null) return;
+    void refreshAgentsCache().catch((e) => console.error("Failed to load agents:", e));
+  }, [agents, needsAgents, refreshAgentsCache]);
 
   const uniqueGuilds = useMemo(() => {
     const seen = new Map<string, string>();
@@ -203,7 +202,7 @@ export function ParamForm({
             <SelectValue placeholder={t('paramForm.selectAgent')} />
           </SelectTrigger>
           <SelectContent>
-            {agents.map((a) => (
+            {(agents ?? []).map((a) => (
               <SelectItem key={a.id} value={a.id}>
                 {a.emoji ? `${a.emoji} ` : ""}{a.name || a.id}
                 <span className="text-muted-foreground ml-1.5 text-xs">({a.id})</span>
@@ -230,7 +229,7 @@ export function ParamForm({
             <SelectItem value="__default__">
               <span className="text-muted-foreground">{t('paramForm.useGlobalDefault')}</span>
             </SelectItem>
-            {modelProfiles.map((p) => (
+            {(modelProfiles ?? []).map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.provider}/{p.model}
               </SelectItem>
