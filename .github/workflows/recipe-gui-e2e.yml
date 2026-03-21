@@ -77,9 +77,13 @@ jobs:
           node <<'EOF'
           const fs = require("fs");
           const report = JSON.parse(fs.readFileSync("recipe-gui-e2e/report/perf-report.json", "utf8"));
-          const rows = report.recipes.map((recipe) =>
-            `| ${recipe.recipe_name} | ${recipe.page_load_ms} | ${recipe.form_fill_ms} | ${recipe.execution_ms} | ${recipe.verification_ms} | ${recipe.total_ms} |`
-          ).join("\n");
+          const rows = report.recipes.map((recipe) => {
+            if (recipe.skipped) {
+              return `| ${recipe.recipe_name} | — | — | — | — | ⚠️ Skipped: ${recipe.reason || "unknown"} |`;
+            }
+            const fmtMs = (ms) => ms >= 1000 ? `${ms} (${(ms/1000).toFixed(1)}s)` : `${ms}`;
+            return `| ${recipe.recipe_name} | ${fmtMs(recipe.page_load_ms)} | ${fmtMs(recipe.form_fill_ms)} | ${fmtMs(recipe.execution_ms)} | ${fmtMs(recipe.verification_ms)} | ${fmtMs(recipe.total_ms)} |`;
+          }).join("\n");
           const body = [
             "<!-- recipe-gui-e2e -->",
             "## Recipe GUI E2E Perf",
