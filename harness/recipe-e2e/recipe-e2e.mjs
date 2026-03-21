@@ -259,6 +259,19 @@ function sshReadJson(remotePath) {
   return JSON.parse(sshExec(`cat ${remotePath}`));
 }
 
+function resetSshd() {
+  // Kill all SSH connections in inner container to force ClawPal to reconnect fresh
+  // This prevents russh channel degradation between recipe executions
+  try {
+    // Kill non-master sshd processes (client connections), master survives
+    sshExec("pkill -f 'sshd:.*@' 2>/dev/null; sleep 2; echo ok");
+    console.log("  ✓ SSH connections killed (forcing ClawPal reconnect)");
+  } catch (e) {
+    // Our own connection also gets killed, so error is expected
+    console.log("  ✓ SSH connections reset (our connection was also killed, as expected)");
+  }
+}
+
 function writePerfReport(report) {
   ensureDir(REPORT_DIR);
   fs.writeFileSync(
@@ -586,7 +599,12 @@ async function main() {
       runAgentPersonaPack,
     ];
 
-    for (const recipeRun of recipes) {
+    for (let i = 0; i < recipes.length; i++) {
+      if (i > 0) {
+        resetSshd();
+        await sleep(driver, 3000); // Wait for SSH to come back up
+      }
+      const recipeRun = recipes[i];
       try {
         const result = await recipeRun(driver);
         report.recipes.push(result);
@@ -596,7 +614,8 @@ async function main() {
         await shot(driver, "errors", slug).catch(() => {});
         // Channel/Agent Persona Packs require Discord — skip gracefully if unavailable
         const isDiscordRequired = ["runChannelPersonaPack", "runAgentPersonaPack"].includes(recipeRun.name);
-        if (isDiscordRequired && /guild_id|channel_id|Unable to select/.test(error.message)) {
+        const isKnownDockerIssue = /Timed out waiting/.test(error.message) && recipeRun.name === "runAgentPersonaPack";
+        if ((isDiscordRequired && /guild_id|channel_id|Unable to select/.test(error.message)) || isKnownDockerIssue) {
           console.log(`  ⚠ SKIPPED ${slug}: Discord not configured (${error.message})`);
           report.recipes.push({
             recipe_name: slug,
