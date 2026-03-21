@@ -540,7 +540,21 @@ impl SshConnectionPool {
                 shell_quote(&resolved)
             );
             let session = conn.session.lock().await.clone();
-            let exec_res = session.exec(&write_cmd).await;
+            let exec_res = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                session.exec(&write_cmd),
+            ).await {
+                Ok(r) => r,
+                Err(_) => {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][ssh_pool] sftp_write exec-fallback ALSO timed out id={} path={} — reconnecting",
+                        id, resolved
+                    ));
+                    // Force reconnect by dropping the connection
+                    drop(session);
+                    return Err("sftp_write: both SFTP and exec fallback timed out".to_string());
+                }
+            };
             match exec_res {
                 Ok(result) if result.exit_code == 0 => {
                     crate::commands::logs::log_dev(format!(
