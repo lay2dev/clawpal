@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
 import { readPersistedReadCache, writePersistedReadCache } from "@/lib/persistent-read-cache";
@@ -69,6 +69,9 @@ export function useChannelCache(params: UseChannelCacheParams) {
         : false,
     }),
   );
+
+  const channelNodesByInstanceRef = useRef(channelNodesByInstance);
+  channelNodesByInstanceRef.current = channelNodesByInstance;
 
   const channelNodes = useMemo(
     () => channelNodesByInstance[activeInstance] ?? null,
@@ -166,7 +169,7 @@ export function useChannelCache(params: UseChannelCacheParams) {
         ? await api.remoteListDiscordGuildChannels(activeInstance)
         : await api.listDiscordGuildChannels();
       const mergedChannels = mergeDiscordGuildChannels(
-        deriveDiscordGuildChannelsFromChannelNodes(channelNodesByInstance[activeInstance] ?? []),
+        deriveDiscordGuildChannelsFromChannelNodes(channelNodesByInstanceRef.current[activeInstance] ?? []),
         channels,
       );
       setDiscordGuildChannelsByInstance((current) => ({
@@ -187,7 +190,7 @@ export function useChannelCache(params: UseChannelCacheParams) {
         [activeInstance]: false,
       }));
     }
-  }, [activeInstance, channelNodesByInstance, isRemote, persistenceScope]);
+  }, [activeInstance, isRemote, persistenceScope]);
 
   const refreshDiscordChannelsCacheFast = useCallback(async () => {
     try {
@@ -195,7 +198,7 @@ export function useChannelCache(params: UseChannelCacheParams) {
         ? await api.remoteListDiscordGuildChannelsFast(activeInstance)
         : await api.listDiscordGuildChannelsFast();
       const baseChannels = mergeDiscordGuildChannels(
-        deriveDiscordGuildChannelsFromChannelNodes(channelNodesByInstance[activeInstance] ?? []),
+        deriveDiscordGuildChannelsFromChannelNodes(channelNodesByInstanceRef.current[activeInstance] ?? []),
         channels,
       );
       setDiscordGuildChannelsByInstance((current) => ({
@@ -210,7 +213,7 @@ export function useChannelCache(params: UseChannelCacheParams) {
       logDevIgnoredError("refreshDiscordChannelsCacheFast", error);
       return [];
     }
-  }, [activeInstance, channelNodesByInstance, isRemote]);
+  }, [activeInstance, isRemote]);
 
   useEffect(() => {
     if (!shouldWarmSharedChannels(route) || !persistenceResolved) return;
@@ -225,7 +228,14 @@ export function useChannelCache(params: UseChannelCacheParams) {
     void Promise.allSettled([
       refreshChannelNodesCache(),
       refreshDiscordChannelsCache(),
-    ]);
+    ]).then(() => {
+      // Mark resolved after all warming attempts complete, even if name
+      // resolution failed — stops the spinner from spinning indefinitely.
+      setDiscordChannelsResolvedByInstance((current) => {
+        if (current[activeInstance]) return current;
+        return { ...current, [activeInstance]: true };
+      });
+    });
   }, [
     route,
     instanceToken,
