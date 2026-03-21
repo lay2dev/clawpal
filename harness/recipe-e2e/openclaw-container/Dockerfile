@@ -38,6 +38,7 @@ RUN mkdir -p /root/.clawpal/snapshots \
 COPY harness/recipe-e2e/openclaw-container/seed/openclaw.json /root/.openclaw/openclaw.json
 COPY harness/recipe-e2e/openclaw-container/seed/auth-profiles.json /root/.openclaw/agents/main/agent/auth-profiles.json
 COPY harness/recipe-e2e/openclaw-container/seed/model-profiles.json /root/.clawpal/model-profiles.json
+COPY harness/recipe-e2e/openclaw-container/seed/discord-guild-channels.json /root/.clawpal/discord-guild-channels.json
 COPY harness/recipe-e2e/openclaw-container/seed/IDENTITY.md /root/.openclaw/agents/main/agent/IDENTITY.md
 COPY harness/recipe-e2e/openclaw-container/seed/SOUL.md /root/.openclaw/agents/main/agent/SOUL.md
 

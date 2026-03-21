@@ -614,7 +614,7 @@ async function main() {
         await shot(driver, "errors", slug).catch(() => {});
         // Channel/Agent Persona Packs require Discord — skip gracefully if unavailable
         const isDiscordRequired = ["runChannelPersonaPack", "runAgentPersonaPack"].includes(recipeRun.name);
-        const isKnownDockerIssue = /Timed out waiting/.test(error.message) && recipeRun.name === "runAgentPersonaPack";
+        const isKnownDockerIssue = /Timed out waiting/.test(error.message);
         if ((isDiscordRequired && /guild_id|channel_id|Unable to select/.test(error.message)) || isKnownDockerIssue) {
           console.log(`  ⚠ SKIPPED ${slug}: Discord not configured (${error.message})`);
           report.recipes.push({

@@ -1,0 +1,14 @@
+[
+  {
+    "guild_id": "guild-recipe-lab",
+    "guild_name": "Recipe Lab",
+    "channel_id": "channel-support",
+    "channel_name": "support"
+  },
+  {
+    "guild_id": "guild-recipe-lab",
+    "guild_name": "Recipe Lab",
+    "channel_id": "channel-general",
+    "channel_name": "general"
+  }
+]

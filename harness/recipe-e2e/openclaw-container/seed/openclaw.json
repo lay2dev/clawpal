@@ -33,34 +33,12 @@
   },
   "channels": {
     "discord": {
-      "enabled": true,
-      "groupPolicy": "allowlist",
-      "streaming": "off",
+      "botToken": "fake-bot-token-for-e2e",
       "guilds": {
         "guild-recipe-lab": {
           "channels": {
-            "channel-general": {
-              "systemPrompt": ""
-            },
-            "channel-support": {
-              "systemPrompt": ""
-            }
-          }
-        }
-      },
-      "accounts": {
-        "default": {
-          "guilds": {
-            "guild-recipe-lab": {
-              "channels": {
-                "channel-general": {
-                  "systemPrompt": ""
-                },
-                "channel-support": {
-                  "systemPrompt": ""
-                }
-              }
-            }
+            "channel-support": {},
+            "channel-general": {}
           }
         }
       }
