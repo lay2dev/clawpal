@@ -36,6 +36,7 @@ import { useInstancePersistence } from "./hooks/useInstancePersistence";
 import { useChannelCache } from "./hooks/useChannelCache";
 import { useAgentCache } from "./hooks/useAgentCache";
 import { useModelProfileCache } from "./hooks/useModelProfileCache";
+import { useInstanceDataStore } from "./hooks/useInstanceDataStore";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useWorkspaceTabs } from "./hooks/useWorkspaceTabs";
 import { useNavItems } from "./hooks/useNavItems";
@@ -262,6 +263,18 @@ export function App() {
     isConnected,
   });
 
+  const instanceDataStore = useInstanceDataStore({
+    activeInstance,
+    route,
+    instanceToken,
+    persistenceScope,
+    persistenceResolved,
+    isRemote,
+    isConnected,
+    setAgentsCache: agents.setAgentsCache,
+    refreshChannelNodesCache: channels.refreshChannelNodesCache,
+  });
+
   // ── App lifecycle ──
   const lifecycle = useAppLifecycle({
     showToast,
@@ -353,11 +366,32 @@ export function App() {
         agentsLoading: agents.agentsLoading,
         modelProfiles: modelProfiles.modelProfiles,
         modelProfilesLoading: modelProfiles.modelProfilesLoading,
+        channelsConfigSnapshot: instanceDataStore.channelsConfigSnapshot,
+        channelsRuntimeSnapshot: instanceDataStore.channelsRuntimeSnapshot,
+        channelsSnapshotsLoading: instanceDataStore.channelsSnapshotsLoading,
+        channelsSnapshotsLoaded: instanceDataStore.channelsSnapshotsLoaded,
+        historyItems: instanceDataStore.historyItems,
+        historyRuns: instanceDataStore.historyRuns,
+        historyLoading: instanceDataStore.historyLoading,
+        historyLoaded: instanceDataStore.historyLoaded,
+        sessionFiles: instanceDataStore.sessionFiles,
+        sessionAnalysis: instanceDataStore.sessionAnalysis,
+        sessionsLoading: instanceDataStore.sessionsLoading,
+        sessionsLoaded: instanceDataStore.sessionsLoaded,
+        backups: instanceDataStore.backups,
+        backupsLoading: instanceDataStore.backupsLoading,
+        backupsLoaded: instanceDataStore.backupsLoaded,
         setAgentsCache: agents.setAgentsCache,
+        setSessionAnalysis: instanceDataStore.setSessionAnalysis,
+        setBackups: instanceDataStore.setBackups,
         refreshAgentsCache: agents.refreshAgentsCache,
         refreshModelProfilesCache: modelProfiles.refreshModelProfilesCache,
         refreshChannelNodesCache: channels.refreshChannelNodesCache,
         refreshDiscordChannelsCache: channels.refreshDiscordChannelsCache,
+        refreshChannelsSnapshotState: instanceDataStore.refreshChannelsSnapshotState,
+        refreshHistoryState: instanceDataStore.refreshHistoryState,
+        refreshSessionFiles: instanceDataStore.refreshSessionFiles,
+        refreshBackups: instanceDataStore.refreshBackups,
       }}>
       <div className="flex flex-1 overflow-hidden">
 

@@ -405,7 +405,10 @@ pub async fn write_remote_agent_identity(
     emoji: Option<&str>,
     persona: Option<&str>,
 ) -> Result<(), String> {
-    self::write_remote_agent_identity_with_config(pool, host_id, agent_id, name, emoji, persona, None).await
+    self::write_remote_agent_identity_with_config(
+        pool, host_id, agent_id, name, emoji, persona, None,
+    )
+    .await
 }
 
 pub async fn write_remote_agent_identity_with_config(
@@ -429,7 +432,8 @@ pub async fn write_remote_agent_identity_with_config(
         &owned_cfg
     };
 
-    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
+    let (identity_path, existing) =
+        resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
     let defaults = resolve_identity_defaults(cfg, agent_id)?;
     let remote_workspace = identity_path
         .strip_suffix("/IDENTITY.md")
@@ -538,7 +542,8 @@ pub async fn set_remote_agent_persona_with_config(
         owned_cfg = c;
         &owned_cfg
     };
-    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
+    let (identity_path, existing) =
+        resolve_remote_identity_path(pool, host_id, cfg, agent_id).await?;
     let explicit_defaults = resolve_identity_explicit_defaults(cfg, agent_id)?;
     let defaults = resolve_identity_defaults(cfg, agent_id)?;
     let remote_workspace = identity_path
@@ -574,7 +579,8 @@ pub async fn clear_remote_agent_persona(
         crate::commands::remote_read_openclaw_config_text_and_json(pool, host_id)
             .await
             .map_err(|error| format!("Failed to parse config: {error}"))?;
-    let (identity_path, existing) = resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
+    let (identity_path, existing) =
+        resolve_remote_identity_path(pool, host_id, &cfg, agent_id).await?;
     let explicit_defaults = resolve_identity_explicit_defaults(&cfg, agent_id)?;
     let defaults = resolve_identity_defaults(&cfg, agent_id)?;
     let remote_workspace = identity_path

@@ -1,13 +1,14 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { formatBytes } from "@/lib/utils";
 import type {
   AgentSessionAnalysis,
   SessionAnalysis,
   SessionAnalysisChunkEvent,
-  SessionFile,
   SessionPreviewDoneEvent,
   SessionPreviewMessage,
   SessionPreviewPageEvent,
@@ -44,12 +45,19 @@ import {
 export function SessionAnalysisPanel() {
   const { t } = useTranslation();
   const ua = useApi();
+  const instance = useInstance();
+  const sessionFiles = instance.sessionFiles ?? [];
+  const sessionAnalysis = instance.sessionAnalysis ?? null;
+  const refreshSessionFiles = instance.refreshSessionFiles ?? (async () => []);
+  const setSessionAnalysis = (
+    next: SetStateAction<AgentSessionAnalysis[] | null>,
+  ) => {
+    instance.setSessionAnalysis?.(next);
+  };
   const analysisHandleRef = useRef<string | null>(null);
   const previewHandleRef = useRef<string | null>(null);
 
-  const [sessionFiles, setSessionFiles] = useState<SessionFile[]>([]);
   const [dataMessage, setDataMessage] = useState("");
-  const [sessionAnalysis, setSessionAnalysis] = useState<AgentSessionAnalysis[] | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [selectedSessions, setSelectedSessions] = useState<Map<string, Set<string>>>(new Map());
@@ -111,8 +119,7 @@ export function SessionAnalysisPanel() {
   };
 
   function refreshData() {
-    ua.listSessionFiles()
-      .then(setSessionFiles)
+    refreshSessionFiles()
       .catch(() => setDataMessage(t('doctor.failedLoadSessions')));
   }
 
@@ -138,19 +145,19 @@ export function SessionAnalysisPanel() {
   }
 
   useEffect(() => {
-    // Reset and reload when switching instances
+    // Reset local UI state when the active instance bucket changes.
     cancelStreamHandle(analysisHandleRef.current);
     cancelStreamHandle(previewHandleRef.current);
     analysisHandleRef.current = null;
     previewHandleRef.current = null;
-    setSessionFiles([]);
-    setSessionAnalysis(null);
     setDataMessage("");
+    setAnalyzing(false);
     setExpandedAgents(new Set());
     setSelectedSessions(new Map());
-    if (!ua.isRemote || ua.isConnected) {
-      refreshData();
-    }
+    setPreviewOpen(false);
+    setPreviewMessages([]);
+    setPreviewLoading(false);
+    setPreviewTitle("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ua.instanceId, ua.instanceToken, ua.isRemote, ua.isConnected]);
 

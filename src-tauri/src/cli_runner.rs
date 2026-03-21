@@ -1813,8 +1813,14 @@ async fn apply_internal_remote_command(
                     .get("persona")
                     .and_then(serde_json::Value::as_str)
                     .ok_or_else(|| "agent persona command missing persona".to_string())?;
-                crate::agent_identity::set_remote_agent_persona_with_config(pool, host_id, agent_id, persona, cached_config)
-                    .await?;
+                crate::agent_identity::set_remote_agent_persona_with_config(
+                    pool,
+                    host_id,
+                    agent_id,
+                    persona,
+                    cached_config,
+                )
+                .await?;
             }
             Ok(true)
         }
@@ -2633,7 +2639,9 @@ pub async fn remote_apply_queued_commands_with_services(
                 cached_cfg = serde_json::from_str(&new_content).ok();
             }
         }
-        match apply_internal_remote_command(&pool, &host_id, &cmd.command, cached_cfg.as_ref()).await {
+        match apply_internal_remote_command(&pool, &host_id, &cmd.command, cached_cfg.as_ref())
+            .await
+        {
             Ok(true) => {
                 applied_count += 1;
                 continue;

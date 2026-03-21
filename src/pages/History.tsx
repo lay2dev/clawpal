@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { DiffViewer } from "../components/DiffViewer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -47,26 +48,24 @@ export function History({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const [history, setHistory] = useState<HistoryItem[]>(initialHistory);
-  const [runtimeRuns, setRuntimeRuns] = useState<RecipeRuntimeRun[]>(initialRuns);
+  const {
+    historyItems = [],
+    historyRuns = [],
+    historyLoading = false,
+    historyLoaded = false,
+    refreshHistoryState = async () => {},
+  } = useInstance();
+  const history =
+    historyLoaded || initialHistory.length === 0 ? historyItems : initialHistory;
+  const runtimeRuns =
+    historyLoaded || initialRuns.length === 0 ? historyRuns : initialRuns;
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [message, setMessage] = useState("");
 
   const refreshHistory = () => {
-    return Promise.all([
-      ua.listHistory(),
-      ua.listRecipeRuns().catch(() => [] as RecipeRuntimeRun[]),
-    ])
-      .then(([resp, runs]) => {
-        setHistory(resp.items);
-        setRuntimeRuns(runs);
-      })
+    return refreshHistoryState()
       .catch(() => setMessage(t('history.failedLoad')));
   };
-
-  useEffect(() => {
-    refreshHistory();
-  }, [ua]);
 
   // Build a map from snapshot ID to its display info for rollback references
   const historyMap = new Map(
@@ -228,7 +227,7 @@ export function History({
           );
         })}
       </div>
-      <Button variant="outline" onClick={refreshHistory} className="mt-3">
+      <Button variant="outline" onClick={refreshHistory} className="mt-3" disabled={historyLoading}>
         {t('history.refresh')}
       </Button>
       {message && (
