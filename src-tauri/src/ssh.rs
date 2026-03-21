@@ -513,7 +513,15 @@ impl SshConnectionPool {
             ));
             message
         })?;
-        let write_res = {
+        // Check if we should skip SFTP entirely (backoff from previous timeout)
+        let write_backoff_active = self.is_sftp_read_backoff_active(id, Self::now_ms()).await;
+        let write_res = if write_backoff_active {
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] sftp_write skipped (backoff active) id={} path={} — going straight to exec",
+                id, resolved
+            ));
+            Err(clawpal_core::ssh::SshError::Sftp("sftp_write skipped (backoff)".into()))
+        } else {
             let session = conn.session.lock().await.clone();
             let sftp_fut = session.sftp_write(&resolved, content.as_bytes());
             match tokio::time::timeout(std::time::Duration::from_secs(5), sftp_fut).await {
@@ -523,6 +531,7 @@ impl SshConnectionPool {
                         "[dev][ssh_pool] sftp_write timeout id={} path={} — falling back to exec",
                         id, resolved
                     ));
+                    self.set_sftp_read_backoff(id, Self::now_ms()).await;
                     Err(clawpal_core::ssh::SshError::Sftp("sftp_write timed out".into()))
                 }
             }
