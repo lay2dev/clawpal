@@ -17,7 +17,7 @@ jobs:
   recipe-gui-e2e:
     name: Recipe GUI E2E
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4

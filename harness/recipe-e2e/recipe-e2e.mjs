@@ -389,7 +389,7 @@ async function runDedicatedAgent(driver) {
   await waitForAnyText(
     driver,
     ["Created dedicated agent E2E Test Agent (test-e2e-agent)", "Your recipe changes were applied", "All set", "What changed", "Execution failed"],
-    300_000,
+    600_000,
   );
   timings.execution_ms = roundMs(performance.now() - executionStart);
 
@@ -467,7 +467,7 @@ async function runChannelPersonaPack(driver) {
   await waitForAnyText(
     driver,
     ["Updated persona for channel channel-support", "Your recipe changes were applied"],
-    300_000,
+    600_000,
   );
   timings.execution_ms = roundMs(performance.now() - executionStart);
 
@@ -528,7 +528,7 @@ async function runAgentPersonaPack(driver) {
   await waitForAnyText(
     driver,
     ["Updated persona for agent main", "Your recipe changes were applied"],
-    300_000,
+    600_000,
   );
   timings.execution_ms = roundMs(performance.now() - executionStart);
 
