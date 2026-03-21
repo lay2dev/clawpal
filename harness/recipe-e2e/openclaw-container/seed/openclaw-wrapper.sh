@@ -16,6 +16,15 @@ AGENTS_JSON
     cat /root/.openclaw/openclaw.json
     exit 0
     ;;
+  *"gateway restart"*|*"gateway stop"*)
+    # Short-circuit gateway restart/stop — no real gateway restart needed in E2E
+    echo "Gateway restart skipped (E2E mode)"
+    exit 0
+    ;;
+  *"gateway status"*)
+    echo "Gateway is running"
+    exit 0
+    ;;
   *)
     exec /usr/bin/openclaw-real "$@"
     ;;
