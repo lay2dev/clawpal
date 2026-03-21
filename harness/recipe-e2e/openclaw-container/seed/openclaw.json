@@ -11,13 +11,7 @@
     }
   },
   "models": {
-    "providers": {
-      "anthropic": {
-        "apiKey": "sk-ant-fake-key-for-e2e-testing",
-        "baseUrl": "https://api.anthropic.com/v1",
-        "models": []
-      }
-    }
+    "providers": {}
   },
   "agents": {
     "defaults": {

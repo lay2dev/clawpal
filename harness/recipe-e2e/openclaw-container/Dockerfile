@@ -28,7 +28,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest
+RUN npm install -g openclaw@2026.3.13
 
 RUN mkdir -p /root/.clawpal/snapshots \
     /root/.openclaw/agents/main/agent \
