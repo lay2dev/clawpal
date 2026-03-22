@@ -719,23 +719,38 @@ mod tests {
 
     #[test]
     fn command_kind_for_activity_config_write() {
-        assert_eq!(super::command_kind_for_activity(&["__config_write__".into()]), "file_write");
+        assert_eq!(
+            super::command_kind_for_activity(&["__config_write__".into()]),
+            "file_write"
+        );
     }
 
     #[test]
     fn command_kind_for_activity_rollback() {
-        assert_eq!(super::command_kind_for_activity(&["__rollback__".into()]), "file_write");
+        assert_eq!(
+            super::command_kind_for_activity(&["__rollback__".into()]),
+            "file_write"
+        );
     }
 
     #[test]
     fn command_kind_for_activity_regular_command() {
-        assert_eq!(super::command_kind_for_activity(&["openclaw".into(), "status".into()]), "command");
+        assert_eq!(
+            super::command_kind_for_activity(&["openclaw".into(), "status".into()]),
+            "command"
+        );
     }
 
     #[test]
     fn command_kind_for_activity_internal_prefix() {
-        assert_eq!(super::command_kind_for_activity(&["__some_internal__".into()]), "system_step");
-        assert_eq!(super::command_kind_for_activity(&["internal_foo".into()]), "system_step");
+        assert_eq!(
+            super::command_kind_for_activity(&["__some_internal__".into()]),
+            "system_step"
+        );
+        assert_eq!(
+            super::command_kind_for_activity(&["internal_foo".into()]),
+            "system_step"
+        );
     }
 
     #[test]
@@ -755,7 +770,8 @@ mod tests {
         let result = super::display_command_for_activity(
             "Run test",
             &["echo".into(), "hello world".into()],
-        ).unwrap();
+        )
+        .unwrap();
         assert!(result.contains("echo"));
         assert!(result.contains("hello world"));
     }
