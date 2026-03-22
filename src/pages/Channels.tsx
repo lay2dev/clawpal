@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   AgentOverview,
@@ -10,7 +10,7 @@ import { useInstance } from "@/lib/instance-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { AlertTriangleIcon, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -59,6 +59,18 @@ function extractPeerId(path: string): string {
   return path.split(".").pop() || path;
 }
 
+function ResolutionWarningIcon({ message }: { message: string }) {
+  return (
+    <span
+      className="ml-1 inline-flex align-middle text-amber-500"
+      title={message}
+      aria-label={message}
+    >
+      <AlertTriangleIcon className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
 export function Channels({
   showToast,
 }: {
@@ -94,6 +106,7 @@ export function Channels({
   const modelProfiles = sharedModelProfiles ?? [];
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const discordRetryAttemptRef = useRef(0);
 
   // Create agent dialog
   const [showCreateAgent, setShowCreateAgent] = useState(false);
@@ -147,6 +160,50 @@ export function Channels({
     }
     return Array.from(map.entries());
   }, [discordChannels]);
+  const hasUnresolvedDiscordDisplayInfo = useMemo(
+    () =>
+      (discordChannels ?? []).some(
+        (channel) =>
+          channel.guildName === channel.guildId || channel.channelName === channel.channelId,
+      ),
+    [discordChannels],
+  );
+
+  useEffect(() => {
+    if (discordChannels === null || discordChannels.length === 0) {
+      discordRetryAttemptRef.current = 0;
+      return;
+    }
+    if (!hasUnresolvedDiscordDisplayInfo || discordChannelsResolved) {
+      discordRetryAttemptRef.current = 0;
+      return;
+    }
+    if (ua.discordChannelsLoading || refreshing === "discord") {
+      return;
+    }
+
+    const attempt = discordRetryAttemptRef.current;
+    const retryDelayMs = Math.min(10_000, 1_500 + attempt * 1_500);
+    const timeoutId = window.setTimeout(() => {
+      discordRetryAttemptRef.current = attempt + 1;
+      void ua.refreshDiscordChannelsCache(true).catch((error) => {
+        if (!hasGuidanceEmitted(error)) {
+          console.error("Failed to refresh unresolved Discord channel display info:", error);
+        }
+      });
+    }, retryDelayMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    discordChannels,
+    discordChannelsResolved,
+    hasUnresolvedDiscordDisplayInfo,
+    refreshing,
+    ua.discordChannelsLoading,
+    ua.refreshDiscordChannelsCache,
+  ]);
 
   // Non-Discord channel nodes grouped by platform, filtered to leaf-level
   const otherPlatforms = useMemo(() => {
@@ -295,25 +352,44 @@ export function Channels({
                 {discordGuilds.map(([guildId, { guildName, channels }]) => (
                   <div key={guildId}>
                     <div className="flex items-center gap-1.5 mb-2">
+                      {(() => {
+                        const guildWarning = channels.find(
+                          (channel) =>
+                            channel.guildName === channel.guildId && Boolean(channel.resolutionWarning),
+                        )?.resolutionWarning;
+                        return (
                       <span className="text-sm font-medium">
                         {guildName}
-                        {!discordChannelsResolved && guildName === guildId && (
+                        {guildWarning ? (
+                          <ResolutionWarningIcon message={guildWarning} />
+                        ) : !discordChannelsResolved && guildName === guildId ? (
                           <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
-                        )}
+                        ) : null}
                       </span>
+                        );
+                      })()}
                       <Badge variant="secondary" className="text-[10px]">{guildId}</Badge>
                     </div>
                     <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
                       {channels.map((ch) => (
                         <div key={ch.channelId} className="rounded-md border px-3 py-2">
                           <div className="text-sm font-medium">
-                            {ch.channelName === ch.channelId && !discordChannelsResolved ? (
+                            {ch.channelName === ch.channelId ? (
                               <span className="text-muted-foreground font-mono text-xs">
                                 {ch.channelId}
-                                <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
+                                {ch.resolutionWarning ? (
+                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                ) : !discordChannelsResolved ? (
+                                  <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
+                                ) : null}
                               </span>
                             ) : (
-                              ch.channelName
+                              <>
+                                {ch.channelName}
+                                {ch.resolutionWarning ? (
+                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                ) : null}
+                              </>
                             )}
                           </div>
                           <div className="text-xs text-muted-foreground mt-0.5 mb-1.5">{ch.channelId}</div>

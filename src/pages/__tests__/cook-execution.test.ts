@@ -113,16 +113,16 @@ describe("cook execution helpers", () => {
     expect(
       getCookPlanningProgress("checks", {
         authRequired: true,
-        configRequired: true,
+        configRequired: false,
         completedCount: 0,
-        totalCount: 2,
+        totalCount: 1,
       }),
     ).toEqual({
-      value: 74,
-      labelKey: "cook.progressChecksBoth",
+      value: 58,
+      labelKey: "cook.progressChecksAuth",
       labelArgs: {
         complete: 0,
-        total: 2,
+        total: 1,
       },
       animated: true,
     });
@@ -134,7 +134,7 @@ describe("cook execution helpers", () => {
         totalCount: 2,
       }),
     ).toEqual({
-      value: 83,
+      value: 70,
       labelKey: "cook.progressChecksBoth",
       labelArgs: {
         complete: 1,

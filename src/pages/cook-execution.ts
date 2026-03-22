@@ -93,8 +93,10 @@ export function getCookPlanningProgress(
             : checks?.configRequired
               ? "cook.progressChecksConfig"
               : "cook.progressChecksBoth";
+      const baseValue = 58;
+      const stageSpan = 24;
       return {
-        value: 74 + Math.round((completedCount / totalCount) * 18),
+        value: baseValue + Math.round((completedCount / totalCount) * stageSpan),
         labelKey,
         labelArgs: {
           complete: completedCount,

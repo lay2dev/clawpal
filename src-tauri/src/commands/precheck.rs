@@ -1,5 +1,6 @@
 use clawpal_core::precheck::{self, PrecheckIssue};
-use tauri::State;
+use serde_json::json;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::ssh::SshConnectionPool;
 
@@ -37,6 +38,44 @@ fn merge_auth_precheck_issues(
         });
     }
     issues
+}
+
+fn emit_cook_activity(
+    app: &AppHandle,
+    session_id: Option<&str>,
+    instance_id: &str,
+    id: &str,
+    label: &str,
+    status: &str,
+    side_effect: bool,
+    target: Option<&str>,
+    display_command: Option<&str>,
+    started_at: &str,
+    finished_at: Option<&str>,
+    details: Option<String>,
+) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+
+    let _ = app.emit(
+        "cook:activity",
+        json!({
+            "id": id,
+            "sessionId": session_id,
+            "instanceId": instance_id,
+            "phase": "planning.auth",
+            "kind": "auth_check",
+            "label": label,
+            "status": status,
+            "sideEffect": side_effect,
+            "target": target,
+            "displayCommand": display_command,
+            "startedAt": started_at,
+            "finishedAt": finished_at,
+            "details": details,
+        }),
+    );
 }
 
 #[tauri::command]
@@ -106,8 +145,10 @@ pub async fn precheck_transport(
 
 #[tauri::command]
 pub async fn precheck_auth(
+    app: AppHandle,
     pool: State<'_, SshConnectionPool>,
     instance_id: String,
+    activity_session_id: Option<String>,
 ) -> Result<Vec<PrecheckIssue>, String> {
     let registry = clawpal_core::instance::InstanceRegistry::load().map_err(|e| e.to_string())?;
     let instance = registry
@@ -116,22 +157,198 @@ pub async fn precheck_auth(
 
     match &instance.instance_type {
         clawpal_core::instance::InstanceType::RemoteSsh => {
-            let (profiles, _) =
+            let session_id = activity_session_id.as_deref();
+            let collect_id = format!("{}:planning:auth:profiles", instance_id);
+            let collect_started_at = chrono::Utc::now().to_rfc3339();
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &collect_id,
+                "Collect remote model profiles",
+                "started",
+                false,
+                Some("remote OpenClaw config"),
+                Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
+                &collect_started_at,
+                None,
+                None,
+            );
+            let (profiles, extract_result) =
                 super::profiles::collect_remote_profiles_from_openclaw(&pool, &instance_id, true)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        emit_cook_activity(
+                            &app,
+                            session_id,
+                            &instance_id,
+                            &collect_id,
+                            "Collect remote model profiles",
+                            "failed",
+                            false,
+                            Some("remote OpenClaw config"),
+                            Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
+                            &collect_started_at,
+                            Some(&chrono::Utc::now().to_rfc3339()),
+                            Some(error.clone()),
+                        );
+                        error
+                    })?;
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &collect_id,
+                "Collect remote model profiles",
+                "succeeded",
+                false,
+                Some("remote OpenClaw config"),
+                Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
+                &collect_started_at,
+                Some(&chrono::Utc::now().to_rfc3339()),
+                Some(format!("Loaded {} profile(s).", profiles.len())),
+            );
+            if extract_result.created > 0 {
+                let sync_id = format!("{}:planning:auth:profile-cache", instance_id);
+                let sync_started_at = chrono::Utc::now().to_rfc3339();
+                emit_cook_activity(
+                    &app,
+                    session_id,
+                    &instance_id,
+                    &sync_id,
+                    "Sync derived profile cache",
+                    "started",
+                    true,
+                    Some("~/.clawpal/model-profiles.json"),
+                    Some("mkdir -p ~/.clawpal && write ~/.clawpal/model-profiles.json"),
+                    &sync_started_at,
+                    None,
+                    None,
+                );
+                emit_cook_activity(
+                    &app,
+                    session_id,
+                    &instance_id,
+                    &sync_id,
+                    "Sync derived profile cache",
+                    "succeeded",
+                    true,
+                    Some("~/.clawpal/model-profiles.json"),
+                    Some("mkdir -p ~/.clawpal && write ~/.clawpal/model-profiles.json"),
+                    &sync_started_at,
+                    Some(&chrono::Utc::now().to_rfc3339()),
+                    Some(format!(
+                        "Persisted {} newly derived profile(s) for future checks.",
+                        extract_result.created
+                    )),
+                );
+            }
+            let resolve_id = format!("{}:planning:auth:resolve", instance_id);
+            let resolve_started_at = chrono::Utc::now().to_rfc3339();
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &resolve_id,
+                "Resolve provider credentials",
+                "started",
+                false,
+                Some(instance.label.as_str()),
+                Some("Inspect remote auth store and environment"),
+                &resolve_started_at,
+                None,
+                None,
+            );
             let resolved = super::profiles::resolve_remote_api_keys_for_profiles(
                 &pool,
                 &instance_id,
                 &profiles,
             )
             .await;
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &resolve_id,
+                "Resolve provider credentials",
+                "succeeded",
+                false,
+                Some(instance.label.as_str()),
+                Some("Inspect remote auth store and environment"),
+                &resolve_started_at,
+                Some(&chrono::Utc::now().to_rfc3339()),
+                Some(format!("Checked {} profile(s).", profiles.len())),
+            );
             Ok(merge_auth_precheck_issues(&profiles, &resolved))
         }
         _ => {
+            let session_id = activity_session_id.as_deref();
+            let resolve_id = format!("{}:planning:auth:local", instance_id);
+            let resolve_started_at = chrono::Utc::now().to_rfc3339();
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &resolve_id,
+                "Resolve provider credentials",
+                "started",
+                false,
+                Some("local shell"),
+                Some("Inspect local model profiles and auth environment"),
+                &resolve_started_at,
+                None,
+                None,
+            );
             let openclaw = clawpal_core::openclaw::OpenclawCli::new();
-            let profiles =
-                clawpal_core::profile::list_profiles(&openclaw).map_err(|e| e.to_string())?;
-            let resolved = super::resolve_api_keys()?;
+            let profiles = clawpal_core::profile::list_profiles(&openclaw).map_err(|e| {
+                let message = e.to_string();
+                emit_cook_activity(
+                    &app,
+                    session_id,
+                    &instance_id,
+                    &resolve_id,
+                    "Resolve provider credentials",
+                    "failed",
+                    false,
+                    Some("local shell"),
+                    Some("Inspect local model profiles and auth environment"),
+                    &resolve_started_at,
+                    Some(&chrono::Utc::now().to_rfc3339()),
+                    Some(message.clone()),
+                );
+                message
+            })?;
+            let resolved = super::resolve_api_keys().map_err(|error| {
+                emit_cook_activity(
+                    &app,
+                    session_id,
+                    &instance_id,
+                    &resolve_id,
+                    "Resolve provider credentials",
+                    "failed",
+                    false,
+                    Some("local shell"),
+                    Some("Inspect local model profiles and auth environment"),
+                    &resolve_started_at,
+                    Some(&chrono::Utc::now().to_rfc3339()),
+                    Some(error.clone()),
+                );
+                error
+            })?;
+            emit_cook_activity(
+                &app,
+                session_id,
+                &instance_id,
+                &resolve_id,
+                "Resolve provider credentials",
+                "succeeded",
+                false,
+                Some("local shell"),
+                Some("Inspect local model profiles and auth environment"),
+                &resolve_started_at,
+                Some(&chrono::Utc::now().to_rfc3339()),
+                Some(format!("Checked {} profile(s).", profiles.len())),
+            );
             Ok(merge_auth_precheck_issues(&profiles, &resolved))
         }
     }

@@ -618,29 +618,6 @@ pub async fn diagnose_ssh(
     })
 }
 
-// --- Extracted from mod.rs ---
-
-pub(crate) fn is_owner_display_parse_error(text: &str) -> bool {
-    clawpal_core::doctor::owner_display_parse_error(text)
-}
-
-pub(crate) async fn run_openclaw_remote_with_autofix(
-    pool: &SshConnectionPool,
-    host_id: &str,
-    args: &[&str],
-) -> Result<crate::cli_runner::CliOutput, String> {
-    let first = crate::cli_runner::run_openclaw_remote(pool, host_id, args).await?;
-    if first.exit_code == 0 {
-        return Ok(first);
-    }
-    let combined = format!("{}\n{}", first.stderr, first.stdout);
-    if !is_owner_display_parse_error(&combined) {
-        return Ok(first);
-    }
-    let _ = crate::cli_runner::run_openclaw_remote(pool, host_id, &["doctor", "--fix"]).await;
-    crate::cli_runner::run_openclaw_remote(pool, host_id, args).await
-}
-
 /// Private helper: snapshot current config then write new config on remote.
 pub(crate) async fn remote_write_config_with_snapshot(
     pool: &SshConnectionPool,
@@ -653,6 +630,13 @@ pub(crate) async fn remote_write_config_with_snapshot(
     // Use core function to prepare config write
     let (new_text, snapshot_text) =
         clawpal_core::config::prepare_config_write(current_text, next, source)?;
+    crate::commands::logs::log_remote_config_write(
+        "snapshot_write",
+        host_id,
+        Some(source),
+        config_path,
+        &new_text,
+    );
 
     // Create snapshot dir
     pool.exec(host_id, "mkdir -p ~/.clawpal/snapshots").await?;

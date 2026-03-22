@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::execution_spec::ExecutionSpec;
 use crate::recipe_runtime::systemd;
-use crate::recipe_store::Artifact as RecipeRuntimeArtifact;
+use crate::recipe_store::{
+    Artifact as RecipeRuntimeArtifact, AuditEntry as RecipeRuntimeAuditEntry,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -53,6 +55,8 @@ pub struct ExecuteRecipeResult {
     pub instance_id: String,
     pub summary: String,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub audit_trail: Vec<RecipeRuntimeAuditEntry>,
 }
 
 fn has_command_value(value: Option<&Value>) -> bool {

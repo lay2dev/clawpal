@@ -824,14 +824,39 @@ pub async fn remote_get_system_status(
     timed_async!("remote_get_system_status", {
         // Tier 1: fast, essential — health check + config + real agent list.
         let (config_res, agents_res, pgrep_res) = tokio::join!(
-            run_openclaw_remote_with_autofix(
+            crate::cli_runner::run_openclaw_remote(
                 &pool,
                 &host_id,
                 &["config", "get", "agents", "--json"]
             ),
-            run_openclaw_remote_with_autofix(&pool, &host_id, &["agents", "list", "--json"]),
+            crate::cli_runner::run_openclaw_remote(&pool, &host_id, &["agents", "list", "--json"]),
             pool.exec(&host_id, "pgrep -f '[o]penclaw-gateway' >/dev/null 2>&1"),
         );
+
+        if let Ok(output) = &config_res {
+            if output.exit_code != 0 {
+                let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+                if clawpal_core::doctor::owner_display_parse_error(&details) {
+                    crate::commands::logs::log_remote_autofix_suppressed(
+                        &host_id,
+                        "openclaw config get agents --json",
+                        "owner_display_parse_error",
+                    );
+                }
+            }
+        }
+        if let Ok(output) = &agents_res {
+            if output.exit_code != 0 {
+                let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+                if clawpal_core::doctor::owner_display_parse_error(&details) {
+                    crate::commands::logs::log_remote_autofix_suppressed(
+                        &host_id,
+                        "openclaw agents list --json",
+                        "owner_display_parse_error",
+                    );
+                }
+            }
+        }
 
         let config_ok = matches!(&config_res, Ok(output) if output.exit_code == 0);
         let ssh_diagnostic = match (&config_res, &agents_res, &pgrep_res) {
