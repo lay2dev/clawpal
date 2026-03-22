@@ -670,7 +670,9 @@ pub async fn remote_list_agents_overview_with_pool(
     pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
-    let output = crate::cli_runner::run_openclaw_remote(pool, &host_id, &["agents", "list", "--json"]).await?;
+    let output =
+        crate::cli_runner::run_openclaw_remote(pool, &host_id, &["agents", "list", "--json"])
+            .await?;
     // Check which agents have sessions remotely (single command, batch check)
     // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
     let online_set = match pool.exec_login(
@@ -1586,7 +1588,6 @@ mod tests {
         assert!(helper.online);
         assert_eq!(helper.name.as_deref(), Some("Helper"));
     }
-
 
     #[test]
     fn summarize_resolution_error_both_empty() {

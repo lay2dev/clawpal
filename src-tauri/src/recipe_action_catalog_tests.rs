@@ -12,7 +12,11 @@ fn catalog_unique_kinds() {
     let original_len = kinds.len();
     kinds.sort();
     kinds.dedup();
-    assert_eq!(kinds.len(), original_len, "duplicate action kinds in catalog");
+    assert_eq!(
+        kinds.len(),
+        original_len,
+        "duplicate action kinds in catalog"
+    );
 }
 
 #[test]
@@ -21,9 +25,21 @@ fn catalog_all_have_required_fields() {
         assert!(!entry.kind.is_empty(), "empty kind");
         assert!(!entry.title.is_empty(), "empty title for {}", entry.kind);
         assert!(!entry.group.is_empty(), "empty group for {}", entry.kind);
-        assert!(!entry.category.is_empty(), "empty category for {}", entry.kind);
-        assert!(!entry.backend.is_empty(), "empty backend for {}", entry.kind);
-        assert!(!entry.description.is_empty(), "empty description for {}", entry.kind);
+        assert!(
+            !entry.category.is_empty(),
+            "empty category for {}",
+            entry.kind
+        );
+        assert!(
+            !entry.backend.is_empty(),
+            "empty backend for {}",
+            entry.kind
+        );
+        assert!(
+            !entry.description.is_empty(),
+            "empty description for {}",
+            entry.kind
+        );
     }
 }
 

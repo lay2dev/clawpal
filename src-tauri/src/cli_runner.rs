@@ -767,11 +767,9 @@ mod tests {
 
     #[test]
     fn display_command_for_activity_regular_command_is_shell_quoted() {
-        let result = super::display_command_for_activity(
-            "Run test",
-            &["echo".into(), "hello world".into()],
-        )
-        .unwrap();
+        let result =
+            super::display_command_for_activity("Run test", &["echo".into(), "hello world".into()])
+                .unwrap();
         assert!(result.contains("echo"));
         assert!(result.contains("hello world"));
     }
@@ -2062,8 +2060,7 @@ async fn apply_internal_remote_command(
                 config_path,
                 &content,
             );
-            pool.sftp_write(host_id, config_path, &content)
-                .await?;
+            pool.sftp_write(host_id, config_path, &content).await?;
             Ok(true)
         }
         Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
@@ -2351,14 +2348,8 @@ pub async fn apply_queued_commands_with_services(
             }
             match apply_internal_local_command(&paths, &cmd.command) {
                 Ok(true) => {
-                    let step_finished = finish_activity_step(
-                        step_started,
-                        "succeeded",
-                        Some(0),
-                        None,
-                        None,
-                        None,
-                    );
+                    let step_finished =
+                        finish_activity_step(step_started, "succeeded", Some(0), None, None, None);
                     if let Some(emitter) = activity_emitter.as_ref() {
                         emitter.emit(&step_finished);
                     }
@@ -3043,14 +3034,8 @@ pub async fn remote_apply_queued_commands_with_services(
         .await
         {
             Ok(true) => {
-                let step_finished = finish_activity_step(
-                    step_started,
-                    "succeeded",
-                    Some(0),
-                    None,
-                    None,
-                    None,
-                );
+                let step_finished =
+                    finish_activity_step(step_started, "succeeded", Some(0), None, None, None);
                 if let Some(emitter) = activity_emitter.as_ref() {
                     emitter.emit(&step_finished);
                 }
@@ -3060,14 +3045,8 @@ pub async fn remote_apply_queued_commands_with_services(
             }
             Ok(false) => {}
             Err(e) => {
-                let step_failed = finish_activity_step(
-                    step_started,
-                    "failed",
-                    None,
-                    None,
-                    None,
-                    Some(e.clone()),
-                );
+                let step_failed =
+                    finish_activity_step(step_started, "failed", None, None, None, Some(e.clone()));
                 if let Some(emitter) = activity_emitter.as_ref() {
                     emitter.emit(&step_failed);
                 }
@@ -3079,7 +3058,9 @@ pub async fn remote_apply_queued_commands_with_services(
                     &config_path,
                     &config_before,
                 );
-                let _ = pool.sftp_write(&host_id, &config_path, &config_before).await;
+                let _ = pool
+                    .sftp_write(&host_id, &config_path, &config_before)
+                    .await;
                 queues.clear(&host_id);
                 return Ok(ApplyQueueResult {
                     ok: false,
@@ -3133,7 +3114,9 @@ pub async fn remote_apply_queued_commands_with_services(
                     &config_path,
                     &config_before,
                 );
-                let _ = pool.sftp_write(&host_id, &config_path, &config_before).await;
+                let _ = pool
+                    .sftp_write(&host_id, &config_path, &config_before)
+                    .await;
                 queues.clear(&host_id);
                 return Ok(ApplyQueueResult {
                     ok: false,
@@ -3150,14 +3133,8 @@ pub async fn remote_apply_queued_commands_with_services(
                 });
             }
             Err(e) => {
-                let step_failed = finish_activity_step(
-                    step_started,
-                    "failed",
-                    None,
-                    None,
-                    None,
-                    Some(e.clone()),
-                );
+                let step_failed =
+                    finish_activity_step(step_started, "failed", None, None, None, Some(e.clone()));
                 if let Some(emitter) = activity_emitter.as_ref() {
                     emitter.emit(&step_failed);
                 }
@@ -3169,7 +3146,9 @@ pub async fn remote_apply_queued_commands_with_services(
                     &config_path,
                     &config_before,
                 );
-                let _ = pool.sftp_write(&host_id, &config_path, &config_before).await;
+                let _ = pool
+                    .sftp_write(&host_id, &config_path, &config_before)
+                    .await;
                 queues.clear(&host_id);
                 return Ok(ApplyQueueResult {
                     ok: false,

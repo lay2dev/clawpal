@@ -114,13 +114,11 @@ pub mod ssh;
 #[cfg(test)]
 mod execution_spec_tests;
 #[cfg(test)]
+mod recipe_action_catalog_tests;
+#[cfg(test)]
 mod recipe_adapter_tests;
 #[cfg(test)]
 mod recipe_bundle_tests;
-#[cfg(test)]
-mod recipe_tests;
-#[cfg(test)]
-mod recipe_action_catalog_tests;
 #[cfg(test)]
 mod recipe_executor_tests;
 #[cfg(test)]
@@ -131,6 +129,8 @@ mod recipe_planner_tests;
 mod recipe_source_tests;
 #[cfg(test)]
 mod recipe_store_tests;
+#[cfg(test)]
+mod recipe_tests;
 #[cfg(test)]
 mod recipe_workspace_tests;
 

@@ -425,16 +425,16 @@ fn sample_channel_persona_params() -> Map<String, Value> {
     params
 }
 
-fn assert_result_audit_trail(
-    label: &str,
-    result: &clawpal::recipe_executor::ExecuteRecipeResult,
-) {
+fn assert_result_audit_trail(label: &str, result: &clawpal::recipe_executor::ExecuteRecipeResult) {
     assert!(
         !result.audit_trail.is_empty(),
         "expected {label} to emit audit entries"
     );
     assert!(
-        result.audit_trail.iter().any(|entry| entry.phase == "execute"),
+        result
+            .audit_trail
+            .iter()
+            .any(|entry| entry.phase == "execute"),
         "expected {label} audit trail to include execute entries"
     );
     assert!(
@@ -446,11 +446,7 @@ fn assert_result_audit_trail(
     );
 }
 
-fn assert_stored_run_audit_trail(
-    label: &str,
-    runs: &[clawpal::recipe_store::Run],
-    run_id: &str,
-) {
+fn assert_stored_run_audit_trail(label: &str, runs: &[clawpal::recipe_store::Run], run_id: &str) {
     let run = runs
         .iter()
         .find(|run| run.id == run_id)

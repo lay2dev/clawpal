@@ -256,9 +256,17 @@ mod tests {
             "agents": {"list": [{"id": "a"}, {"id": "b"}], "defaults": {"workspace": "/home/user/ws"}}
         }"#;
         let summary = summarize_remote_config_payload(raw);
-        assert!(summary.contains("provider_keys=[anthropic,openai]"), "{}", summary);
+        assert!(
+            summary.contains("provider_keys=[anthropic,openai]"),
+            "{}",
+            summary
+        );
         assert!(summary.contains("agents_list_len=2"), "{}", summary);
-        assert!(summary.contains("defaults_workspace=/home/user/ws"), "{}", summary);
+        assert!(
+            summary.contains("defaults_workspace=/home/user/ws"),
+            "{}",
+            summary
+        );
     }
 
     #[test]

@@ -95,7 +95,9 @@ fn validate_param_pattern_mismatch() {
     let recipe = make_recipe(vec![p]);
     let mut params = Map::new();
     params.insert("email".into(), Value::String("ABC123".into()));
-    assert!(validate(&recipe, &params).iter().any(|e| e.contains("not match pattern")));
+    assert!(validate(&recipe, &params)
+        .iter()
+        .any(|e| e.contains("not match pattern")));
 }
 
 #[test]
@@ -103,7 +105,9 @@ fn validate_param_non_string_rejected() {
     let recipe = make_recipe(vec![make_param("count", true)]);
     let mut params = Map::new();
     params.insert("count".into(), json!(42));
-    assert!(validate(&recipe, &params).iter().any(|e| e.contains("must be string")));
+    assert!(validate(&recipe, &params)
+        .iter()
+        .any(|e| e.contains("must be string")));
 }
 
 // --- render_template_string() ---
@@ -112,12 +116,18 @@ fn validate_param_non_string_rejected() {
 fn render_template_simple() {
     let mut p = Map::new();
     p.insert("name".into(), Value::String("Alice".into()));
-    assert_eq!(render_template_string("Hello {{name}}!", &p), "Hello Alice!");
+    assert_eq!(
+        render_template_string("Hello {{name}}!", &p),
+        "Hello Alice!"
+    );
 }
 
 #[test]
 fn render_template_missing_key_unchanged() {
-    assert_eq!(render_template_string("Hello {{name}}!", &Map::new()), "Hello {{name}}!");
+    assert_eq!(
+        render_template_string("Hello {{name}}!", &Map::new()),
+        "Hello {{name}}!"
+    );
 }
 
 #[test]
@@ -172,7 +182,10 @@ fn render_value_preset_map() {
     let mut p = Map::new();
     p.insert("provider".into(), Value::String("openai".into()));
     let mut pm = Map::new();
-    pm.insert("provider".into(), json!({"openai": {"url": "https://api.openai.com"}}));
+    pm.insert(
+        "provider".into(),
+        json!({"openai": {"url": "https://api.openai.com"}}),
+    );
     assert_eq!(
         render_template_value(&json!("{{presetMap:provider}}"), &p, Some(&pm)),
         json!({"url": "https://api.openai.com"})
@@ -238,14 +251,25 @@ fn load_source_text_single() {
 
 #[test]
 fn load_source_text_list() {
-    let src = serde_json::to_string(&json!([make_recipe_json("a"), make_recipe_json("b")])).unwrap();
-    assert_eq!(crate::recipe::load_recipes_from_source_text(&src).unwrap().len(), 2);
+    let src =
+        serde_json::to_string(&json!([make_recipe_json("a"), make_recipe_json("b")])).unwrap();
+    assert_eq!(
+        crate::recipe::load_recipes_from_source_text(&src)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
 fn load_source_text_wrapped() {
     let src = serde_json::to_string(&json!({"recipes": [make_recipe_json("x")]})).unwrap();
-    assert_eq!(crate::recipe::load_recipes_from_source_text(&src).unwrap().len(), 1);
+    assert_eq!(
+        crate::recipe::load_recipes_from_source_text(&src)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // --- builtin_recipes() ---
@@ -268,7 +292,11 @@ fn step_refs_empty_param_true() {
     let step = RecipeStep {
         action: "test".into(),
         label: "test".into(),
-        args: { let mut m = Map::new(); m.insert("cmd".into(), json!("run {{name}}")); m },
+        args: {
+            let mut m = Map::new();
+            m.insert("cmd".into(), json!("run {{name}}"));
+            m
+        },
     };
     let mut p = Map::new();
     p.insert("name".into(), Value::String("".into()));
@@ -280,7 +308,11 @@ fn step_refs_nonempty_param_false() {
     let step = RecipeStep {
         action: "test".into(),
         label: "test".into(),
-        args: { let mut m = Map::new(); m.insert("cmd".into(), json!("run {{name}}")); m },
+        args: {
+            let mut m = Map::new();
+            m.insert("cmd".into(), json!("run {{name}}"));
+            m
+        },
     };
     let mut p = Map::new();
     p.insert("name".into(), Value::String("alice".into()));
@@ -293,7 +325,12 @@ fn step_refs_nonempty_param_false() {
 fn candidate_config_adds_new_key() {
     let mut p = Map::new();
     p.insert("val".into(), Value::String("hello".into()));
-    let (merged, changes) = build_candidate_config_from_template(&json!({"existing": true}), r#"{"newKey": "{{val}}"}"#, &p).unwrap();
+    let (merged, changes) = build_candidate_config_from_template(
+        &json!({"existing": true}),
+        r#"{"newKey": "{{val}}"}"#,
+        &p,
+    )
+    .unwrap();
     assert_eq!(merged["newKey"], "hello");
     assert_eq!(merged["existing"], true);
     assert!(changes.iter().any(|c| c.op == "add"));
@@ -301,7 +338,9 @@ fn candidate_config_adds_new_key() {
 
 #[test]
 fn candidate_config_replaces_existing() {
-    let (merged, changes) = build_candidate_config_from_template(&json!({"k": "old"}), r#"{"k": "new"}"#, &Map::new()).unwrap();
+    let (merged, changes) =
+        build_candidate_config_from_template(&json!({"k": "old"}), r#"{"k": "new"}"#, &Map::new())
+            .unwrap();
     assert_eq!(merged["k"], "new");
     assert!(changes.iter().any(|c| c.op == "replace"));
 }

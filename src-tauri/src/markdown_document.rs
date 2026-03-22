@@ -436,7 +436,6 @@ mod tests {
         assert_eq!(next, "# Notes\n\n## Persona\nNew\n\n## Other\nStay\n");
     }
 
-
     #[test]
     fn relative_path_validation_accepts_simple_paths() {
         assert!(validate_relative_path("notes.md").is_ok());
