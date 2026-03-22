@@ -118,6 +118,10 @@ mod recipe_adapter_tests;
 #[cfg(test)]
 mod recipe_bundle_tests;
 #[cfg(test)]
+mod recipe_tests;
+#[cfg(test)]
+mod recipe_action_catalog_tests;
+#[cfg(test)]
 mod recipe_executor_tests;
 #[cfg(test)]
 mod recipe_library_tests;

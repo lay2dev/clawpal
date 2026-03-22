@@ -244,3 +244,41 @@ pub async fn remote_read_gateway_error_log(
         Ok(result.stdout)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_remote_config_payload;
+
+    #[test]
+    fn summarize_valid_json_with_providers_and_agents() {
+        let raw = r#"{
+            "models": {"providers": {"openai": {}, "anthropic": {}}},
+            "agents": {"list": [{"id": "a"}, {"id": "b"}], "defaults": {"workspace": "/home/user/ws"}}
+        }"#;
+        let summary = summarize_remote_config_payload(raw);
+        assert!(summary.contains("provider_keys=[anthropic,openai]"), "{}", summary);
+        assert!(summary.contains("agents_list_len=2"), "{}", summary);
+        assert!(summary.contains("defaults_workspace=/home/user/ws"), "{}", summary);
+    }
+
+    #[test]
+    fn summarize_invalid_json() {
+        let summary = summarize_remote_config_payload("not json {{{");
+        assert!(summary.contains("top_keys=[-]"), "{}", summary);
+    }
+
+    #[test]
+    fn summarize_empty_json() {
+        let summary = summarize_remote_config_payload("{}");
+        assert!(summary.contains("top_keys=[-]"), "{}", summary);
+        assert!(summary.contains("provider_keys=[-]"), "{}", summary);
+        assert!(summary.contains("agents_list_len=none"), "{}", summary);
+    }
+
+    #[test]
+    fn summarize_json_no_providers() {
+        let raw = r#"{"models": {}}"#;
+        let summary = summarize_remote_config_payload(raw);
+        assert!(summary.contains("provider_keys=[-]"), "{}", summary);
+    }
+}

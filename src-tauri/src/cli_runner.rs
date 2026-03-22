@@ -688,6 +688,82 @@ mod tests {
 
         assert_eq!(rendered, "Create agent: helper");
     }
+
+    #[test]
+    fn remote_config_root_from_path_normal() {
+        let result = super::remote_config_root_from_path("/home/user/.openclaw/openclaw.json");
+        assert_eq!(result.unwrap(), "/home/user/.openclaw");
+    }
+
+    #[test]
+    fn remote_config_root_from_path_root_file() {
+        let result = super::remote_config_root_from_path("/openclaw.json");
+        assert_eq!(result.unwrap(), "/");
+    }
+
+    #[test]
+    fn remote_config_root_from_path_no_parent_errors() {
+        assert!(super::remote_config_root_from_path("").is_err());
+    }
+
+    #[test]
+    fn shell_quote_basic() {
+        assert_eq!(super::shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_with_single_quote() {
+        let quoted = super::shell_quote("it's");
+        assert!(quoted.contains("\'"));
+    }
+
+    #[test]
+    fn command_kind_for_activity_config_write() {
+        assert_eq!(super::command_kind_for_activity(&["__config_write__".into()]), "file_write");
+    }
+
+    #[test]
+    fn command_kind_for_activity_rollback() {
+        assert_eq!(super::command_kind_for_activity(&["__rollback__".into()]), "file_write");
+    }
+
+    #[test]
+    fn command_kind_for_activity_regular_command() {
+        assert_eq!(super::command_kind_for_activity(&["openclaw".into(), "status".into()]), "command");
+    }
+
+    #[test]
+    fn command_kind_for_activity_internal_prefix() {
+        assert_eq!(super::command_kind_for_activity(&["__some_internal__".into()]), "system_step");
+        assert_eq!(super::command_kind_for_activity(&["internal_foo".into()]), "system_step");
+    }
+
+    #[test]
+    fn summarize_activity_text_empty_returns_none() {
+        assert!(super::summarize_activity_text("").is_none());
+        assert!(super::summarize_activity_text("   ").is_none());
+    }
+
+    #[test]
+    fn summarize_activity_text_short_text() {
+        let result = super::summarize_activity_text("hello world").unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn display_command_for_activity_regular_command_is_shell_quoted() {
+        let result = super::display_command_for_activity(
+            "Run test",
+            &["echo".into(), "hello world".into()],
+        ).unwrap();
+        assert!(result.contains("echo"));
+        assert!(result.contains("hello world"));
+    }
+
+    #[test]
+    fn display_command_for_activity_empty_returns_none() {
+        assert!(super::display_command_for_activity("label", &[]).is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------

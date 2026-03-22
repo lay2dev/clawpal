@@ -1586,4 +1586,55 @@ mod tests {
         assert!(helper.online);
         assert_eq!(helper.name.as_deref(), Some("Helper"));
     }
+
+
+    #[test]
+    fn summarize_resolution_error_both_empty() {
+        assert_eq!(super::summarize_resolution_error("", ""), "unknown error");
+    }
+
+    #[test]
+    fn summarize_resolution_error_stderr_only() {
+        let result = super::summarize_resolution_error("connection refused", "");
+        assert!(result.contains("connection refused"));
+    }
+
+    #[test]
+    fn summarize_resolution_error_combined() {
+        let result = super::summarize_resolution_error("err", "out");
+        assert!(result.contains("err"));
+        assert!(result.contains("out"));
+    }
+
+    #[test]
+    fn append_resolution_warning_to_none() {
+        let mut target: Option<String> = None;
+        super::append_resolution_warning(&mut target, "warning msg");
+        assert_eq!(target.as_deref(), Some("warning msg"));
+    }
+
+    #[test]
+    fn append_resolution_warning_duplicate_skipped() {
+        let mut target = Some("existing warning".into());
+        super::append_resolution_warning(&mut target, "existing warning");
+        assert_eq!(target.as_deref(), Some("existing warning"));
+    }
+
+    #[test]
+    fn append_resolution_warning_new_appended() {
+        let mut target = Some("first".into());
+        super::append_resolution_warning(&mut target, "second");
+        let value = target.unwrap();
+        assert!(value.contains("first"));
+        assert!(value.contains("second"));
+    }
+
+    #[test]
+    fn append_resolution_warning_empty_ignored() {
+        let mut target: Option<String> = None;
+        super::append_resolution_warning(&mut target, "");
+        assert!(target.is_none());
+        super::append_resolution_warning(&mut target, "   ");
+        assert!(target.is_none());
+    }
 }

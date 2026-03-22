@@ -418,3 +418,120 @@ fn push_unique(values: &mut Vec<String>, next: String) {
         values.push(next);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn minimal_spec(name: &str, kind: &str) -> ExecutionSpec {
+        ExecutionSpec {
+            kind: "ExecutionSpec".into(),
+            execution: crate::execution_spec::ExecutionTarget { kind: kind.into() },
+            metadata: crate::execution_spec::ExecutionMetadata {
+                name: Some(name.into()),
+                digest: None,
+            },
+            desired_state: json!({"command": ["echo", "hello"]}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sanitize_unit_fragment_basic() {
+        assert_eq!(sanitize_unit_fragment("my-agent"), "my-agent");
+        assert_eq!(sanitize_unit_fragment("My Agent!"), "my-agent");
+        assert_eq!(sanitize_unit_fragment("a--b"), "a-b");
+        assert_eq!(sanitize_unit_fragment(""), "spec");
+        assert_eq!(sanitize_unit_fragment("---"), "spec");
+    }
+
+    #[test]
+    fn escape_systemd_env_special_chars() {
+        assert_eq!(
+            escape_systemd_environment_assignment("KEY", "val with spaces"),
+            "KEY=val with spaces"
+        );
+        assert_eq!(
+            escape_systemd_environment_assignment("K", r#"has"quote"#),
+            r#"K=has\"quote"#
+        );
+        assert_eq!(
+            escape_systemd_environment_assignment("K", r"back\slash"),
+            r"K=back\\slash"
+        );
+    }
+
+    #[test]
+    fn env_patch_dropin_name_includes_spec_name() {
+        let spec = minimal_spec("my-agent", "job");
+        let name = env_patch_dropin_name(&spec);
+        assert!(name.contains("my-agent"), "name={}", name);
+        assert!(name.ends_with(".conf"));
+    }
+
+    #[test]
+    fn env_patch_dropin_path_with_target() {
+        let mut spec = minimal_spec("my-agent", "attachment");
+        spec.desired_state = json!({
+            "systemdDropIn": {"unit": "openclaw-gateway.service"},
+            "command": ["echo"]
+        });
+        let path = env_patch_dropin_path(&spec);
+        assert!(path.is_some());
+        assert!(path.unwrap().contains("openclaw-gateway.service.d"));
+    }
+
+    #[test]
+    fn render_env_patch_dropin_content_basic() {
+        let mut spec = minimal_spec("test", "attachment");
+        spec.desired_state = json!({
+            "envPatch": {"MY_VAR": "hello", "OTHER": "world"},
+            "systemdDropIn": {"unit": "test.service"},
+            "command": ["echo"]
+        });
+        let content = render_env_patch_dropin_content(&spec).unwrap();
+        assert!(content.starts_with("[Service]\n"));
+        assert!(content.contains("MY_VAR=hello"));
+        assert!(content.contains("OTHER=world"));
+    }
+
+    #[test]
+    fn render_env_patch_dropin_empty_returns_none() {
+        let mut spec = minimal_spec("test", "attachment");
+        spec.desired_state = json!({"envPatch": {}, "command": ["echo"]});
+        assert!(render_env_patch_dropin_content(&spec).is_none());
+    }
+
+    #[test]
+    fn render_env_patch_dropin_no_key_returns_none() {
+        let spec = minimal_spec("test", "attachment");
+        assert!(render_env_patch_dropin_content(&spec).is_none());
+    }
+
+    #[test]
+    fn materialize_job_basic() {
+        let spec = minimal_spec("my-job", "job");
+        let plan = materialize_job(&spec).unwrap();
+        assert!(plan.unit_name.contains("my-job"));
+        assert!(!plan.commands.is_empty());
+        assert!(plan.commands[0].contains(&"systemd-run".to_string()));
+    }
+
+    #[test]
+    fn materialize_service_basic() {
+        let spec = minimal_spec("my-svc", "service");
+        let plan = materialize_service(&spec).unwrap();
+        assert!(plan.unit_name.contains("my-svc"));
+        let flat: String = plan.commands[0].join(" ");
+        assert!(flat.contains("Restart=always"));
+    }
+
+    #[test]
+    fn materialize_job_missing_command_errors() {
+        let mut spec = minimal_spec("no-cmd", "job");
+        spec.desired_state = json!({});
+        spec.actions = vec![];
+        assert!(materialize_job(&spec).is_err());
+    }
+}
