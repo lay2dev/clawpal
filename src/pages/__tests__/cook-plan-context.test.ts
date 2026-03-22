@@ -286,10 +286,9 @@ test("hasBlockingAuthIssues returns true for error severity", () => {
   ).toBe(true);
 });
 
-test("buildCookRouteSummary returns local kind for non-SSH non-Docker instances", () => {
+test("buildCookRouteSummary returns local kind for non-remote non-Docker", () => {
   const summary = buildCookRouteSummary({
     instanceId: "local-1",
-    instanceType: "local",
     instanceLabel: "My Local",
     isRemote: false,
     isDocker: false,
@@ -298,22 +297,20 @@ test("buildCookRouteSummary returns local kind for non-SSH non-Docker instances"
   expect(summary.targetLabel).toBe("My Local");
 });
 
-test("buildCookRouteSummary returns remote kind for SSH instances", () => {
+test("buildCookRouteSummary returns ssh kind for remote instances", () => {
   const summary = buildCookRouteSummary({
     instanceId: "ssh:pi",
-    instanceType: "remote_ssh",
     instanceLabel: "Pi Server",
     isRemote: true,
     isDocker: false,
   });
-  expect(summary.kind).toBe("remote");
+  expect(summary.kind).toBe("ssh");
   expect(summary.targetLabel).toBe("Pi Server");
 });
 
 test("buildCookRouteSummary returns docker kind for Docker instances", () => {
   const summary = buildCookRouteSummary({
     instanceId: "docker:lab",
-    instanceType: "docker",
     instanceLabel: "Lab",
     isRemote: false,
     isDocker: true,
