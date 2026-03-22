@@ -49,6 +49,7 @@ export function deriveDiscordGuildChannelsFromChannelNodes(
       channelId,
       channelName: channelId,
       defaultAgentId: undefined,
+      resolutionWarning: undefined,
     });
   }
 
@@ -80,11 +81,18 @@ export function mergeDiscordGuildChannels(
       continue;
     }
 
+    const incomingResolved =
+      isResolvedName(channel.guildName, channel.guildId)
+      && isResolvedName(channel.channelName, channel.channelId);
+
     merged.set(key, {
       ...existing,
       guildName: pickRicherName(existing.guildName, channel.guildName, existing.guildId),
       channelName: pickRicherName(existing.channelName, channel.channelName, existing.channelId),
       defaultAgentId: channel.defaultAgentId ?? existing.defaultAgentId,
+      resolutionWarning:
+        channel.resolutionWarning
+        ?? (incomingResolved ? undefined : existing.resolutionWarning),
     });
   }
 

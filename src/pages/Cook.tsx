@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { ChevronDownIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { CookActivityPanel } from "../components/CookActivityPanel";
 import { ParamForm } from "../components/ParamForm";
 import { resolveSteps, type ResolvedStep } from "../lib/actions";
 import { useApi } from "@/lib/use-api";
@@ -10,10 +12,12 @@ import { Badge } from "@/components/ui/badge";
 import { InlineProgressBar } from "@/components/InlineProgressBar";
 import { cn } from "@/lib/utils";
 import type {
+  CookActivityEvent,
   ExecuteRecipeResult,
   PrecheckIssue,
   Recipe,
   RecipePlan,
+  RecipeRuntimeAuditEntry,
   RecipeWorkspaceEntry,
 } from "../lib/types";
 import { useInstance } from "@/lib/instance-context";
@@ -51,6 +55,40 @@ async function waitForNextPaint(): Promise<void> {
     }
     setTimeout(resolve, 0);
   });
+}
+
+function upsertCookActivity(
+  current: CookActivityEvent[],
+  next: CookActivityEvent,
+): CookActivityEvent[] {
+  const index = current.findIndex((item) => item.id === next.id);
+  if (index === -1) {
+    return [...current, next].sort((left, right) =>
+      left.startedAt.localeCompare(right.startedAt),
+    );
+  }
+  const updated = [...current];
+  updated[index] = { ...updated[index], ...next };
+  return updated.sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+}
+
+function toAuditTrailEntry(activity: CookActivityEvent): RecipeRuntimeAuditEntry {
+  return {
+    id: activity.id,
+    phase: activity.phase,
+    kind: activity.kind,
+    label: activity.label,
+    status: activity.status,
+    sideEffect: activity.sideEffect,
+    startedAt: activity.startedAt,
+    finishedAt: activity.finishedAt,
+    target: activity.target,
+    displayCommand: activity.displayCommand,
+    exitCode: activity.exitCode,
+    stdoutSummary: activity.stdoutSummary,
+    stderrSummary: activity.stderrSummary,
+    details: activity.details,
+  };
 }
 
 export function Cook({
@@ -95,6 +133,11 @@ export function Cook({
   const [stepStatuses, setStepStatuses] = useState<CookStepStatus[]>([]);
   const [authIssues, setAuthIssues] = useState<PrecheckIssue[]>([]);
   const [contextWarnings, setContextWarnings] = useState<string[]>([]);
+  const [activitySessionId, setActivitySessionId] = useState<string | null>(null);
+  const [activities, setActivities] = useState<CookActivityEvent[]>([]);
+  const [planningActivityOpen, setPlanningActivityOpen] = useState(false);
+  const [executionActivityOpen, setExecutionActivityOpen] = useState(false);
+  const activitySessionIdRef = useRef<string | null>(null);
   const [doneSupportDetailsOpen, setDoneSupportDetailsOpen] = useState(false);
   const [workspaceEntry, setWorkspaceEntry] = useState<RecipeWorkspaceEntry | null>(null);
   const [approvalSubmitting, setApprovalSubmitting] = useState(false);
@@ -106,6 +149,8 @@ export function Cook({
   const blockingAuthIssues = hasBlockingAuthIssues(authIssues);
   const approvalRequired = Boolean(recipeWorkspaceSlug && workspaceEntry?.approvalRequired);
   const planningProgress = planningStage ? getCookPlanningProgress(planningStage, planningChecks) : null;
+  const executing = phase === "execute" && !executionError;
+  const busy = planning || approvalSubmitting || executing;
   const phaseItems = useMemo(
     () => buildCookPhaseItems(phase as CookPhase),
     [phase],
@@ -122,6 +167,31 @@ export function Cook({
       : routeSummary.kind === "docker"
         ? t("cook.routeKindDocker")
         : t("cook.routeKindLocal");
+  const planningActivities = useMemo(
+    () => activities.filter((activity) => activity.phase.startsWith("planning")),
+    [activities],
+  );
+  const executionActivities = useMemo(
+    () => activities.filter((activity) => activity.phase === "execute"),
+    [activities],
+  );
+
+  useEffect(() => {
+    const unlistenPromise = listen<CookActivityEvent>("cook:activity", (event) => {
+      const payload = event.payload;
+      if (payload.sessionId !== activitySessionIdRef.current) {
+        return;
+      }
+      setActivities((current) => upsertCookActivity(current, payload));
+      if (payload.status === "failed") {
+        setPlanningActivityOpen(true);
+        setExecutionActivityOpen(true);
+      }
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -228,8 +298,80 @@ export function Cook({
   if (loading) return <div className="flex items-center justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
   if (!recipe) return <div>{t('cook.recipeNotFound')}</div>;
 
+  const recordLocalActivity = async <T,>({
+    sessionId,
+    id,
+    phase,
+    kind,
+    label,
+    target,
+    displayCommand,
+    sideEffect = false,
+    task,
+    successDetails,
+  }: {
+    sessionId: string;
+    id: string;
+    phase: string;
+    kind: string;
+    label: string;
+    target?: string;
+    displayCommand?: string;
+    sideEffect?: boolean;
+    task: () => Promise<T>;
+    successDetails?: string;
+  }): Promise<T> => {
+    const startedAt = new Date().toISOString();
+    const base: CookActivityEvent = {
+      id,
+      sessionId,
+      instanceId,
+      phase,
+      kind,
+      label,
+      status: "started",
+      sideEffect,
+      startedAt,
+      target,
+      displayCommand,
+    };
+    setActivities((current) => upsertCookActivity(current, base));
+    try {
+      const value = await task();
+      setActivities((current) =>
+        upsertCookActivity(current, {
+          ...base,
+          status: "succeeded",
+          finishedAt: new Date().toISOString(),
+          details: successDetails,
+        }),
+      );
+      return value;
+    } catch (error) {
+      setPlanningActivityOpen(true);
+      setActivities((current) =>
+        upsertCookActivity(current, {
+          ...base,
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          details: String(error),
+        }),
+      );
+      throw error;
+    }
+  };
+
   const handleNext = async () => {
+    if (busy) {
+      return;
+    }
     setPlanning(true);
+    const nextSessionId = crypto.randomUUID();
+    setActivitySessionId(nextSessionId);
+    activitySessionIdRef.current = nextSessionId;
+    setActivities([]);
+    setPlanningActivityOpen(false);
+    setExecutionActivityOpen(false);
     setPlanningStage("validate");
     setPlanningChecks({
       authRequired: false,
@@ -260,10 +402,20 @@ export function Cook({
         }));
       };
       const authPromise: Promise<PrecheckIssue[] | null> = checkPlan.needsAuthCheck
-        ? ua.precheckAuth(instanceId).finally(markPlanningCheckComplete)
+        ? ua.precheckAuth(instanceId, nextSessionId).finally(markPlanningCheckComplete)
         : Promise.resolve(null);
       const configPromise: Promise<string | null> = checkPlan.needsConfigContext
-        ? ua.readRawConfig().finally(markPlanningCheckComplete)
+        ? recordLocalActivity({
+            sessionId: nextSessionId,
+            id: `${nextSessionId}:planning-context`,
+            phase: "planning.context",
+            kind: "file_read",
+            label: t("cook.activityConfigLabel"),
+            target: routeSummary.targetLabel,
+            displayCommand: t("cook.activityConfigCommand"),
+            task: () => ua.readRawConfig(),
+            successDetails: t("cook.activityConfigSuccess"),
+          }).finally(markPlanningCheckComplete)
         : Promise.resolve(null);
       if (checkPlan.totalChecks > 0) {
         setPlanningStage("checks");
@@ -305,6 +457,9 @@ export function Cook({
   };
 
   const handleExecute = async () => {
+    if (busy) {
+      return;
+    }
     if (!plan) {
       setExecutionError(t("cook.missingExecutionSpec"));
       return;
@@ -323,14 +478,35 @@ export function Cook({
     setExecutionResult(null);
 
     try {
+      const currentSessionId = activitySessionId ?? crypto.randomUUID();
+      if (!activitySessionId) {
+        setActivitySessionId(currentSessionId);
+      }
+      activitySessionIdRef.current = currentSessionId;
       const result = await ua.executeRecipe({
         ...buildCookExecuteRequest(plan.executionSpec, {
           instanceId,
           isRemote,
           isDocker,
         }, recipeSourceOrigin, recipeSourceText, recipeWorkspaceSlug),
+        activitySessionId: currentSessionId,
+        planningAuditTrail: planningActivities.map(toAuditTrailEntry),
       });
       setExecutionResult(result);
+      if (result.auditTrail?.length) {
+        setActivities((current) =>
+          result.auditTrail!.reduce(
+            (all, entry) =>
+              upsertCookActivity(all, {
+                ...entry,
+                sessionId: currentSessionId,
+                runId: result.runId,
+                instanceId: result.instanceId,
+              }),
+            current,
+          ),
+        );
+      }
       setStepStatuses((current) => markCookStatuses(current, "done"));
       setDoneSupportDetailsOpen(false);
       setPhase("done");
@@ -342,7 +518,7 @@ export function Cook({
   };
 
   const handleApprove = async () => {
-    if (!recipeWorkspaceSlug) {
+    if (!recipeWorkspaceSlug || busy) {
       return;
     }
     setApprovalSubmitting(true);
@@ -384,7 +560,7 @@ export function Cook({
   return (
     <section className="space-y-5">
       <div className="flex items-center gap-2 mb-4">
-        <Button variant="ghost" size="sm" className="px-2" onClick={onDone}>
+        <Button variant="ghost" size="sm" className="px-2" onClick={onDone} disabled={busy}>
           &larr;
         </Button>
         <div className="min-w-0">
@@ -444,12 +620,24 @@ export function Cook({
               />
             </div>
           )}
+          {(planning || planningActivities.length > 0) && (
+            <div className="mb-3">
+              <CookActivityPanel
+                title={t("cook.activityTitle")}
+                description={t("cook.activityPlanningDescription")}
+                activities={planningActivities}
+                open={planningActivityOpen}
+                onOpenChange={setPlanningActivityOpen}
+              />
+            </div>
+          )}
           <ParamForm
             recipe={recipe}
             values={params}
             onChange={(id, value) => setParams((prev) => ({ ...prev, [id]: value }))}
             onSubmit={handleNext}
             submitLabel={planning ? `${t('cook.next')}...` : t('cook.next')}
+            disabled={planning}
           />
         </>
       )}
@@ -508,7 +696,7 @@ export function Cook({
                   <Button
                     variant="outline"
                     onClick={() => void handleApprove()}
-                    disabled={approvalSubmitting}
+                    disabled={busy}
                   >
                     {approvalSubmitting ? t("cook.approving") : t("cook.approveToContinue")}
                   </Button>
@@ -521,8 +709,8 @@ export function Cook({
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button disabled={blockingAuthIssues || approvalRequired} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
-              <Button variant="outline" onClick={() => setPhase("params")}>{t('cook.backToConfiguration')}</Button>
+              <Button disabled={busy || blockingAuthIssues || approvalRequired} onClick={() => void handleExecute()}>{t('cook.execute')}</Button>
+              <Button variant="outline" disabled={busy} onClick={() => setPhase("params")}>{t('cook.backToConfiguration')}</Button>
             </div>
           </CardContent>
         </Card>
@@ -543,9 +731,13 @@ export function Cook({
                 tone={executionProgress.failed ? "destructive" : "primary"}
                 animated={executionProgress.animated}
               />
-              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-                {t("cook.executionApplyNote")}
-              </div>
+              <CookActivityPanel
+                title={t("cook.activityTitle")}
+                description={t("cook.activityExecutionDescription")}
+                activities={executionActivities}
+                open={executionActivityOpen}
+                onOpenChange={setExecutionActivityOpen}
+              />
               {executionError && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                   <div className="font-medium">{t("cook.executionFailed")}</div>
@@ -554,8 +746,8 @@ export function Cook({
               )}
               {executionError && (
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setPhase("confirm")}>{t("cook.backToReview")}</Button>
-                  <Button variant="outline" onClick={() => setPhase("params")}>{t("cook.backToConfiguration")}</Button>
+                  <Button variant="outline" disabled={busy} onClick={() => setPhase("confirm")}>{t("cook.backToReview")}</Button>
+                  <Button variant="outline" disabled={busy} onClick={() => setPhase("params")}>{t("cook.backToConfiguration")}</Button>
                 </div>
               )}
             </CardContent>
@@ -639,6 +831,13 @@ export function Cook({
                 ))}
               </div>
             )}
+            <CookActivityPanel
+              title={t("cook.activityDoneTitle")}
+              description={t("cook.activityDoneDescription")}
+              activities={executionActivities}
+              open={executionActivityOpen}
+              onOpenChange={setExecutionActivityOpen}
+            />
             {executionResult && (
               <div className="rounded-md border border-border/70 bg-background/80 px-3 py-2">
                 <button

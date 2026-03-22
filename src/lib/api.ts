@@ -148,7 +148,11 @@ export const api = {
   ): Promise<RecipePlan> =>
     invoke("plan_recipe_source", { recipeId, params, sourceText }),
   executeRecipe: (request: ExecuteRecipeRequest): Promise<ExecuteRecipeResult> =>
-    invoke("execute_recipe", { request }),
+    invoke("execute_recipe", {
+      request,
+      activitySessionId: request.activitySessionId ?? null,
+      planningAuditTrail: request.planningAuditTrail ?? [],
+    }),
   applyConfigPatch: (patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("apply_config_patch", { patchTemplate, params }),
   listHistory: (limit = 20, offset = 0): Promise<{ items: HistoryItem[] }> =>
@@ -203,8 +207,8 @@ export const api = {
     invoke("precheck_instance", { instanceId }),
   precheckTransport: (instanceId: string): Promise<PrecheckIssue[]> =>
     invoke("precheck_transport", { instanceId }),
-  precheckAuth: (instanceId: string): Promise<PrecheckIssue[]> =>
-    invoke("precheck_auth", { instanceId }),
+  precheckAuth: (instanceId: string, activitySessionId?: string): Promise<PrecheckIssue[]> =>
+    invoke("precheck_auth", { instanceId, activitySessionId: activitySessionId ?? null }),
   fixIssues: (ids: string[]): Promise<{ ok: boolean; applied: string[]; remainingIssues: string[] }> =>
     invoke("fix_issues", { ids }),
   readRawConfig: (): Promise<string> =>

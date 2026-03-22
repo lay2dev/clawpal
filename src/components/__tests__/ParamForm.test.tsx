@@ -135,4 +135,67 @@ describe("ParamForm", () => {
     expect(html).toContain('role="combobox"');
     expect(html).not.toContain("<textarea");
   });
+
+  test("disables inputs and submit while busy", async () => {
+    await i18n.changeLanguage("en");
+
+    const html = renderToStaticMarkup(
+      React.createElement(I18nextProvider, {
+        i18n,
+        children: React.createElement(InstanceContext.Provider, {
+          value: {
+            instanceId: "local",
+            instanceViewToken: "local",
+            instanceToken: 0,
+            persistenceScope: "local",
+            persistenceResolved: true,
+            isRemote: false,
+            isDocker: false,
+            isConnected: true,
+            channelNodes: null,
+            discordGuildChannels: [],
+            channelsLoading: false,
+            discordChannelsLoading: false,
+            discordChannelsResolved: false,
+            agents: null,
+            agentsLoading: false,
+            modelProfiles: null,
+            modelProfilesLoading: false,
+            setAgentsCache: () => null,
+            refreshAgentsCache: async () => [],
+            refreshModelProfilesCache: async () => [],
+            refreshChannelNodesCache: async () => [],
+            refreshDiscordChannelsCache: async () => [],
+          },
+          children: React.createElement(ParamForm, {
+            recipe: {
+              id: "dedicated-agent",
+              name: "Dedicated Agent",
+              description: "Create an independent agent",
+              version: "1.0.0",
+              tags: ["agent"],
+              difficulty: "easy",
+              params: [
+                {
+                  id: "agent_id",
+                  label: "Agent ID",
+                  type: "string",
+                  required: true,
+                },
+              ],
+              steps: [],
+            },
+            values: { agent_id: "" },
+            onChange: () => {},
+            onSubmit: () => {},
+            submitLabel: "Next",
+            disabled: true,
+          }),
+        }),
+      }),
+    );
+
+    expect(html).toMatch(/<input[^>]*disabled(?:=""|>|\s)/);
+    expect(html).toMatch(/<button[^>]*disabled(?:=""|>|\s)/);
+  });
 });

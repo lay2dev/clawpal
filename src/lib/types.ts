@@ -43,6 +43,7 @@ export interface DiscordGuildChannel {
   channelId: string;
   channelName: string;
   defaultAgentId?: string;
+  resolutionWarning?: string;
 }
 
 export interface RecipeParam {
@@ -330,6 +331,8 @@ export interface ExecuteRecipeRequest {
   sourceOrigin?: RecipeSourceOrigin;
   sourceText?: string;
   workspaceSlug?: string;
+  activitySessionId?: string;
+  planningAuditTrail?: RecipeRuntimeAuditEntry[];
 }
 
 export interface ExecuteRecipeResult {
@@ -337,6 +340,7 @@ export interface ExecuteRecipeResult {
   instanceId: string;
   summary: string;
   warnings: string[];
+  auditTrail?: RecipeRuntimeAuditEntry[];
 }
 
 export interface RecipeRuntimeArtifact {
@@ -344,6 +348,29 @@ export interface RecipeRuntimeArtifact {
   kind: string;
   label: string;
   path?: string;
+}
+
+export interface RecipeRuntimeAuditEntry {
+  id: string;
+  phase: string;
+  kind: string;
+  label: string;
+  status: "started" | "succeeded" | "failed";
+  sideEffect: boolean;
+  startedAt: string;
+  finishedAt?: string;
+  target?: string;
+  displayCommand?: string;
+  exitCode?: number;
+  stdoutSummary?: string;
+  stderrSummary?: string;
+  details?: string;
+}
+
+export interface CookActivityEvent extends RecipeRuntimeAuditEntry {
+  sessionId: string;
+  runId?: string;
+  instanceId: string;
 }
 
 export interface RecipeRuntimeRun {
@@ -362,6 +389,7 @@ export interface RecipeRuntimeRun {
   sourceOrigin?: string;
   sourceDigest?: string;
   workspacePath?: string;
+  auditTrail?: RecipeRuntimeAuditEntry[];
 }
 
 export interface RecipeRuntimeInstance {

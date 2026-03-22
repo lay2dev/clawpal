@@ -30,12 +30,14 @@ export function ParamForm({
   onChange,
   onSubmit,
   submitLabel = "Preview",
+  disabled = false,
 }: {
   recipe: Recipe;
   values: Record<string, string>;
   onChange: (id: string, value: string) => void;
   onSubmit: () => void;
   submitLabel?: string;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const ua = useApi();
@@ -96,6 +98,7 @@ export function ParamForm({
           <Checkbox
             id={param.id}
             checked={values[param.id] === "true"}
+            disabled={disabled}
             onCheckedChange={(checked) => {
               onChange(param.id, checked === true ? "true" : "false");
             }}
@@ -109,6 +112,7 @@ export function ParamForm({
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -132,6 +136,7 @@ export function ParamForm({
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -168,7 +173,7 @@ export function ParamForm({
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
           }}
-          disabled={!guildSelected}
+          disabled={disabled || !guildSelected}
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
             <SelectValue
@@ -193,6 +198,7 @@ export function ParamForm({
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -217,6 +223,7 @@ export function ParamForm({
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -244,6 +251,7 @@ export function ParamForm({
         <Textarea
           id={param.id}
           value={values[param.id] || ""}
+          disabled={disabled}
           placeholder={param.placeholder}
           onChange={(e) => {
             onChange(param.id, e.target.value);
@@ -257,6 +265,7 @@ export function ParamForm({
       <Input
         id={param.id}
         value={values[param.id] || ""}
+        disabled={disabled}
         placeholder={param.placeholder}
         required={param.required}
         onChange={(e) => {
@@ -268,8 +277,11 @@ export function ParamForm({
   }
 
   return (
-    <form className="space-y-4" onSubmit={(e) => {
+    <form className="space-y-4" aria-busy={disabled} onSubmit={(e) => {
       e.preventDefault();
+      if (disabled) {
+        return;
+      }
       if (hasError) {
         setTouched((prev) => ({
           ...prev,
@@ -300,6 +312,7 @@ export function ParamForm({
       })}
       <Button
         type="submit"
+        disabled={disabled}
         onMouseDown={(event) => {
           event.preventDefault();
         }}

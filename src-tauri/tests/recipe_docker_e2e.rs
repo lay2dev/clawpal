@@ -425,6 +425,46 @@ fn sample_channel_persona_params() -> Map<String, Value> {
     params
 }
 
+fn assert_result_audit_trail(
+    label: &str,
+    result: &clawpal::recipe_executor::ExecuteRecipeResult,
+) {
+    assert!(
+        !result.audit_trail.is_empty(),
+        "expected {label} to emit audit entries"
+    );
+    assert!(
+        result.audit_trail.iter().any(|entry| entry.phase == "execute"),
+        "expected {label} audit trail to include execute entries"
+    );
+    assert!(
+        result
+            .audit_trail
+            .iter()
+            .all(|entry| !entry.label.trim().is_empty()),
+        "expected {label} audit entries to include non-empty labels"
+    );
+}
+
+fn assert_stored_run_audit_trail(
+    label: &str,
+    runs: &[clawpal::recipe_store::Run],
+    run_id: &str,
+) {
+    let run = runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .unwrap_or_else(|| panic!("expected stored run for {label}"));
+    assert!(
+        !run.audit_trail.is_empty(),
+        "expected persisted {label} run to keep audit entries"
+    );
+    assert!(
+        run.audit_trail.iter().any(|entry| entry.phase == "execute"),
+        "expected persisted {label} run to include execute audit entries"
+    );
+}
+
 #[tokio::test]
 async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
     if !should_run() {
@@ -488,6 +528,7 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
         dedicated_result.summary,
         "Created dedicated agent Ops Bot (ops-bot)"
     );
+    assert_result_audit_trail("dedicated recipe", &dedicated_result);
 
     let remote_config_raw = pool
         .sftp_read(&host.id, "~/.openclaw/openclaw.json")
@@ -562,6 +603,7 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
         agent_persona_result.summary,
         "Updated persona for agent main"
     );
+    assert_result_audit_trail("agent persona recipe", &agent_persona_result);
 
     let main_identity = pool
         .sftp_read(&host.id, "~/.openclaw/agents/main/agent/IDENTITY.md")
@@ -588,6 +630,7 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
         channel_persona_result.summary,
         "Updated persona for channel channel-support"
     );
+    assert_result_audit_trail("channel persona recipe", &channel_persona_result);
 
     let updated_config_raw = pool
         .sftp_read(&host.id, "~/.openclaw/openclaw.json")
@@ -616,4 +659,11 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
     assert!(runs
         .iter()
         .any(|run| run.summary == channel_persona_result.summary));
+    assert_stored_run_audit_trail("dedicated recipe", &runs, &dedicated_result.run_id);
+    assert_stored_run_audit_trail("agent persona recipe", &runs, &agent_persona_result.run_id);
+    assert_stored_run_audit_trail(
+        "channel persona recipe",
+        &runs,
+        &channel_persona_result.run_id,
+    );
 }

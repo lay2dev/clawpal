@@ -31,6 +31,33 @@ pub struct Artifact {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub id: String,
+    pub phase: String,
+    pub kind: String,
+    pub label: String,
+    pub status: String,
+    #[serde(default)]
+    pub side_effect: bool,
+    pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Run {
     pub id: String,
     pub instance_id: String,
@@ -54,6 +81,8 @@ pub struct Run {
     pub source_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub audit_trail: Vec<AuditEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

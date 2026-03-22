@@ -463,6 +463,7 @@ mod discord_directory_parse_tests {
                 channel_id: "111".into(),
                 channel_name: "general".into(), // resolved
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "g1".into(),
@@ -470,6 +471,7 @@ mod discord_directory_parse_tests {
                 channel_id: "222".into(),
                 channel_name: "222".into(), // unresolved (name == id)
                 default_agent_id: None,
+                resolution_warning: None,
             },
         ];
         let text = serde_json::to_string(&existing).unwrap();
@@ -506,6 +508,7 @@ mod discord_directory_parse_tests {
                 channel_id: "11".into(),
                 channel_name: "chan-1".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "1".into(),
@@ -513,6 +516,7 @@ mod discord_directory_parse_tests {
                 channel_id: "12".into(),
                 channel_name: "chan-2".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "2".into(),
@@ -520,6 +524,7 @@ mod discord_directory_parse_tests {
                 channel_id: "21".into(),
                 channel_name: "chan-3".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
         ];
         let text = serde_json::to_string(&payload).expect("serialize payload");

@@ -1,4 +1,4 @@
-use crate::recipe_store::{Artifact, RecipeStore, ResourceClaim, Run};
+use crate::recipe_store::{Artifact, AuditEntry, RecipeStore, ResourceClaim, Run};
 
 fn sample_run() -> Run {
     Run {
@@ -27,6 +27,22 @@ fn sample_run() -> Run {
         source_origin: None,
         source_digest: None,
         workspace_path: None,
+        audit_trail: vec![AuditEntry {
+            id: "audit_01".into(),
+            phase: "planning.auth".into(),
+            kind: "auth_check".into(),
+            label: "Resolve provider credentials".into(),
+            status: "succeeded".into(),
+            side_effect: false,
+            started_at: "2026-03-11T09:59:59Z".into(),
+            finished_at: Some("2026-03-11T10:00:00Z".into()),
+            target: Some("ssh:prod-a".into()),
+            display_command: Some("Inspect remote auth state".into()),
+            exit_code: Some(0),
+            stdout_summary: None,
+            stderr_summary: None,
+            details: Some("Checked 2 profile(s).".into()),
+        }],
     }
 }
 
@@ -54,6 +70,10 @@ fn record_run_persists_instance_and_artifacts() {
     assert_eq!(
         store.list_runs("inst_01").expect("list runs")[0].artifacts[0].id,
         "artifact_01"
+    );
+    assert_eq!(
+        store.list_runs("inst_01").expect("list runs")[0].audit_trail[0].id,
+        "audit_01"
     );
 }
 
@@ -89,6 +109,26 @@ fn recorded_run_persists_source_digest_and_origin() {
         .workspace_path
         .as_deref()
         .is_some_and(|path| path.ends_with("channel-persona.recipe.json")));
+}
+
+#[test]
+fn later_run_with_empty_audit_trail_does_not_inherit_previous_entries() {
+    let store = RecipeStore::for_test();
+    store.record_run(sample_run()).expect("record first run");
+
+    let mut second_run = sample_run();
+    second_run.id = "run_02".into();
+    second_run.started_at = "2026-03-11T11:00:00Z".into();
+    second_run.finished_at = Some("2026-03-11T11:00:05Z".into());
+    second_run.audit_trail.clear();
+    store.record_run(second_run).expect("record second run");
+
+    let runs = store.list_runs("inst_01").expect("list runs");
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].id, "run_02");
+    assert!(runs[0].audit_trail.is_empty());
+    assert_eq!(runs[1].id, "run_01");
+    assert_eq!(runs[1].audit_trail.len(), 1);
 }
 
 #[test]

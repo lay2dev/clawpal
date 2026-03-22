@@ -28,6 +28,34 @@ fn extract_discord_bot_token(discord_cfg: Option<&Value>) -> Option<String> {
                 })
         })
 }
+
+fn summarize_resolution_error(stderr: &str, stdout: &str) -> String {
+    let combined = format!("{} {}", stderr.trim(), stdout.trim())
+        .trim()
+        .replace('\n', " ");
+    if combined.is_empty() {
+        "unknown error".to_string()
+    } else {
+        combined
+    }
+}
+
+fn append_resolution_warning(target: &mut Option<String>, message: &str) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    match target {
+        Some(existing) => {
+            if !existing.contains(trimmed) {
+                existing.push(' ');
+                existing.push_str(trimmed);
+            }
+        }
+        None => *target = Some(trimmed.to_string()),
+    }
+}
+
 fn discord_sections_from_openclaw_config(cfg: &Value) -> (Value, Value) {
     let discord_section = cfg
         .pointer("/channels/discord")
@@ -87,6 +115,14 @@ pub async fn remote_list_discord_guild_channels(
         &["config", "get", "channels.discord", "--json"],
     )
     .await?;
+    let config_command_warning = if output.exit_code == 0 {
+        None
+    } else {
+        Some(format!(
+            "Discord config lookup failed: {}",
+            summarize_resolution_error(&output.stderr, &output.stdout)
+        ))
+    };
     let bindings_output = crate::cli_runner::run_openclaw_remote(
         &pool,
         &host_id,
@@ -199,6 +235,7 @@ pub async fn remote_list_discord_guild_channels(
             channel_id: c.channel_id.clone(),
             channel_name: c.channel_name.clone(),
             default_agent_id: None,
+            resolution_warning: None,
         })
         .collect();
     let mut channel_ids: Vec<String> = entries.iter().map(|e| e.channel_id.clone()).collect();
@@ -209,6 +246,10 @@ pub async fn remote_list_discord_guild_channels(
         .collect();
     unresolved_guild_ids.sort();
     unresolved_guild_ids.dedup();
+    let mut channel_warning_by_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut shared_channel_warning: Option<String> = None;
+    let mut shared_guild_warning: Option<String> = None;
 
     // Fallback A: if we have token + guild ids, fetch channels from Discord REST directly.
     // This avoids hard-failing when CLI rejects config due non-critical schema drift.
@@ -232,6 +273,7 @@ pub async fn remote_list_discord_guild_channels(
                                 channel_id,
                                 channel_name,
                                 default_agent_id: None,
+                                resolution_warning: None,
                             });
                         }
                     }
@@ -276,8 +318,14 @@ pub async fn remote_list_discord_guild_channels(
                         channel_id: channel_id.clone(),
                         channel_name: channel_id,
                         default_agent_id: None,
+                        resolution_warning: None,
                     });
                 }
+            } else if r.exit_code != 0 {
+                shared_channel_warning = Some(format!(
+                    "Discord directory lookup failed: {}",
+                    summarize_resolution_error(&r.stderr, &r.stdout)
+                ));
             }
         }
     }
@@ -327,6 +375,10 @@ pub async fn remote_list_discord_guild_channels(
                 } else {
                     // Batch failed (e.g. one channel 404). Fall back to resolving one-by-one
                     // so a single bad channel doesn't block the rest.
+                    shared_channel_warning = Some(format!(
+                        "Discord channel name lookup failed: {}",
+                        summarize_resolution_error(&r.stderr, &r.stdout)
+                    ));
                     eprintln!("[discord] channels resolve batch failed exit={} stderr={:?}, trying one-by-one",
                         r.exit_code, r.stderr.trim());
                     for channel_id in &uncached_ids {
@@ -351,6 +403,13 @@ pub async fn remote_list_discord_guild_channels(
                                     }
                                 }
                             } else {
+                                channel_warning_by_id.insert(
+                                    channel_id.clone(),
+                                    format!(
+                                        "Discord channel name lookup failed: {}",
+                                        summarize_resolution_error(&sr.stderr, &sr.stdout)
+                                    ),
+                                );
                                 eprintln!(
                                     "[discord] channels resolve single {} exit={} stderr={:?}",
                                     channel_id,
@@ -426,6 +485,11 @@ pub async fn remote_list_discord_guild_channels(
                     }
                 }
             }
+        } else if !needs_rest.is_empty() {
+            shared_guild_warning = Some(
+                "Discord guild name lookup skipped because no Discord bot token is configured."
+                    .to_string(),
+            );
         }
     }
 
@@ -434,6 +498,36 @@ pub async fn remote_list_discord_guild_channels(
         if entry.guild_name == entry.guild_id {
             if let Some(name) = guild_name_fallback_map.get(&entry.guild_id) {
                 entry.guild_name = name.clone();
+            }
+        }
+    }
+
+    for entry in &mut entries {
+        entry.resolution_warning = None;
+        if entry.channel_name == entry.channel_id {
+            if let Some(message) = channel_warning_by_id.get(&entry.channel_id) {
+                append_resolution_warning(&mut entry.resolution_warning, message);
+            } else if let Some(message) = shared_channel_warning.as_deref() {
+                append_resolution_warning(&mut entry.resolution_warning, message);
+            } else if let Some(message) = config_command_warning.as_deref() {
+                append_resolution_warning(&mut entry.resolution_warning, message);
+            } else {
+                append_resolution_warning(
+                    &mut entry.resolution_warning,
+                    "Discord channel name is still unresolved after fallback to cached data.",
+                );
+            }
+        }
+        if entry.guild_name == entry.guild_id {
+            if let Some(message) = shared_guild_warning.as_deref() {
+                append_resolution_warning(&mut entry.resolution_warning, message);
+            } else if let Some(message) = config_command_warning.as_deref() {
+                append_resolution_warning(&mut entry.resolution_warning, message);
+            } else {
+                append_resolution_warning(
+                    &mut entry.resolution_warning,
+                    "Discord guild name is still unresolved after fallback to cached data.",
+                );
             }
         }
     }
@@ -576,8 +670,7 @@ pub async fn remote_list_agents_overview_with_pool(
     pool: &SshConnectionPool,
     host_id: String,
 ) -> Result<Vec<AgentOverview>, String> {
-    let output =
-        run_openclaw_remote_with_autofix(pool, &host_id, &["agents", "list", "--json"]).await?;
+    let output = crate::cli_runner::run_openclaw_remote(pool, &host_id, &["agents", "list", "--json"]).await?;
     // Check which agents have sessions remotely (single command, batch check)
     // Lists agents whose sessions.json is larger than 2 bytes (not just "{}")
     let online_set = match pool.exec_login(
@@ -593,10 +686,17 @@ pub async fn remote_list_agents_overview_with_pool(
         Err(_) => std::collections::HashSet::new(), // fallback: all offline
     };
     if output.exit_code != 0 {
+        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
+        if clawpal_core::doctor::owner_display_parse_error(&details) {
+            crate::commands::logs::log_remote_autofix_suppressed(
+                &host_id,
+                "openclaw agents list --json",
+                "owner_display_parse_error",
+            );
+        }
         if let Ok((_, _, cfg)) = remote_read_openclaw_config_text_and_json(pool, &host_id).await {
             return Ok(agent_overviews_from_openclaw_config(&cfg, &online_set));
         }
-        let details = format!("{}\n{}", output.stderr.trim(), output.stdout.trim());
         return Err(format!(
             "openclaw agents list failed ({}): {}",
             output.exit_code,
@@ -733,6 +833,7 @@ pub async fn list_discord_guild_channels_fast() -> Result<Vec<DiscordGuildChanne
                     channel_id: ch.channel_id.clone(),
                     channel_name: ch.channel_name.clone(),
                     default_agent_id: None,
+                    resolution_warning: None,
                 });
             }
         }
@@ -847,6 +948,7 @@ pub async fn remote_list_discord_guild_channels_fast(
                 channel_id: ch.channel_id.clone(),
                 channel_name: ch.channel_name.clone(),
                 default_agent_id: None,
+                resolution_warning: None,
             });
         }
     }
@@ -946,6 +1048,7 @@ pub async fn refresh_discord_guild_channels(
                             channel_id: channel_id.clone(),
                             channel_name: channel_id.clone(),
                             default_agent_id: None,
+                            resolution_warning: None,
                         });
                     }
                 }
@@ -1008,6 +1111,7 @@ pub async fn refresh_discord_guild_channels(
                     channel_id: channel_id.clone(),
                     channel_name: channel_id.clone(),
                     default_agent_id: None,
+                    resolution_warning: None,
                 });
             }
         }
@@ -1071,6 +1175,7 @@ pub async fn refresh_discord_guild_channels(
                             channel_id,
                             channel_name,
                             default_agent_id: None,
+                            resolution_warning: None,
                         });
                     }
                 }
@@ -1105,6 +1210,7 @@ pub async fn refresh_discord_guild_channels(
                         channel_id: channel_id.clone(),
                         channel_name: channel_id,
                         default_agent_id: None,
+                        resolution_warning: None,
                     });
                 }
             }

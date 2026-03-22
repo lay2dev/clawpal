@@ -55,8 +55,8 @@ use crate::recipe_executor::{
     execute_recipe as prepare_recipe_execution, ExecuteRecipeRequest, ExecuteRecipeResult,
 };
 use crate::recipe_store::{
-    Artifact as RecipeRuntimeArtifact, RecipeStore, ResourceClaim as RecipeRuntimeResourceClaim,
-    Run as RecipeRuntimeRun,
+    Artifact as RecipeRuntimeArtifact, AuditEntry as RecipeRuntimeAuditEntry, RecipeStore,
+    ResourceClaim as RecipeRuntimeResourceClaim, Run as RecipeRuntimeRun,
 };
 use crate::ssh::{SftpEntry, SshConnectionPool, SshExecResult, SshHostConfig, SshTransferStats};
 use clawpal_core::ssh::diagnostic::{
@@ -541,6 +541,8 @@ pub struct DiscordGuildChannel {
     pub channel_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_warning: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1358,6 +1360,7 @@ fn persist_recipe_run(
     started_at: &str,
     finished_at: &str,
     warnings: &[String],
+    audit_trail: &[RecipeRuntimeAuditEntry],
 ) -> Result<(), String> {
     RecipeStore::from_resolved_paths()
         .record_run(RecipeRuntimeRun {
@@ -1376,8 +1379,30 @@ fn persist_recipe_run(
             source_origin: infer_recipe_source_origin(spec),
             source_digest: infer_recipe_source_digest(spec),
             workspace_path: infer_recipe_workspace_path(spec),
+            audit_trail: audit_trail.to_vec(),
         })
         .map(|_| ())
+}
+
+fn audit_entry_from_apply_step(
+    step: &crate::cli_runner::ApplyQueueStepResult,
+) -> RecipeRuntimeAuditEntry {
+    RecipeRuntimeAuditEntry {
+        id: step.id.clone(),
+        phase: "execute".into(),
+        kind: step.kind.clone(),
+        label: step.label.clone(),
+        status: step.status.clone(),
+        side_effect: step.side_effect,
+        started_at: step.started_at.clone(),
+        finished_at: step.finished_at.clone(),
+        target: step.target.clone(),
+        display_command: step.display_command.clone(),
+        exit_code: step.exit_code,
+        stdout_summary: step.stdout_summary.clone(),
+        stderr_summary: step.stderr_summary.clone(),
+        details: step.details.clone(),
+    }
 }
 
 fn infer_recipe_source_origin(spec: &crate::execution_spec::ExecutionSpec) -> Option<String> {
@@ -3316,12 +3341,15 @@ mod runtime_artifact_tests {
     }
 }
 
-pub async fn execute_recipe_with_services(
+async fn execute_recipe_with_services_internal(
     queue: &crate::cli_runner::CommandQueue,
     cache: &crate::cli_runner::CliCache,
     pool: &SshConnectionPool,
     remote_queues: &crate::cli_runner::RemoteCommandQueues,
     mut request: ExecuteRecipeRequest,
+    app: Option<&AppHandle>,
+    activity_session_id: Option<String>,
+    planning_audit_trail: Vec<RecipeRuntimeAuditEntry>,
 ) -> Result<ExecuteRecipeResult, String> {
     if let Some(workspace_slug) = request
         .workspace_slug
@@ -3402,6 +3430,7 @@ pub async fn execute_recipe_with_services(
     let started_at = Utc::now().to_rfc3339();
     let summary = prepared.summary.clone();
     let runtime_artifacts = crate::recipe_executor::build_runtime_artifacts(&spec, &prepared);
+    let mut audit_trail = planning_audit_trail;
 
     match prepared.route.runner.as_str() {
         "local" => {
@@ -3423,8 +3452,19 @@ pub async fn execute_recipe_with_services(
                 Some(infer_recipe_id(&spec)),
                 Some(prepared.run_id.clone()),
                 Some(runtime_artifacts.clone()),
+                activity_session_id.as_ref().and_then(|session_id| {
+                    app.cloned().map(|handle| {
+                        crate::cli_runner::CookActivityEmitter::new(
+                            handle,
+                            session_id.clone(),
+                            Some(prepared.run_id.clone()),
+                            "local".into(),
+                        )
+                    })
+                }),
             )
             .await?;
+            audit_trail.extend(result.steps.iter().map(audit_entry_from_apply_step));
             let finished_at = Utc::now().to_rfc3339();
             if !result.ok {
                 let error = result
@@ -3440,6 +3480,7 @@ pub async fn execute_recipe_with_services(
                     &started_at,
                     &finished_at,
                     &warnings,
+                    &audit_trail,
                 );
                 return Err(error);
             }
@@ -3453,6 +3494,7 @@ pub async fn execute_recipe_with_services(
                 &started_at,
                 &finished_at,
                 &warnings,
+                &audit_trail,
             ) {
                 warnings.push(format!("Failed to persist recipe runtime state: {}", error));
             }
@@ -3462,6 +3504,7 @@ pub async fn execute_recipe_with_services(
                 instance_id: "local".into(),
                 summary,
                 warnings,
+                audit_trail,
             })
         }
         "remote_ssh" => {
@@ -3493,8 +3536,19 @@ pub async fn execute_recipe_with_services(
                 Some(infer_recipe_id(&spec)),
                 Some(prepared.run_id.clone()),
                 Some(runtime_artifacts.clone()),
+                activity_session_id.as_ref().and_then(|session_id| {
+                    app.cloned().map(|handle| {
+                        crate::cli_runner::CookActivityEmitter::new(
+                            handle,
+                            session_id.clone(),
+                            Some(prepared.run_id.clone()),
+                            host_id.clone(),
+                        )
+                    })
+                }),
             )
             .await?;
+            audit_trail.extend(result.steps.iter().map(audit_entry_from_apply_step));
             let finished_at = Utc::now().to_rfc3339();
             if !result.ok {
                 let error = result
@@ -3512,6 +3566,7 @@ pub async fn execute_recipe_with_services(
                     &started_at,
                     &finished_at,
                     &warnings,
+                    &audit_trail,
                 );
                 return Err(error);
             }
@@ -3525,6 +3580,7 @@ pub async fn execute_recipe_with_services(
                 &started_at,
                 &finished_at,
                 &warnings,
+                &audit_trail,
             ) {
                 warnings.push(format!("Failed to persist recipe runtime state: {}", error));
             }
@@ -3534,6 +3590,7 @@ pub async fn execute_recipe_with_services(
                 instance_id: host_id,
                 summary,
                 warnings,
+                audit_trail,
             })
         }
         other => {
@@ -3543,20 +3600,46 @@ pub async fn execute_recipe_with_services(
     }
 }
 
+pub async fn execute_recipe_with_services(
+    queue: &crate::cli_runner::CommandQueue,
+    cache: &crate::cli_runner::CliCache,
+    pool: &SshConnectionPool,
+    remote_queues: &crate::cli_runner::RemoteCommandQueues,
+    request: ExecuteRecipeRequest,
+) -> Result<ExecuteRecipeResult, String> {
+    execute_recipe_with_services_internal(
+        queue,
+        cache,
+        pool,
+        remote_queues,
+        request,
+        None,
+        None,
+        Vec::new(),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn execute_recipe(
+    app: AppHandle,
     queue: State<'_, crate::cli_runner::CommandQueue>,
     cache: State<'_, crate::cli_runner::CliCache>,
     pool: State<'_, SshConnectionPool>,
     remote_queues: State<'_, crate::cli_runner::RemoteCommandQueues>,
     request: ExecuteRecipeRequest,
+    activity_session_id: Option<String>,
+    planning_audit_trail: Option<Vec<RecipeRuntimeAuditEntry>>,
 ) -> Result<ExecuteRecipeResult, String> {
-    execute_recipe_with_services(
+    execute_recipe_with_services_internal(
         queue.inner(),
         cache.inner(),
         pool.inner(),
         remote_queues.inner(),
         request,
+        Some(&app),
+        activity_session_id,
+        planning_audit_trail.unwrap_or_default(),
     )
     .await
 }
@@ -5761,6 +5844,7 @@ mod discord_directory_parse_tests {
                 channel_id: "11".into(),
                 channel_name: "chan-1".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "1".into(),
@@ -5768,6 +5852,7 @@ mod discord_directory_parse_tests {
                 channel_id: "12".into(),
                 channel_name: "chan-2".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "2".into(),
@@ -5775,6 +5860,7 @@ mod discord_directory_parse_tests {
                 channel_id: "21".into(),
                 channel_name: "chan-3".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
         ];
         let text = serde_json::to_string(&payload).expect("serialize payload");
@@ -11134,27 +11220,6 @@ fn resolve_model_provider_base_url(cfg: &Value, provider: &str) -> Option<String
 // Task 6: Remote business commands
 // ---------------------------------------------------------------------------
 
-fn is_owner_display_parse_error(text: &str) -> bool {
-    clawpal_core::doctor::owner_display_parse_error(text)
-}
-
-async fn run_openclaw_remote_with_autofix(
-    pool: &SshConnectionPool,
-    host_id: &str,
-    args: &[&str],
-) -> Result<crate::cli_runner::CliOutput, String> {
-    let first = crate::cli_runner::run_openclaw_remote(pool, host_id, args).await?;
-    if first.exit_code == 0 {
-        return Ok(first);
-    }
-    let combined = format!("{}\n{}", first.stderr, first.stdout);
-    if !is_owner_display_parse_error(&combined) {
-        return Ok(first);
-    }
-    let _ = crate::cli_runner::run_openclaw_remote(pool, host_id, &["doctor", "--fix"]).await;
-    crate::cli_runner::run_openclaw_remote(pool, host_id, args).await
-}
-
 /// Tier 2: slow, optional — openclaw version + duplicate detection (2 SSH calls in parallel).
 /// Called once on mount and on-demand (e.g., after upgrade), not in poll loop.
 // ---------------------------------------------------------------------------
@@ -11173,6 +11238,13 @@ async fn remote_write_config_with_snapshot(
     // Use core function to prepare config write
     let (new_text, snapshot_text) =
         clawpal_core::config::prepare_config_write(current_text, next, source)?;
+    crate::commands::logs::log_remote_config_write(
+        "snapshot_write",
+        host_id,
+        Some(source),
+        config_path,
+        &new_text,
+    );
 
     // Create snapshot dir
     pool.exec(host_id, "mkdir -p ~/.clawpal/snapshots").await?;
