@@ -69,10 +69,14 @@ const HOST_SHARED_READ_METHODS = new Set([
   "getStatusExtra",
   "getChannelsConfigSnapshot",
   "getChannelsRuntimeSnapshot",
+  "listChannelsMinimal",
+  "listDiscordGuildChannels",
+  "listDiscordGuildChannelsFast",
   "getCronConfigSnapshot",
   "getCronRuntimeSnapshot",
   "getRescueBotStatus",
   "checkOpenclawUpdate",
+  "listRecipeModelProfiles",
 ]);
 
 export function resolveReadCacheScopeKey(

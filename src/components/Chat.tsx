@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -110,43 +111,40 @@ User message: `;
 export function Chat() {
   const { t } = useTranslation();
   const ua = useApi();
+  const { agents: sharedAgents, refreshAgentsCache } = useInstance();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [agents, setAgents] = useState<string[]>([]);
   const [agentId, setAgentId] = useState("");
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentIdRef = useRef("");
+  const agents = useMemo(() => (sharedAgents ?? []).map((agent) => agent.id), [sharedAgents]);
 
   useEffect(() => {
     agentIdRef.current = agentId;
   }, [agentId]);
 
   useEffect(() => {
+    if (sharedAgents !== null) return;
+    void refreshAgentsCache().catch((e) => console.error("Failed to load agent IDs:", e));
+  }, [refreshAgentsCache, sharedAgents]);
+
+  useEffect(() => {
     const previousAgentId = agentIdRef.current;
-    setAgentId("");
-    setSessionId(undefined);
-    setMessages([]);
-    ua.listAgents()
-      .then((list) => {
-        const ids = list.map((a) => a.id);
-        setAgents(ids);
-        const nextAgent =
-          ids.includes(previousAgentId) && previousAgentId
-            ? previousAgentId
-            : (ids[0] || "");
-        setAgentId(nextAgent);
-        if (nextAgent) {
-          setSessionId(loadSessionId(ua.instanceId, nextAgent));
-          setMessages(loadChatSessionMessages(ua.instanceId, nextAgent));
-        } else {
-          setSessionId(undefined);
-          setMessages([]);
-        }
-      })
-      .catch((e) => console.error("Failed to load agent IDs:", e));
-  }, [ua.instanceId, ua]);
+    const nextAgent =
+      agents.includes(previousAgentId) && previousAgentId
+        ? previousAgentId
+        : (agents[0] || "");
+    setAgentId(nextAgent);
+    if (nextAgent) {
+      setSessionId(loadSessionId(ua.instanceId, nextAgent));
+      setMessages(loadChatSessionMessages(ua.instanceId, nextAgent));
+    } else {
+      setSessionId(undefined);
+      setMessages([]);
+    }
+  }, [agents, ua.instanceId]);
 
   useEffect(() => {
     if (!agentId) return;

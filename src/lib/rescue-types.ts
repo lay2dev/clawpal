@@ -139,4 +139,3 @@ export interface RescuePrimaryRepairResult {
   before: RescuePrimaryDiagnosisResult;
   after: RescuePrimaryDiagnosisResult;
 }
-

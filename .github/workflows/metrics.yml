@@ -69,7 +69,7 @@ jobs:
 
           TOTAL_COMMITS=$(git rev-list --no-merges $BASE..$HEAD | wc -l)
           PASSED_COMMITS=$(( TOTAL_COMMITS - FAIL_COUNT ))
-          
+
           echo "fail=${FAIL}" >> "$GITHUB_OUTPUT"
           echo "total=${TOTAL_COMMITS}" >> "$GITHUB_OUTPUT"
           echo "passed=${PASSED_COMMITS}" >> "$GITHUB_OUTPUT"

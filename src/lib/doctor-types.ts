@@ -85,7 +85,6 @@ export interface ApplyQueueResult {
   error: string | null;
   rolledBack: boolean;
 }
-
 export interface ApplyQueueResult {
   ok: boolean;
   appliedCount: number;
@@ -93,4 +92,3 @@ export interface ApplyQueueResult {
   error: string | null;
   rolledBack: boolean;
 }
-

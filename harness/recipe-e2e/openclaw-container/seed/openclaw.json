@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-20T00:00:00Z"
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "auth": {
+      "token": "gw-test-token-abc123"
+    }
+  },
+  "models": {
+    "providers": {}
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "workspace": "~/.openclaw/instances/openclaw-recipe-e2e/workspace"
+    },
+    "list": [
+      {
+        "id": "main",
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "workspace": "~/.openclaw/agents/main/agent",
+        "agentDir": "/root/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "Main Agent",
+          "emoji": "🤖"
+        }
+      }
+    ]
+  }
+}

@@ -37,6 +37,7 @@ describe("persistent read cache", () => {
     expect(shouldPersistReadMethod("getInstanceConfigSnapshot")).toBe(true);
     expect(shouldPersistReadMethod("listDiscordGuildChannels")).toBe(true);
     expect(shouldPersistReadMethod("listChannelsMinimal")).toBe(true);
+    expect(shouldPersistReadMethod("listRecipeModelProfiles")).toBe(true);
     expect(shouldPersistReadMethod("getCronRuns", ["job-1"])).toBe(false);
     expect(shouldPersistReadMethod("listAgents")).toBe(false);
   });
@@ -82,5 +83,13 @@ describe("persistent read cache", () => {
     ];
     writePersistedReadCache("local", "listModelProfiles", [], profiles);
     expect(readPersistedReadCache("local", "listModelProfiles", [])).toEqual(profiles);
+  });
+
+  test("persists listRecipeModelProfiles by instance scope", () => {
+    const profiles = [
+      { id: "remote-p1", provider: "openai", model: "gpt-5", enabled: true },
+    ];
+    writePersistedReadCache("ssh:hetzner", "listRecipeModelProfiles", [], profiles);
+    expect(readPersistedReadCache("ssh:hetzner", "listRecipeModelProfiles", [])).toEqual(profiles);
   });
 });

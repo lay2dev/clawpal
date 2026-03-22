@@ -46,6 +46,7 @@ export function useApi() {
     discordGuildChannels,
     channelsLoading,
     discordChannelsLoading,
+    discordChannelsResolved,
     refreshChannelNodesCache,
     refreshDiscordChannelsCache,
   } = useInstance();
@@ -259,6 +260,7 @@ export function useApi() {
       discordGuildChannels,
       channelsLoading,
       discordChannelsLoading,
+      discordChannelsResolved,
       refreshChannelNodesCache,
       refreshDiscordChannelsCache,
 
@@ -297,6 +299,7 @@ export function useApi() {
         api.listAgentsOverview,
         api.remoteListAgentsOverview,
       ),
+      createAgent: api.createAgent,
       setupAgentIdentity: dispatch(
         api.setupAgentIdentity,
         api.remoteSetupAgentIdentity,
@@ -338,12 +341,24 @@ export function useApi() {
         api.refreshDiscordGuildChannels,
         api.remoteListDiscordGuildChannels,
       ),
+      listDiscordGuildChannelsFast: dispatchCached(
+        "listDiscordGuildChannelsFast",
+        isRemote ? 60_000 : 30_000,
+        api.listDiscordGuildChannelsFast,
+        api.remoteListDiscordGuildChannelsFast,
+      ),
 
       // Models
       listModelProfiles: localGlobalCached(
         "listModelProfiles",
         10_000,
         api.listModelProfiles,
+      ),
+      listRecipeModelProfiles: dispatchCached(
+        "listRecipeModelProfiles",
+        10_000,
+        api.listModelProfiles,
+        api.remoteListModelProfiles,
       ),
       upsertModelProfile: withGlobalInvalidation(
         api.upsertModelProfile,
@@ -412,6 +427,7 @@ export function useApi() {
       // Doctor
       runDoctor: dispatch(api.runDoctor, api.remoteRunDoctor),
       fixIssues: withInvalidation(dispatch(api.fixIssues, api.remoteFixIssues)),
+      precheckAuth: localCached("precheckAuth", 5_000, api.precheckAuth),
 
       // History
       listHistory: dispatchCached(
@@ -633,7 +649,77 @@ export function useApi() {
         api.getCachedModelCatalog,
       ),
       getSystemStatus: api.getSystemStatus,
+      listRegisteredInstances: localCached(
+        "listRegisteredInstances",
+        10_000,
+        api.listRegisteredInstances,
+      ),
       listRecipes: localCached("listRecipes", 20_000, api.listRecipes),
+      listRecipesFromSourceText: api.listRecipesFromSourceText,
+      pickRecipeSourceDirectory: api.pickRecipeSourceDirectory,
+      listRecipeActions: api.listRecipeActions,
+      listRecipeWorkspaceEntries: localCached(
+        "listRecipeWorkspaceEntries",
+        4_000,
+        api.listRecipeWorkspaceEntries,
+      ),
+      readRecipeWorkspaceSource: localCached(
+        "readRecipeWorkspaceSource",
+        4_000,
+        api.readRecipeWorkspaceSource,
+      ),
+      importRecipeLibrary: withInvalidation(
+        api.importRecipeLibrary,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      importRecipeSource: withInvalidation(
+        api.importRecipeSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      saveRecipeWorkspaceSource: withInvalidation(
+        api.saveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      approveRecipeWorkspaceSource: withInvalidation(
+        api.approveRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      deleteRecipeWorkspaceSource: withInvalidation(
+        api.deleteRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource"],
+      ),
+      upgradeBundledRecipeWorkspaceSource: withInvalidation(
+        api.upgradeBundledRecipeWorkspaceSource,
+        ["listRecipeWorkspaceEntries", "readRecipeWorkspaceSource", "listRecipes"],
+      ),
+      exportRecipeSource: api.exportRecipeSource,
+      validateRecipeSourceText: api.validateRecipeSourceText,
+      listRecipeInstances: localCached(
+        "listRecipeInstances",
+        4_000,
+        api.listRecipeInstances,
+      ),
+      listRecipeRuns: localCached("listRecipeRuns", 4_000, api.listRecipeRuns),
+      deleteRecipeRuns: withInvalidation(api.deleteRecipeRuns, [
+        "listRecipeInstances",
+        "listRecipeRuns",
+      ]),
+      planRecipe: localCached("planRecipe", 5_000, api.planRecipe),
+      planRecipeSource: api.planRecipeSource,
+      executeRecipe: withInvalidation(api.executeRecipe, [
+        "listHistory",
+        "listRecipeInstances",
+        "listRecipeRuns",
+        "listBindings",
+        "listAgents",
+        "getInstanceRuntimeSnapshot",
+        "getChannelsRuntimeSnapshot",
+        "getStatusExtra",
+        "listQueuedCommands",
+        "queuedCommandsCount",
+        "previewQueuedCommands",
+        "getSystemStatus",
+      ]),
       connectDockerInstance: api.connectDockerInstance,
       listInstallMethods: localCached(
         "installListMethods",
@@ -680,6 +766,7 @@ export function useApi() {
       discordGuildChannels,
       channelsLoading,
       discordChannelsLoading,
+      discordChannelsResolved,
       refreshChannelNodesCache,
       refreshDiscordChannelsCache,
     ],

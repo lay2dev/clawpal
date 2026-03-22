@@ -2,6 +2,83 @@ use super::*;
 
 pub(crate) const DISCORD_REST_USER_AGENT: &str = "DiscordBot (https://openclaw.ai, 1.0)";
 
+// ── Persistent id→name cache ──────────────────────────────────────────────────
+//
+// Stores the useful fields from Discord REST responses so repeated calls for the
+// same guild/channel IDs skip the network round-trip.  Saved to
+// ~/.clawpal/discord-id-cache.json (local) or the equivalent remote path via SFTP.
+// TTL is one week; passing force_refresh=true bypasses the TTL check.
+
+pub(crate) const DISCORD_ID_CACHE_TTL_SECS: u64 = 7 * 24 * 3600;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct CachedIdEntry {
+    pub name: String,
+    pub cached_at: u64, // Unix seconds
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DiscordIdCache {
+    #[serde(default)]
+    pub guilds: std::collections::HashMap<String, CachedIdEntry>,
+    #[serde(default)]
+    pub channels: std::collections::HashMap<String, CachedIdEntry>,
+}
+
+impl DiscordIdCache {
+    pub fn from_str(s: &str) -> Self {
+        serde_json::from_str(s).unwrap_or_default()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+
+    fn is_fresh(entry: &CachedIdEntry, now: u64, force: bool) -> bool {
+        !force && now.saturating_sub(entry.cached_at) < DISCORD_ID_CACHE_TTL_SECS
+    }
+
+    /// Return a cached guild name if it exists and is within TTL.
+    pub fn get_guild_name(&self, guild_id: &str, now: u64, force: bool) -> Option<&str> {
+        let entry = self.guilds.get(guild_id)?;
+        if Self::is_fresh(entry, now, force) {
+            Some(&entry.name)
+        } else {
+            None
+        }
+    }
+
+    /// Return a cached channel name if it exists and is within TTL.
+    pub fn get_channel_name(&self, channel_id: &str, now: u64, force: bool) -> Option<&str> {
+        let entry = self.channels.get(channel_id)?;
+        if Self::is_fresh(entry, now, force) {
+            Some(&entry.name)
+        } else {
+            None
+        }
+    }
+
+    pub fn put_guild(&mut self, guild_id: String, name: String, now: u64) {
+        self.guilds.insert(
+            guild_id,
+            CachedIdEntry {
+                name,
+                cached_at: now,
+            },
+        );
+    }
+
+    pub fn put_channel(&mut self, channel_id: String, name: String, now: u64) {
+        self.channels.insert(
+            channel_id,
+            CachedIdEntry {
+                name,
+                cached_at: now,
+            },
+        );
+    }
+}
+
 /// Fetch a Discord guild name via the Discord REST API using a bot token.
 pub(crate) fn fetch_discord_guild_name(bot_token: &str, guild_id: &str) -> Result<String, String> {
     let url = format!("https://discord.com/api/v10/guilds/{guild_id}");
@@ -234,7 +311,7 @@ pub(crate) fn parse_discord_cache_guild_name_fallbacks(
 mod discord_directory_parse_tests {
     use super::{
         parse_directory_group_channel_ids, parse_discord_cache_guild_name_fallbacks,
-        DiscordGuildChannel,
+        parse_resolve_name_map, DiscordGuildChannel, DiscordIdCache, DISCORD_ID_CACHE_TTL_SECS,
     };
 
     #[test]
@@ -259,6 +336,169 @@ mod discord_directory_parse_tests {
         assert!(ids.is_empty());
     }
 
+    // ── DiscordIdCache TTL ────────────────────────────────────────────────────
+
+    #[test]
+    fn id_cache_returns_fresh_guild_name() {
+        let mut cache = DiscordIdCache::default();
+        let now = 1_000_000u64;
+        cache.put_guild("g1".into(), "My Guild".into(), now);
+        assert_eq!(
+            cache.get_guild_name("g1", now + 60, false),
+            Some("My Guild")
+        );
+    }
+
+    #[test]
+    fn id_cache_rejects_stale_guild_name() {
+        let mut cache = DiscordIdCache::default();
+        let now = 1_000_000u64;
+        cache.put_guild("g1".into(), "My Guild".into(), now);
+        let stale = now + DISCORD_ID_CACHE_TTL_SECS + 1;
+        assert_eq!(cache.get_guild_name("g1", stale, false), None);
+    }
+
+    #[test]
+    fn id_cache_force_refresh_bypasses_fresh_entry() {
+        let mut cache = DiscordIdCache::default();
+        let now = 1_000_000u64;
+        cache.put_guild("g1".into(), "My Guild".into(), now);
+        // force=true should return None even though the entry is fresh
+        assert_eq!(cache.get_guild_name("g1", now + 60, true), None);
+    }
+
+    #[test]
+    fn id_cache_channel_ttl_behaviour_mirrors_guild() {
+        let mut cache = DiscordIdCache::default();
+        let now = 1_000_000u64;
+        cache.put_channel("c1".into(), "general".into(), now);
+        assert_eq!(
+            cache.get_channel_name("c1", now + 10, false),
+            Some("general")
+        );
+        let stale = now + DISCORD_ID_CACHE_TTL_SECS + 1;
+        assert_eq!(cache.get_channel_name("c1", stale, false), None);
+    }
+
+    #[test]
+    fn id_cache_roundtrip_json() {
+        let mut cache = DiscordIdCache::default();
+        let now = 1_000_000u64;
+        cache.put_guild("g1".into(), "Guild One".into(), now);
+        cache.put_channel("c1".into(), "general".into(), now);
+        let json = cache.to_json();
+        let loaded = DiscordIdCache::from_str(&json);
+        assert_eq!(
+            loaded.get_guild_name("g1", now + 1, false),
+            Some("Guild One")
+        );
+        assert_eq!(
+            loaded.get_channel_name("c1", now + 1, false),
+            Some("general")
+        );
+    }
+
+    #[test]
+    fn id_cache_from_str_invalid_json_defaults_to_empty() {
+        let cache = DiscordIdCache::from_str("not json at all");
+        assert!(cache.guilds.is_empty());
+        assert!(cache.channels.is_empty());
+    }
+
+    // ── parse_resolve_name_map ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_resolve_name_map_extracts_resolved_entries() {
+        let stdout = r#"
+[info] resolving channels
+[
+  {"input":"111","name":"general","resolved":true},
+  {"input":"222","name":"random","resolved":true}
+]
+"#;
+        let map = parse_resolve_name_map(stdout).expect("should parse");
+        assert_eq!(map.get("111").map(|s| s.as_str()), Some("general"));
+        assert_eq!(map.get("222").map(|s| s.as_str()), Some("random"));
+    }
+
+    #[test]
+    fn parse_resolve_name_map_skips_unresolved_entries() {
+        let stdout = r#"[
+  {"input":"111","name":"general","resolved":true},
+  {"input":"222","name":"unknown","resolved":false}
+]"#;
+        let map = parse_resolve_name_map(stdout).expect("should parse");
+        assert!(map.contains_key("111"));
+        assert!(!map.contains_key("222"));
+    }
+
+    #[test]
+    fn parse_resolve_name_map_trims_whitespace_from_name() {
+        let stdout = r#"[{"input":"111","name":"  general  ","resolved":true}]"#;
+        let map = parse_resolve_name_map(stdout).expect("should parse");
+        assert_eq!(map.get("111").map(|s| s.as_str()), Some("general"));
+    }
+
+    #[test]
+    fn parse_resolve_name_map_returns_none_for_non_json() {
+        assert!(parse_resolve_name_map("not json").is_none());
+    }
+
+    #[test]
+    fn parse_resolve_name_map_ignores_empty_name() {
+        let stdout = r#"[{"input":"111","name":"","resolved":true}]"#;
+        let map = parse_resolve_name_map(stdout).expect("should parse");
+        assert!(!map.contains_key("111"));
+    }
+
+    // ── channel name fallback from existing cache ─────────────────────────────
+
+    #[test]
+    fn channel_name_fallback_preserves_resolved_names() {
+        // Simulates building channel_name_fallback_map from discord-guild-channels.json
+        let existing: Vec<DiscordGuildChannel> = vec![
+            DiscordGuildChannel {
+                guild_id: "g1".into(),
+                guild_name: "Guild".into(),
+                channel_id: "111".into(),
+                channel_name: "general".into(), // resolved
+                default_agent_id: None,
+                resolution_warning: None,
+            },
+            DiscordGuildChannel {
+                guild_id: "g1".into(),
+                guild_name: "Guild".into(),
+                channel_id: "222".into(),
+                channel_name: "222".into(), // unresolved (name == id)
+                default_agent_id: None,
+                resolution_warning: None,
+            },
+        ];
+        let text = serde_json::to_string(&existing).unwrap();
+        let cached: Vec<DiscordGuildChannel> = serde_json::from_str(&text).unwrap();
+        let fallback: std::collections::HashMap<String, String> = cached
+            .into_iter()
+            .filter(|e| e.channel_name != e.channel_id)
+            .map(|e| (e.channel_id, e.channel_name))
+            .collect();
+
+        // Only the resolved entry should be in the fallback map
+        assert_eq!(fallback.get("111").map(|s| s.as_str()), Some("general"));
+        assert!(!fallback.contains_key("222"));
+    }
+
+    #[test]
+    fn channel_name_fallback_handles_empty_cache() {
+        let fallback: std::collections::HashMap<String, String> =
+            serde_json::from_str::<Vec<DiscordGuildChannel>>("[]")
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.channel_name != e.channel_id)
+                .map(|e| (e.channel_id, e.channel_name))
+                .collect();
+        assert!(fallback.is_empty());
+    }
+
     #[test]
     fn parse_discord_cache_guild_name_fallbacks_uses_non_id_names() {
         let payload = vec![
@@ -268,6 +508,7 @@ mod discord_directory_parse_tests {
                 channel_id: "11".into(),
                 channel_name: "chan-1".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "1".into(),
@@ -275,6 +516,7 @@ mod discord_directory_parse_tests {
                 channel_id: "12".into(),
                 channel_name: "chan-2".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "2".into(),
@@ -282,6 +524,7 @@ mod discord_directory_parse_tests {
                 channel_id: "21".into(),
                 channel_name: "chan-3".into(),
                 default_agent_id: None,
+                resolution_warning: None,
             },
         ];
         let text = serde_json::to_string(&payload).expect("serialize payload");

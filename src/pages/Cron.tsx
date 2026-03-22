@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
 import { cn } from "@/lib/utils";
 import type {
@@ -55,6 +56,7 @@ export function Cron() {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
   const ua = useApi();
+  const { discordGuildChannels } = useInstance();
   const persistedConfigSnapshot = useMemo(
     () => (ua.persistenceResolved && ua.persistenceScope
       ? readPersistedReadCache<CronConfigSnapshot>(
@@ -92,7 +94,6 @@ export function Cron() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<string | null>(null);
   const [filter, setFilter] = useState<CronFilter>("all");
-  const [channels, setChannels] = useState<DiscordGuildChannel[]>([]);
   const liveReadsReady = shouldEnableInstanceLiveReads({
     instanceToken: ua.instanceToken,
     persistenceResolved: ua.persistenceResolved,
@@ -150,8 +151,6 @@ export function Cron() {
     if (!liveReadsReady) return;
     loadConfigSnapshot();
     loadRuntimeSnapshot();
-    ua.listDiscordGuildChannels().then(setChannels).catch(() => {});
-    ua.refreshDiscordGuildChannels?.().then(setChannels).catch(() => {});
     const iv = setInterval(() => {
       loadRuntimeSnapshot();
     }, 10_000);
@@ -321,7 +320,7 @@ export function Cron() {
 
             const deliveryChannelName = (() => {
               if (!job.delivery?.to) return null;
-              const ch = channels.find(c => c.channelId === job.delivery!.to);
+              const ch = (discordGuildChannels ?? []).find(c => c.channelId === job.delivery!.to);
               if (ch) return `#${ch.channelName}`;
               const id = job.delivery!.to!;
               return `#${id.slice(-4)}`;

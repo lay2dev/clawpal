@@ -8,28 +8,33 @@ use crate::cli_runner::{
     remove_queued_command, CliCache, CommandQueue, RemoteCommandQueues,
 };
 use crate::commands::{
-    analyze_sessions, analyze_sessions_stream, apply_config_patch, backup_before_upgrade,
-    backup_before_upgrade_stream, cancel_stream, chat_via_openclaw, check_openclaw_update,
-    clear_all_sessions, clear_session_model_override, connect_docker_instance,
-    connect_local_instance, connect_ssh_instance, create_agent, delete_agent, delete_backup,
-    delete_cron_job, delete_local_instance_home, delete_model_profile, delete_registered_instance,
+    analyze_sessions, analyze_sessions_stream, apply_config_patch, approve_recipe_workspace_source,
+    backup_before_upgrade, backup_before_upgrade_stream, cancel_stream, chat_via_openclaw,
+    check_openclaw_update, clear_all_sessions, clear_session_model_override,
+    connect_docker_instance, connect_local_instance, connect_ssh_instance, create_agent,
+    delete_agent, delete_backup, delete_cron_job, delete_local_instance_home, delete_model_profile,
+    delete_recipe_runs, delete_recipe_workspace_source, delete_registered_instance,
     delete_sessions_by_ids, delete_ssh_host, deploy_watchdog, diagnose_doctor_assistant,
     diagnose_primary_via_rescue, diagnose_ssh, discover_local_instances, ensure_access_profile,
-    extract_model_profiles_from_config, fix_issues, get_app_preferences, get_bug_report_settings,
-    get_cached_model_catalog, get_channels_config_snapshot, get_channels_runtime_snapshot,
-    get_cron_config_snapshot, get_cron_runs, get_cron_runtime_snapshot,
-    get_instance_config_snapshot, get_instance_runtime_snapshot, get_perf_report, get_perf_timings,
-    get_process_metrics, get_rescue_bot_status, get_session_model_override, get_ssh_transfer_stats,
-    get_status_extra, get_status_light, get_system_status, get_watchdog_status,
-    list_agents_overview, list_backups, list_bindings, list_channels_minimal, list_cron_jobs,
-    list_discord_guild_channels, list_history, list_model_profiles, list_recipes,
+    execute_recipe, export_recipe_source, extract_model_profiles_from_config, fix_issues,
+    get_app_preferences, get_bug_report_settings, get_cached_model_catalog,
+    get_channels_config_snapshot, get_channels_runtime_snapshot, get_cron_config_snapshot,
+    get_cron_runs, get_cron_runtime_snapshot, get_instance_config_snapshot,
+    get_instance_runtime_snapshot, get_perf_report, get_perf_timings, get_process_metrics,
+    get_rescue_bot_status, get_session_model_override, get_ssh_transfer_stats, get_status_extra,
+    get_status_light, get_system_status, get_watchdog_status, import_recipe_library,
+    import_recipe_source, list_agents_overview, list_backups, list_bindings, list_channels_minimal,
+    list_cron_jobs, list_discord_guild_channels, list_discord_guild_channels_fast, list_history,
+    list_model_profiles, list_recipe_actions, list_recipe_instances, list_recipe_runs,
+    list_recipe_workspace_entries, list_recipes, list_recipes_from_source_text,
     list_registered_instances, list_session_files, list_ssh_config_hosts, list_ssh_hosts,
     local_openclaw_cli_available, local_openclaw_config_exists, log_app_event, manage_rescue_bot,
-    migrate_legacy_instances, open_url, precheck_auth, precheck_instance, precheck_registry,
-    precheck_transport, preview_rollback, preview_session, preview_session_stream,
-    probe_ssh_connection_profile, push_model_profiles_to_local_openclaw,
-    push_model_profiles_to_remote_openclaw, push_related_secrets_to_remote, read_app_log,
-    read_error_log, read_gateway_error_log, read_gateway_log, read_helper_log, read_raw_config,
+    migrate_legacy_instances, open_url, pick_recipe_source_directory, plan_recipe,
+    plan_recipe_source, precheck_auth, precheck_instance, precheck_registry, precheck_transport,
+    preview_rollback, preview_session, preview_session_stream, probe_ssh_connection_profile,
+    push_model_profiles_to_local_openclaw, push_model_profiles_to_remote_openclaw,
+    push_related_secrets_to_remote, read_app_log, read_error_log, read_gateway_error_log,
+    read_gateway_log, read_helper_log, read_raw_config, read_recipe_workspace_source,
     record_install_experience, refresh_discord_guild_channels, refresh_model_catalog,
     remote_analyze_sessions, remote_analyze_sessions_stream, remote_apply_config_patch,
     remote_backup_before_upgrade, remote_backup_before_upgrade_stream, remote_chat_via_openclaw,
@@ -43,24 +48,26 @@ use crate::commands::{
     remote_get_rescue_bot_status, remote_get_ssh_connection_profile, remote_get_status_extra,
     remote_get_system_status, remote_get_watchdog_status, remote_list_agents_overview,
     remote_list_backups, remote_list_bindings, remote_list_channels_minimal, remote_list_cron_jobs,
-    remote_list_discord_guild_channels, remote_list_history, remote_list_model_profiles,
-    remote_list_session_files, remote_manage_rescue_bot, remote_preview_rollback,
-    remote_preview_session, remote_preview_session_stream, remote_read_app_log,
-    remote_read_error_log, remote_read_gateway_error_log, remote_read_gateway_log,
-    remote_read_helper_log, remote_read_raw_config, remote_refresh_model_catalog,
-    remote_repair_doctor_assistant, remote_repair_primary_via_rescue, remote_resolve_api_keys,
-    remote_restart_gateway, remote_restore_from_backup, remote_rollback, remote_run_doctor,
-    remote_run_openclaw_upgrade, remote_setup_agent_identity, remote_start_watchdog,
-    remote_stop_watchdog, remote_sync_profiles_to_local_auth, remote_test_model_profile,
-    remote_trigger_cron_job, remote_uninstall_watchdog, remote_upsert_model_profile,
-    remote_write_raw_config, repair_doctor_assistant, repair_primary_via_rescue, resolve_api_keys,
-    resolve_provider_auth, restart_gateway, restore_from_backup, rollback, run_doctor_command,
-    run_openclaw_upgrade, set_active_clawpal_data_dir, set_active_openclaw_home, set_agent_model,
-    set_bug_report_settings, set_global_model, set_session_model_override,
+    remote_list_discord_guild_channels, remote_list_discord_guild_channels_fast,
+    remote_list_history, remote_list_model_profiles, remote_list_session_files,
+    remote_manage_rescue_bot, remote_preview_rollback, remote_preview_session,
+    remote_preview_session_stream, remote_read_app_log, remote_read_error_log,
+    remote_read_gateway_error_log, remote_read_gateway_log, remote_read_helper_log,
+    remote_read_raw_config, remote_refresh_model_catalog, remote_repair_doctor_assistant,
+    remote_repair_primary_via_rescue, remote_resolve_api_keys, remote_restart_gateway,
+    remote_restore_from_backup, remote_rollback, remote_run_doctor, remote_run_openclaw_upgrade,
+    remote_setup_agent_identity, remote_start_watchdog, remote_stop_watchdog,
+    remote_sync_profiles_to_local_auth, remote_test_model_profile, remote_trigger_cron_job,
+    remote_uninstall_watchdog, remote_upsert_model_profile, remote_write_raw_config,
+    repair_doctor_assistant, repair_primary_via_rescue, resolve_api_keys, resolve_provider_auth,
+    restart_gateway, restore_from_backup, rollback, run_doctor_command, run_openclaw_upgrade,
+    save_recipe_workspace_source, set_active_clawpal_data_dir, set_active_openclaw_home,
+    set_agent_model, set_bug_report_settings, set_global_model, set_session_model_override,
     set_ssh_transfer_speed_ui_preference, setup_agent_identity, sftp_list_dir, sftp_read_file,
     sftp_remove_file, sftp_write_file, ssh_connect, ssh_connect_with_passphrase, ssh_disconnect,
     ssh_exec, ssh_status, start_watchdog, stop_watchdog, test_model_profile, trigger_cron_job,
-    uninstall_watchdog, upsert_model_profile, upsert_ssh_host,
+    uninstall_watchdog, upgrade_bundled_recipe_workspace_source, upsert_model_profile,
+    upsert_ssh_host, validate_recipe_source_text,
 };
 use crate::install::commands::{
     install_create_session, install_decide_target, install_get_session, install_list_methods,
@@ -72,6 +79,7 @@ use crate::ssh::SshConnectionPool;
 
 pub mod access_discovery;
 pub mod agent_fallback;
+pub mod agent_identity;
 pub mod bridge_client;
 pub mod bug_report;
 pub mod cli_runner;
@@ -79,21 +87,56 @@ pub mod commands;
 pub mod config_io;
 pub mod doctor;
 pub mod doctor_temp_store;
+pub mod execution_spec;
 pub mod history;
 pub mod install;
 pub mod json5_extract;
 pub mod json_util;
 pub mod logging;
+pub mod markdown_document;
 pub mod models;
 pub mod node_client;
 pub mod openclaw_doc_resolver;
 pub mod path_fix;
 pub mod prompt_templates;
 pub mod recipe;
+pub mod recipe_action_catalog;
+pub mod recipe_adapter;
+pub mod recipe_bundle;
+pub mod recipe_executor;
+pub mod recipe_library;
+pub mod recipe_planner;
+pub mod recipe_runtime;
+pub mod recipe_store;
+pub mod recipe_workspace;
 pub mod ssh;
+
+#[cfg(test)]
+mod execution_spec_tests;
+#[cfg(test)]
+mod recipe_action_catalog_tests;
+#[cfg(test)]
+mod recipe_adapter_tests;
+#[cfg(test)]
+mod recipe_bundle_tests;
+#[cfg(test)]
+mod recipe_executor_tests;
+#[cfg(test)]
+mod recipe_library_tests;
+#[cfg(test)]
+mod recipe_planner_tests;
+#[cfg(test)]
+mod recipe_source_tests;
+#[cfg(test)]
+mod recipe_store_tests;
+#[cfg(test)]
+mod recipe_tests;
+#[cfg(test)]
+mod recipe_workspace_tests;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(SshConnectionPool::new())
@@ -137,6 +180,25 @@ pub fn run() {
             get_session_model_override,
             clear_session_model_override,
             list_recipes,
+            list_recipes_from_source_text,
+            pick_recipe_source_directory,
+            list_recipe_actions,
+            validate_recipe_source_text,
+            list_recipe_workspace_entries,
+            read_recipe_workspace_source,
+            save_recipe_workspace_source,
+            approve_recipe_workspace_source,
+            import_recipe_library,
+            import_recipe_source,
+            delete_recipe_workspace_source,
+            upgrade_bundled_recipe_workspace_source,
+            export_recipe_source,
+            execute_recipe,
+            plan_recipe,
+            plan_recipe_source,
+            list_recipe_instances,
+            list_recipe_runs,
+            delete_recipe_runs,
             list_model_profiles,
             get_cached_model_catalog,
             refresh_model_catalog,
@@ -179,6 +241,7 @@ pub fn run() {
             get_channels_config_snapshot,
             get_channels_runtime_snapshot,
             list_discord_guild_channels,
+            list_discord_guild_channels_fast,
             refresh_discord_guild_channels,
             restart_gateway,
             diagnose_doctor_assistant,
@@ -233,6 +296,7 @@ pub fn run() {
             remote_preview_rollback,
             remote_rollback,
             remote_list_discord_guild_channels,
+            remote_list_discord_guild_channels_fast,
             remote_write_raw_config,
             remote_analyze_sessions,
             remote_analyze_sessions_stream,
@@ -316,7 +380,7 @@ pub fn run() {
             precheck_transport,
             precheck_auth,
         ])
-        .setup(|_app| {
+        .setup(|app| {
             crate::bug_report::install_panic_hook();
             crate::commands::perf::init_perf_clock();
             let settings = crate::commands::preferences::load_bug_report_settings_from_paths(
@@ -327,6 +391,9 @@ pub fn run() {
             }
             if let Err(err) = crate::bug_report::queue::flush(&settings) {
                 eprintln!("[bug-report] startup flush failed: {err}");
+            }
+            if let Err(err) = crate::recipe_library::seed_bundled_recipe_library(app.handle()) {
+                eprintln!("[recipe-library] bundled recipe seed failed: {err}");
             }
             // Run PATH fix in background so it doesn't block window creation.
             // openclaw commands won't fire until user interaction, giving this

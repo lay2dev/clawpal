@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import type { SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 
 import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { formatBackupProgressLabel, runBackupStream } from "@/lib/backup-stream";
 import { formatBytes, formatTime } from "@/lib/utils";
 import type { BackupInfo } from "@/lib/types";
@@ -24,24 +26,17 @@ import {
 export function BackupsPanel() {
   const { t } = useTranslation();
   const ua = useApi();
-  const [backups, setBackups] = useState<BackupInfo[] | null>(null);
+  const instance = useInstance();
+  const backups = instance.backups ?? null;
+  const backupsLoading = instance.backupsLoading ?? false;
+  const backupsLoaded = instance.backupsLoaded ?? false;
+  const refreshBackups = instance.refreshBackups ?? (async () => []);
+  const setBackups = (next: SetStateAction<BackupInfo[] | null>) => {
+    instance.setBackups?.(next);
+  };
   const [backupMessage, setBackupMessage] = useState("");
   const [deletingBackupName, setDeletingBackupName] = useState<string | null>(null);
   const [fadingOutBackupName, setFadingOutBackupName] = useState<string | null>(null);
-
-  const refreshBackups = useCallback(() => {
-    ua.listBackups()
-      .then(setBackups)
-      .catch((e) => console.error("Failed to load backups:", e));
-  }, [ua]);
-
-  useEffect(() => {
-    setBackups(null);
-    setBackupMessage("");
-    setDeletingBackupName(null);
-    setFadingOutBackupName(null);
-    refreshBackups();
-  }, [refreshBackups, ua.instanceId, ua.instanceToken, ua.isRemote, ua.isConnected]);
 
   return (
     <>
@@ -60,7 +55,7 @@ export function BackupsPanel() {
                 },
               });
               setBackupMessage(t("home.backupCreated", { name: info.name }));
-              refreshBackups();
+              void refreshBackups();
             } catch (e) {
               if (!hasGuidanceEmitted(e)) {
                 setBackupMessage(t("home.backupFailed", { error: String(e) }));
@@ -74,12 +69,12 @@ export function BackupsPanel() {
       {backupMessage && (
         <p className="text-sm text-muted-foreground mb-2">{backupMessage}</p>
       )}
-      {backups === null ? (
+      {!backupsLoaded || (backupsLoading && backups === null) ? (
         <div className="space-y-2">
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : backups.length === 0 ? (
+      ) : !backups || backups.length === 0 ? (
         <p className="text-muted-foreground text-sm">{t("doctor.noBackups")}</p>
       ) : (
         <div className="space-y-2">
@@ -178,7 +173,7 @@ export function BackupsPanel() {
                                 setTimeout(() => {
                                   setBackups((prev) => prev?.filter((b) => b.name !== backup.name) ?? null);
                                   setFadingOutBackupName((prev) => (prev === backup.name ? null : prev));
-                                  refreshBackups();
+                                  void refreshBackups();
                                 }, 350);
                               } catch (e) {
                                 if (!hasGuidanceEmitted(e)) {

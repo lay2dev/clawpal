@@ -157,4 +157,3 @@ export interface SftpEntry {
   isDir: boolean;
   size: number;
 }
-

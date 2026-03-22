@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
-import type { AgentOverview, ModelProfile, Recipe, RecipeParam } from "../lib/types";
+import type { ModelProfile, Recipe, RecipeParam } from "../lib/types";
 import { useApi } from "@/lib/use-api";
+import { useInstance } from "@/lib/instance-context";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -15,33 +16,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-function validateField(param: RecipeParam, value: string): string | null {
-  const trim = value.trim();
-  if (param.required && trim.length === 0) {
-    return i18n.t('paramForm.isRequired', { label: param.label });
-  }
-  // Select-based types only need required check
-  if (param.type === "discord_guild" || param.type === "discord_channel" || param.type === "model_profile" || param.type === "agent") {
-    return null;
-  }
-  if (param.minLength != null && trim.length < param.minLength) {
-    return i18n.t('paramForm.tooShort', { label: param.label });
-  }
-  if (param.maxLength != null && trim.length > param.maxLength) {
-    return i18n.t('paramForm.tooLong', { label: param.label });
-  }
-  if (param.pattern && trim.length > 0) {
-    try {
-      if (!new RegExp(param.pattern).test(trim)) {
-        return i18n.t('paramForm.invalidFormat', { label: param.label });
-      }
-    } catch {
-      return i18n.t('paramForm.invalidRule', { label: param.label });
-    }
-  }
-  return null;
-}
+import {
+  buildTouchedParamsOnSubmit,
+  findFirstInvalidVisibleParamId,
+  isParamVisible,
+  validateVisibleParamValues,
+} from "./param-form-state";
+import { loadRecipeModelProfiles } from "./param-form-model-profiles";
 
 export function ParamForm({
   recipe,
@@ -49,33 +30,45 @@ export function ParamForm({
   onChange,
   onSubmit,
   submitLabel = "Preview",
+  disabled = false,
 }: {
   recipe: Recipe;
   values: Record<string, string>;
   onChange: (id: string, value: string) => void;
   onSubmit: () => void;
   submitLabel?: string;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const ua = useApi();
+  const {
+    agents,
+    modelProfiles,
+    discordChannelsResolved,
+    refreshAgentsCache,
+    refreshModelProfilesCache,
+  } = useInstance();
   const discordGuildChannels = ua.discordGuildChannels ?? [];
   const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
-  const [agents, setAgents] = useState<AgentOverview[]>([]);
+  const needsAgents = recipe.params.some((p) => p.type === "agent");
 
   // Lazily load model profiles if any param needs them
   const needsProfiles = recipe.params.some((p) => p.type === "model_profile");
   useEffect(() => {
     if (!needsProfiles) return;
-    ua.listModelProfiles().then(setModelProfiles).catch((e) => console.error("Failed to load model profiles:", e));
-  }, [needsProfiles, ua]);
+    if (modelProfiles !== null) return;
+    loadRecipeModelProfiles({
+      listRecipeModelProfiles: refreshModelProfilesCache,
+    })
+      .catch((e) => console.error("Failed to load model profiles:", e));
+  }, [modelProfiles, needsProfiles, refreshModelProfilesCache]);
 
   // Lazily load agents if any param needs them
-  const needsAgents = recipe.params.some((p) => p.type === "agent");
   useEffect(() => {
     if (!needsAgents) return;
-    ua.listAgents().then(setAgents).catch((e) => console.error("Failed to load agents:", e));
-  }, [needsAgents, ua]);
+    if (agents !== null) return;
+    void refreshAgentsCache().catch((e) => console.error("Failed to load agents:", e));
+  }, [agents, needsAgents, refreshAgentsCache]);
 
   const uniqueGuilds = useMemo(() => {
     const seen = new Map<string, string>();
@@ -93,21 +86,8 @@ export function ParamForm({
     return discordGuildChannels.filter((gc) => gc.guildId === guildId);
   }, [discordGuildChannels, values]);
 
-  const isParamVisible = (param: RecipeParam) => {
-    if (!param.dependsOn) return true;
-    return values[param.dependsOn] === "true";
-  };
-
   const errors = useMemo(() => {
-    const next: Record<string, string> = {};
-    for (const param of recipe.params) {
-      if (!isParamVisible(param)) continue;
-      const err = validateField(param, values[param.id] || "");
-      if (err) {
-        next[param.id] = err;
-      }
-    }
-    return next;
+    return validateVisibleParamValues(recipe.params, values);
   }, [recipe.params, values]);
   const hasError = Object.keys(errors).length > 0;
 
@@ -118,6 +98,7 @@ export function ParamForm({
           <Checkbox
             id={param.id}
             checked={values[param.id] === "true"}
+            disabled={disabled}
             onCheckedChange={(checked) => {
               onChange(param.id, checked === true ? "true" : "false");
             }}
@@ -127,10 +108,35 @@ export function ParamForm({
       );
     }
 
+    if ((param.options?.length ?? 0) > 0) {
+      return (
+        <Select
+          value={values[param.id] || undefined}
+          disabled={disabled}
+          onValueChange={(val) => {
+            onChange(param.id, val);
+            setTouched((prev) => ({ ...prev, [param.id]: true }));
+          }}
+        >
+          <SelectTrigger id={param.id} size="sm" className="w-full">
+            <SelectValue placeholder={param.placeholder || param.label} />
+          </SelectTrigger>
+          <SelectContent>
+            {param.options?.map((option) => (
+              <SelectItem key={`${param.id}-${option.value}`} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+
     if (param.type === "discord_guild") {
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -148,6 +154,9 @@ export function ParamForm({
             {uniqueGuilds.map((g) => (
               <SelectItem key={g.id} value={g.id}>
                 {g.name}
+                {!discordChannelsResolved && g.name === g.id && (
+                  <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -164,7 +173,7 @@ export function ParamForm({
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
           }}
-          disabled={!guildSelected}
+          disabled={disabled || !guildSelected}
         >
           <SelectTrigger id={param.id} size="sm" className="w-full">
             <SelectValue
@@ -175,6 +184,9 @@ export function ParamForm({
             {filteredChannels.map((c) => (
               <SelectItem key={c.channelId} value={c.channelId}>
                 {c.channelName}
+                {!discordChannelsResolved && c.channelName === c.channelId && (
+                  <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -186,6 +198,7 @@ export function ParamForm({
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -195,7 +208,7 @@ export function ParamForm({
             <SelectValue placeholder={t('paramForm.selectAgent')} />
           </SelectTrigger>
           <SelectContent>
-            {agents.map((a) => (
+            {(agents ?? []).map((a) => (
               <SelectItem key={a.id} value={a.id}>
                 {a.emoji ? `${a.emoji} ` : ""}{a.name || a.id}
                 <span className="text-muted-foreground ml-1.5 text-xs">({a.id})</span>
@@ -207,10 +220,10 @@ export function ParamForm({
     }
 
     if (param.type === "model_profile") {
-      const enabledProfiles = modelProfiles.filter((p) => p.enabled);
       return (
         <Select
           value={values[param.id] || undefined}
+          disabled={disabled}
           onValueChange={(val) => {
             onChange(param.id, val);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -223,7 +236,7 @@ export function ParamForm({
             <SelectItem value="__default__">
               <span className="text-muted-foreground">{t('paramForm.useGlobalDefault')}</span>
             </SelectItem>
-            {enabledProfiles.map((p) => (
+            {(modelProfiles ?? []).map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {p.provider}/{p.model}
               </SelectItem>
@@ -238,8 +251,8 @@ export function ParamForm({
         <Textarea
           id={param.id}
           value={values[param.id] || ""}
+          disabled={disabled}
           placeholder={param.placeholder}
-          onBlur={() => setTouched((prev) => ({ ...prev, [param.id]: true }))}
           onChange={(e) => {
             onChange(param.id, e.target.value);
             setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -252,9 +265,9 @@ export function ParamForm({
       <Input
         id={param.id}
         value={values[param.id] || ""}
+        disabled={disabled}
         placeholder={param.placeholder}
         required={param.required}
-        onBlur={() => setTouched((prev) => ({ ...prev, [param.id]: true }))}
         onChange={(e) => {
           onChange(param.id, e.target.value);
           setTouched((prev) => ({ ...prev, [param.id]: true }));
@@ -264,15 +277,28 @@ export function ParamForm({
   }
 
   return (
-    <form className="space-y-4" onSubmit={(e) => {
+    <form className="space-y-4" aria-busy={disabled} onSubmit={(e) => {
       e.preventDefault();
+      if (disabled) {
+        return;
+      }
       if (hasError) {
+        setTouched((prev) => ({
+          ...prev,
+          ...buildTouchedParamsOnSubmit(recipe.params, values),
+        }));
+        const firstInvalidId = findFirstInvalidVisibleParamId(recipe.params, values);
+        if (firstInvalidId && typeof document !== "undefined") {
+          queueMicrotask(() => {
+            document.getElementById(firstInvalidId)?.focus();
+          });
+        }
         return;
       }
       onSubmit();
     }}>
       {recipe.params.map((param: RecipeParam) => {
-        if (!isParamVisible(param)) return null;
+        if (!isParamVisible(param, values)) return null;
         const isBool = param.type === "boolean";
         return (
           <div key={param.id} className="space-y-1.5">
@@ -286,7 +312,10 @@ export function ParamForm({
       })}
       <Button
         type="submit"
-        disabled={hasError}
+        disabled={disabled}
+        onMouseDown={(event) => {
+          event.preventDefault();
+        }}
       >
         {submitLabel}
       </Button>

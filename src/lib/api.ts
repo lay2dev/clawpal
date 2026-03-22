@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SessionPreviewMessage, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, ExecuteRecipeRequest, ExecuteRecipeResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecipeActionCatalogEntry, RecipeLibraryImportResult, RecipePlan, RecipeRuntimeInstance, RecipeRuntimeRun, RecipeSourceDiagnostics, RecipeSourceImportResult, RecipeSourceSaveResult, RecipeWorkspaceEntry, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SessionPreviewMessage, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
 
 export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
@@ -100,6 +100,59 @@ export const api = {
     invoke("refresh_model_catalog", {}),
   listRecipes: (source?: string): Promise<Recipe[]> =>
     invoke("list_recipes", source ? { source } : {}),
+  listRecipesFromSourceText: (sourceText: string): Promise<Recipe[]> =>
+    invoke("list_recipes_from_source_text", { sourceText }),
+  pickRecipeSourceDirectory: (): Promise<string | null> =>
+    invoke("pick_recipe_source_directory", {}),
+  listRecipeActions: (): Promise<RecipeActionCatalogEntry[]> =>
+    invoke("list_recipe_actions", {}),
+  listRecipeWorkspaceEntries: (): Promise<RecipeWorkspaceEntry[]> =>
+    invoke("list_recipe_workspace_entries", {}),
+  readRecipeWorkspaceSource: (slug: string): Promise<string> =>
+    invoke("read_recipe_workspace_source", { slug }),
+  saveRecipeWorkspaceSource: (slug: string, source: string): Promise<RecipeSourceSaveResult> =>
+    invoke("save_recipe_workspace_source", { slug, source }),
+  approveRecipeWorkspaceSource: (slug: string): Promise<boolean> =>
+    invoke("approve_recipe_workspace_source", { slug }),
+  importRecipeLibrary: (rootPath: string): Promise<RecipeLibraryImportResult> =>
+    invoke("import_recipe_library", { rootPath }),
+  importRecipeSource: (
+    source: string,
+    overwriteExisting = false,
+  ): Promise<RecipeSourceImportResult> =>
+    invoke("import_recipe_source", { source, overwriteExisting }),
+  deleteRecipeWorkspaceSource: (slug: string): Promise<boolean> =>
+    invoke("delete_recipe_workspace_source", { slug }),
+  upgradeBundledRecipeWorkspaceSource: (slug: string): Promise<RecipeSourceSaveResult> =>
+    invoke("upgrade_bundled_recipe_workspace_source", { slug }),
+  exportRecipeSource: (recipeId: string, source?: string): Promise<string> =>
+    invoke("export_recipe_source", { recipeId, source: source ?? null }),
+  validateRecipeSourceText: (sourceText: string): Promise<RecipeSourceDiagnostics> =>
+    invoke("validate_recipe_source_text", { sourceText }),
+  listRecipeInstances: (): Promise<RecipeRuntimeInstance[]> =>
+    invoke("list_recipe_instances", {}),
+  listRecipeRuns: (instanceId?: string): Promise<RecipeRuntimeRun[]> =>
+    invoke("list_recipe_runs", instanceId ? { instanceId } : {}),
+  deleteRecipeRuns: (instanceId?: string): Promise<number> =>
+    invoke("delete_recipe_runs", instanceId ? { instanceId } : {}),
+  planRecipe: (
+    recipeId: string,
+    params: Record<string, string>,
+    source?: string,
+  ): Promise<RecipePlan> =>
+    invoke("plan_recipe", { recipeId, params, source: source ?? null }),
+  planRecipeSource: (
+    recipeId: string,
+    params: Record<string, string>,
+    sourceText: string,
+  ): Promise<RecipePlan> =>
+    invoke("plan_recipe_source", { recipeId, params, sourceText }),
+  executeRecipe: (request: ExecuteRecipeRequest): Promise<ExecuteRecipeResult> =>
+    invoke("execute_recipe", {
+      request,
+      activitySessionId: request.activitySessionId ?? null,
+      planningAuditTrail: request.planningAuditTrail ?? [],
+    }),
   applyConfigPatch: (patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("apply_config_patch", { patchTemplate, params }),
   listHistory: (limit = 20, offset = 0): Promise<{ items: HistoryItem[] }> =>
@@ -124,8 +177,8 @@ export const api = {
     invoke("resolve_api_keys", {}),
   listAgentsOverview: (): Promise<AgentOverview[]> =>
     invoke("list_agents_overview", {}),
-  createAgent: (agentId: string, modelValue?: string, independent?: boolean): Promise<AgentOverview> =>
-    invoke("create_agent", { agentId, modelValue, independent }),
+  createAgent: (agentId: string, modelValue?: string): Promise<AgentOverview> =>
+    invoke("create_agent", { agentId, modelValue }),
   deleteAgent: (agentId: string): Promise<boolean> =>
     invoke("delete_agent", { agentId }),
   setupAgentIdentity: (agentId: string, name: string, emoji?: string): Promise<boolean> =>
@@ -154,8 +207,8 @@ export const api = {
     invoke("precheck_instance", { instanceId }),
   precheckTransport: (instanceId: string): Promise<PrecheckIssue[]> =>
     invoke("precheck_transport", { instanceId }),
-  precheckAuth: (instanceId: string): Promise<PrecheckIssue[]> =>
-    invoke("precheck_auth", { instanceId }),
+  precheckAuth: (instanceId: string, activitySessionId?: string): Promise<PrecheckIssue[]> =>
+    invoke("precheck_auth", { instanceId, activitySessionId: activitySessionId ?? null }),
   fixIssues: (ids: string[]): Promise<{ ok: boolean; applied: string[]; remainingIssues: string[] }> =>
     invoke("fix_issues", { ids }),
   readRawConfig: (): Promise<string> =>
@@ -184,6 +237,8 @@ export const api = {
     invoke("list_discord_guild_channels", {}),
   refreshDiscordGuildChannels: (): Promise<DiscordGuildChannel[]> =>
     invoke("refresh_discord_guild_channels", {}),
+  listDiscordGuildChannelsFast: (): Promise<DiscordGuildChannel[]> =>
+    invoke("list_discord_guild_channels_fast", {}),
   restartGateway: (): Promise<boolean> =>
     invoke("restart_gateway", {}),
   diagnoseDoctorAssistant: (): Promise<RescuePrimaryDiagnosisResult> =>
@@ -283,8 +338,10 @@ export const api = {
     invoke("remote_repair_primary_via_rescue", { hostId, targetProfile: targetProfile ?? null, rescueProfile: rescueProfile ?? null, issueIds: issueIds ?? null }),
   remoteApplyConfigPatch: (hostId: string, patchTemplate: string, params: Record<string, string>): Promise<ApplyResult> =>
     invoke("remote_apply_config_patch", { hostId, patchTemplate, params }),
-  remoteListDiscordGuildChannels: (hostId: string): Promise<DiscordGuildChannel[]> =>
-    invoke("remote_list_discord_guild_channels", { hostId }),
+  remoteListDiscordGuildChannels: (hostId: string, forceRefresh = false): Promise<DiscordGuildChannel[]> =>
+    invoke("remote_list_discord_guild_channels", { hostId, forceRefresh }),
+  remoteListDiscordGuildChannelsFast: (hostId: string): Promise<DiscordGuildChannel[]> =>
+    invoke("remote_list_discord_guild_channels_fast", { hostId }),
   remoteRunDoctor: (hostId: string): Promise<DoctorReport> =>
     invoke("remote_run_doctor", { hostId }),
   remoteFixIssues: (hostId: string, ids: string[]): Promise<{ ok: boolean; applied: string[]; remainingIssues: string[] }> =>

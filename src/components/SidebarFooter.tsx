@@ -1,5 +1,6 @@
 import { Suspense, lazy } from "react";
 import { useTranslation } from "react-i18next";
+import { shouldShowPendingChangesBar } from "@/lib/route-ui";
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "../lib/api";
 import type { SshTransferStats } from "../lib/types";
@@ -19,13 +20,14 @@ interface SidebarFooterProps {
   isConnected: boolean;
   sshTransferStats: SshTransferStats | null;
   inStart: boolean;
+  route: string;
   showToast: (message: string, type?: "success" | "error") => void;
   bumpConfigVersion: () => void;
 }
 
 export function SidebarFooter({
   profileSyncStatus, showSshTransferSpeedUi, isRemote, isConnected,
-  sshTransferStats, inStart, showToast, bumpConfigVersion,
+  sshTransferStats, inStart, route, showToast, bumpConfigVersion,
 }: SidebarFooterProps) {
   const { t } = useTranslation();
   return (
@@ -61,7 +63,7 @@ export function SidebarFooter({
           </div>
         )}
       </div>
-      {!inStart && (
+      {shouldShowPendingChangesBar({ inStart, route }) && (
         <Suspense fallback={null}>
           <PendingChangesBar showToast={showToast} onApplied={bumpConfigVersion} onDiscarded={bumpConfigVersion} />
         </Suspense>

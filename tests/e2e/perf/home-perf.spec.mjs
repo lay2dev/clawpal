@@ -108,7 +108,7 @@ test("home page render timing with real IPC", async ({ page }) => {
     }
 
     // Close the context to release resources
-    
+
   }
 
   expect(allRuns.length).toBeGreaterThan(0);

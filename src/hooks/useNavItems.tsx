@@ -62,7 +62,13 @@ export function useNavItems({
     return [
       { key: "instance-home", active: route === "home", icon: <HomeIcon className="size-4" />, label: t("nav.home"), onClick: () => navigateRoute("home") },
       { key: "channels", active: route === "channels", icon: <HashIcon className="size-4" />, label: t("nav.channels"), onClick: () => navigateRoute("channels") },
-      { key: "recipes", active: route === "recipes", icon: <BookOpenIcon className="size-4" />, label: t("nav.recipes"), onClick: () => navigateRoute("recipes") },
+      {
+        key: "recipes",
+        active: route === "recipes" || route === "recipe-studio" || route === "cook",
+        icon: <BookOpenIcon className="size-4" />,
+        label: t("nav.recipes"),
+        onClick: () => navigateRoute("recipes"),
+      },
       { key: "cron", active: route === "cron", icon: <ClockIcon className="size-4" />, label: t("nav.cron"), onClick: () => navigateRoute("cron") },
       {
         key: "doctor", active: route === "doctor", icon: <StethoscopeIcon className="size-4" />, label: t("nav.doctor"),

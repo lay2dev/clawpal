@@ -357,6 +357,8 @@ pub struct DiscordGuildChannel {
     pub channel_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_warning: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

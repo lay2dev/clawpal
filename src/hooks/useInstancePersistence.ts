@@ -44,6 +44,20 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
   const [persistenceScope, setPersistenceScope] = useState<string | null>("local");
   const [persistenceResolved, setPersistenceResolved] = useState(true);
 
+  // Synchronously resolve persistence scope for remote instances during render
+  // to avoid a one-render lag that causes useChannelCache to load the wrong
+  // instance's data.  React allows setState during render when guarded by a
+  // condition — it bails out, discards the current output, and immediately
+  // re-renders with the new value before effects fire or the browser paints.
+  if (isRemote) {
+    const host = sshHosts.find((item) => item.id === activeInstance) || null;
+    const nextScope = host ? readRemotePersistenceScope(host) : null;
+    if (persistenceScope !== nextScope || !persistenceResolved) {
+      setPersistenceScope(nextScope);
+      setPersistenceResolved(true);
+    }
+  }
+
   const accessProbeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastAccessProbeAtRef = useRef<Record<string, number>>({});
 

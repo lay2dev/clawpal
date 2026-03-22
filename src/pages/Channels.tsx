@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   AgentOverview,
-  Binding,
   ChannelNode,
-  ChannelsConfigSnapshot,
-  ChannelsRuntimeSnapshot,
   DiscordGuildChannel,
-  ModelProfile,
 } from "../lib/types";
 import { useApi, hasGuidanceEmitted } from "@/lib/use-api";
-import { shouldEnableInstanceLiveReads } from "@/lib/instance-availability";
+import { useInstance } from "@/lib/instance-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AlertTriangleIcon, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -26,11 +23,6 @@ import {
 } from "@/components/ui/select";
 import { CreateAgentDialog, type CreateAgentResult } from "@/components/CreateAgentDialog";
 import { buildInitialChannelsState } from "./overview-loading";
-import {
-  createDataLoadRequestId,
-  emitDataLoadMetric,
-} from "@/lib/data-load-log";
-import { readPersistedReadCache } from "@/lib/persistent-read-cache";
 
 interface AgentGroup {
   identity: string;
@@ -67,6 +59,18 @@ function extractPeerId(path: string): string {
   return path.split(".").pop() || path;
 }
 
+function ResolutionWarningIcon({ message }: { message: string }) {
+  return (
+    <span
+      className="ml-1 inline-flex align-middle text-amber-500"
+      title={message}
+      aria-label={message}
+    >
+      <AlertTriangleIcon className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
 export function Channels({
   showToast,
 }: {
@@ -74,30 +78,35 @@ export function Channels({
 }) {
   const { t } = useTranslation();
   const ua = useApi();
-  const persistedConfigSnapshot = useMemo(
-    () => (ua.persistenceResolved && ua.persistenceScope
-      ? readPersistedReadCache<ChannelsConfigSnapshot>(ua.persistenceScope, "getChannelsConfigSnapshot", []) ?? null
-      : null),
-    [ua.persistenceResolved, ua.persistenceScope],
-  );
-  const persistedRuntimeSnapshot = useMemo(
-    () => (ua.persistenceResolved && ua.persistenceScope
-      ? readPersistedReadCache<ChannelsRuntimeSnapshot>(ua.persistenceScope, "getChannelsRuntimeSnapshot", []) ?? null
-      : null),
-    [ua.persistenceResolved, ua.persistenceScope],
-  );
+  const {
+    channelsConfigSnapshot = null,
+    channelsRuntimeSnapshot = null,
+    channelsSnapshotsLoaded = false,
+    refreshChannelsSnapshotState = async () => {},
+    discordChannelsResolved,
+    agents: sharedAgents,
+    modelProfiles: sharedModelProfiles,
+  } = useInstance();
   const initialChannelsState = useMemo(
-    () => buildInitialChannelsState(persistedConfigSnapshot, persistedRuntimeSnapshot),
-    [persistedConfigSnapshot, persistedRuntimeSnapshot],
+    () => buildInitialChannelsState(channelsConfigSnapshot, channelsRuntimeSnapshot),
+    [channelsConfigSnapshot, channelsRuntimeSnapshot],
   );
-  const [agents, setAgents] = useState<AgentOverview[]>(() => initialChannelsState.agents);
-  const [bindings, setBindings] = useState<Binding[]>(() => initialChannelsState.bindings);
-  const [channelNodes, setChannelNodes] = useState<ChannelNode[]>(() => initialChannelsState.channels);
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const agents =
+    channelsRuntimeSnapshot?.agents
+    ?? sharedAgents
+    ?? initialChannelsState.agents;
+  const bindings =
+    channelsRuntimeSnapshot?.bindings
+    ?? channelsConfigSnapshot?.bindings
+    ?? initialChannelsState.bindings;
+  const channelNodes =
+    channelsRuntimeSnapshot?.channels
+    ?? channelsConfigSnapshot?.channels
+    ?? initialChannelsState.channels;
+  const modelProfiles = sharedModelProfiles ?? [];
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
-  const [channelsLoaded, setChannelsLoaded] = useState(() => initialChannelsState.loaded);
-  const initializedKeyRef = useRef<string>("");
+  const discordRetryAttemptRef = useRef(0);
 
   // Create agent dialog
   const [showCreateAgent, setShowCreateAgent] = useState(false);
@@ -106,82 +115,12 @@ export function Channels({
     peerId: string;
     guildId?: string;
   } | null>(null);
-  const liveReadsReady = shouldEnableInstanceLiveReads({
-    instanceToken: ua.instanceToken,
-    persistenceResolved: ua.persistenceResolved,
-    persistenceScope: ua.persistenceScope,
-    isRemote: ua.isRemote,
-  });
-
-  const loadChannelsConfig = useCallback(async () => {
-    if (!liveReadsReady) return;
-    try {
-      const snapshot = await ua.getChannelsConfigSnapshot();
-      setChannelNodes(snapshot.channels);
-      setBindings(snapshot.bindings);
-    } catch (error) {
-      console.error("Failed to load channel config snapshot:", error);
-    } finally {
-      setChannelsLoaded(true);
-    }
-  }, [liveReadsReady, ua]);
-
-  const loadChannelsRuntime = useCallback(async () => {
-    if (!liveReadsReady) return;
-    try {
-      const snapshot = await ua.getChannelsRuntimeSnapshot();
-      setChannelNodes(snapshot.channels);
-      setBindings(snapshot.bindings);
-      setAgents(snapshot.agents);
-    } catch (error) {
-      console.error("Failed to load channel runtime snapshot:", error);
-    } finally {
-      setChannelsLoaded(true);
-    }
-  }, [liveReadsReady, ua]);
-
-  useEffect(() => {
-    const initKey = `${ua.instanceId}#${ua.instanceToken}`;
-    if (initializedKeyRef.current === initKey) return;
-    initializedKeyRef.current = initKey;
-    if (persistedConfigSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getChannelsConfigSnapshot"),
-        resource: "getChannelsConfigSnapshot",
-        page: "channels",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-    if (persistedRuntimeSnapshot) {
-      emitDataLoadMetric({
-        requestId: createDataLoadRequestId("getChannelsRuntimeSnapshot"),
-        resource: "getChannelsRuntimeSnapshot",
-        page: "channels",
-        instanceId: ua.instanceId,
-        instanceToken: ua.instanceToken,
-        source: "persisted",
-        phase: "success",
-        elapsedMs: 0,
-        cacheHit: true,
-      });
-    }
-    if (liveReadsReady) {
-      void loadChannelsConfig();
-      void loadChannelsRuntime();
-      ua.listModelProfiles().then((p) => setModelProfiles(p.filter((m) => m.enabled))).catch((e) => console.error("Failed to load model profiles:", e));
-    }
-  }, [liveReadsReady, loadChannelsConfig, loadChannelsRuntime, persistedConfigSnapshot, persistedRuntimeSnapshot, ua]);
-
   const discordChannels = ua.discordGuildChannels;
+  const channelsLoaded = channelsSnapshotsLoaded || initialChannelsState.loaded;
 
   const handleRefreshDiscord = () => {
     setRefreshing("discord");
-    ua.refreshDiscordChannelsCache()
+    ua.refreshDiscordChannelsCache(true)
       .then(() => {
         showToast?.(t('channels.discordRefreshed'), "success");
       })
@@ -191,7 +130,7 @@ export function Channels({
 
   const handleRefreshPlatform = (platform: string) => {
     setRefreshing(platform);
-    Promise.all([loadChannelsConfig(), loadChannelsRuntime()])
+    refreshChannelsSnapshotState()
       .then(() => {
         showToast?.(t('channels.platformRefreshed', { platform: PLATFORM_LABELS[platform] || platform }), "success");
       })
@@ -221,6 +160,50 @@ export function Channels({
     }
     return Array.from(map.entries());
   }, [discordChannels]);
+  const hasUnresolvedDiscordDisplayInfo = useMemo(
+    () =>
+      (discordChannels ?? []).some(
+        (channel) =>
+          channel.guildName === channel.guildId || channel.channelName === channel.channelId,
+      ),
+    [discordChannels],
+  );
+
+  useEffect(() => {
+    if (discordChannels === null || discordChannels.length === 0) {
+      discordRetryAttemptRef.current = 0;
+      return;
+    }
+    if (!hasUnresolvedDiscordDisplayInfo || discordChannelsResolved) {
+      discordRetryAttemptRef.current = 0;
+      return;
+    }
+    if (ua.discordChannelsLoading || refreshing === "discord") {
+      return;
+    }
+
+    const attempt = discordRetryAttemptRef.current;
+    const retryDelayMs = Math.min(10_000, 1_500 + attempt * 1_500);
+    const timeoutId = window.setTimeout(() => {
+      discordRetryAttemptRef.current = attempt + 1;
+      void ua.refreshDiscordChannelsCache(true).catch((error) => {
+        if (!hasGuidanceEmitted(error)) {
+          console.error("Failed to refresh unresolved Discord channel display info:", error);
+        }
+      });
+    }, retryDelayMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    discordChannels,
+    discordChannelsResolved,
+    hasUnresolvedDiscordDisplayInfo,
+    refreshing,
+    ua.discordChannelsLoading,
+    ua.refreshDiscordChannelsCache,
+  ]);
 
   // Non-Discord channel nodes grouped by platform, filtered to leaf-level
   const otherPlatforms = useMemo(() => {
@@ -265,7 +248,7 @@ export function Channels({
           : `Unbind ${platform}:${peerId}`,
         ["openclaw", "config", "set", "bindings", JSON.stringify(newBindings), "--json"],
       );
-      void Promise.all([loadChannelsConfig(), loadChannelsRuntime()]);
+      void refreshChannelsSnapshotState();
     } catch (e) {
       if (!hasGuidanceEmitted(e)) showToast?.(String(e), "error");
     } finally {
@@ -369,13 +352,46 @@ export function Channels({
                 {discordGuilds.map(([guildId, { guildName, channels }]) => (
                   <div key={guildId}>
                     <div className="flex items-center gap-1.5 mb-2">
-                      <span className="text-sm font-medium">{guildName}</span>
+                      {(() => {
+                        const guildWarning = channels.find(
+                          (channel) =>
+                            channel.guildName === channel.guildId && Boolean(channel.resolutionWarning),
+                        )?.resolutionWarning;
+                        return (
+                      <span className="text-sm font-medium">
+                        {guildName}
+                        {guildWarning ? (
+                          <ResolutionWarningIcon message={guildWarning} />
+                        ) : !discordChannelsResolved && guildName === guildId ? (
+                          <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-muted-foreground" />
+                        ) : null}
+                      </span>
+                        );
+                      })()}
                       <Badge variant="secondary" className="text-[10px]">{guildId}</Badge>
                     </div>
                     <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
                       {channels.map((ch) => (
                         <div key={ch.channelId} className="rounded-md border px-3 py-2">
-                          <div className="text-sm font-medium">{ch.channelName}</div>
+                          <div className="text-sm font-medium">
+                            {ch.channelName === ch.channelId ? (
+                              <span className="text-muted-foreground font-mono text-xs">
+                                {ch.channelId}
+                                {ch.resolutionWarning ? (
+                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                ) : !discordChannelsResolved ? (
+                                  <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
+                                ) : null}
+                              </span>
+                            ) : (
+                              <>
+                                {ch.channelName}
+                                {ch.resolutionWarning ? (
+                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                ) : null}
+                              </>
+                            )}
+                          </div>
                           <div className="text-xs text-muted-foreground mt-0.5 mb-1.5">{ch.channelId}</div>
                           {renderAgentSelect("discord", ch.channelId, ch.defaultAgentId)}
                         </div>
@@ -437,8 +453,9 @@ export function Channels({
           if (!open) setPendingChannel(null);
         }}
         modelProfiles={modelProfiles}
+        allowPersona
         onCreated={(result: CreateAgentResult) => {
-          void loadChannelsRuntime();
+          void refreshChannelsSnapshotState();
           if (pendingChannel) {
             handleAssign(pendingChannel.platform, pendingChannel.peerId, result.agentId);
             if (result.persona && pendingChannel.platform === "discord") {

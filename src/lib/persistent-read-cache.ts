@@ -8,6 +8,7 @@ const PERSISTED_READ_METHODS = new Set([
   "getChannelsRuntimeSnapshot",
   "listChannelsMinimal",
   "listDiscordGuildChannels",
+  "listRecipeModelProfiles",
   "getCronConfigSnapshot",
   "getCronRuntimeSnapshot",
   "getRescueBotStatus",

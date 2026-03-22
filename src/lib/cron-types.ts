@@ -74,4 +74,3 @@ export interface WatchdogStatus {
   gatewayHealthy: boolean;
   jobs: Record<string, WatchdogJobState>;
 }
-

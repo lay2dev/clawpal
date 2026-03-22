@@ -23,6 +23,77 @@ pub fn log_dev(message: impl AsRef<str>) {
     }
 }
 
+fn summarize_remote_config_payload(raw: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(raw)
+        .or_else(|_| json5::from_str::<serde_json::Value>(raw))
+        .ok();
+    let top_keys = parsed
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .map(|obj| {
+            let mut keys = obj.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys.join(",")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".into());
+    let provider_keys = parsed
+        .as_ref()
+        .and_then(|value| value.pointer("/models/providers"))
+        .and_then(serde_json::Value::as_object)
+        .map(|obj| {
+            let mut keys = obj.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys.join(",")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".into());
+    let agents_list_len = parsed
+        .as_ref()
+        .and_then(|value| value.pointer("/agents/list"))
+        .and_then(serde_json::Value::as_array)
+        .map(|list| list.len().to_string())
+        .unwrap_or_else(|| "none".into());
+    let defaults_workspace = parsed
+        .as_ref()
+        .and_then(|value| value.pointer("/agents/defaults/workspace"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-");
+
+    format!(
+        "bytes={} top_keys=[{}] provider_keys=[{}] agents_list_len={} defaults_workspace={}",
+        raw.len(),
+        top_keys,
+        provider_keys,
+        agents_list_len,
+        defaults_workspace,
+    )
+}
+
+pub fn log_remote_config_write(
+    action: &str,
+    host_id: &str,
+    source: Option<&str>,
+    config_path: &str,
+    raw: &str,
+) {
+    let source = source.unwrap_or("-");
+    let summary = summarize_remote_config_payload(raw);
+    log_dev(format!(
+        "[dev][remote_config_write] action={action} host_id={host_id} source={source} config_path={config_path} {summary}"
+    ));
+}
+
+pub fn log_remote_autofix_suppressed(host_id: &str, command: &str, reason: &str) {
+    let command = command.replace('\n', " ");
+    let reason = reason.replace('\n', " ");
+    log_dev(format!(
+        "[dev][remote_autofix_suppressed] host_id={host_id} command={command} reason={reason}"
+    ));
+}
+
 fn log_debug(message: &str) {
     log_dev(format!("[dev][logs] {message}"));
 }
@@ -172,4 +243,50 @@ pub async fn remote_read_gateway_error_log(
         })?;
         Ok(result.stdout)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_remote_config_payload;
+
+    #[test]
+    fn summarize_valid_json_with_providers_and_agents() {
+        let raw = r#"{
+            "models": {"providers": {"openai": {}, "anthropic": {}}},
+            "agents": {"list": [{"id": "a"}, {"id": "b"}], "defaults": {"workspace": "/home/user/ws"}}
+        }"#;
+        let summary = summarize_remote_config_payload(raw);
+        assert!(
+            summary.contains("provider_keys=[anthropic,openai]"),
+            "{}",
+            summary
+        );
+        assert!(summary.contains("agents_list_len=2"), "{}", summary);
+        assert!(
+            summary.contains("defaults_workspace=/home/user/ws"),
+            "{}",
+            summary
+        );
+    }
+
+    #[test]
+    fn summarize_invalid_json() {
+        let summary = summarize_remote_config_payload("not json {{{");
+        assert!(summary.contains("top_keys=[-]"), "{}", summary);
+    }
+
+    #[test]
+    fn summarize_empty_json() {
+        let summary = summarize_remote_config_payload("{}");
+        assert!(summary.contains("top_keys=[-]"), "{}", summary);
+        assert!(summary.contains("provider_keys=[-]"), "{}", summary);
+        assert!(summary.contains("agents_list_len=none"), "{}", summary);
+    }
+
+    #[test]
+    fn summarize_json_no_providers() {
+        let raw = r#"{"models": {}}"#;
+        let summary = summarize_remote_config_payload(raw);
+        assert!(summary.contains("provider_keys=[-]"), "{}", summary);
+    }
 }

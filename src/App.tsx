@@ -15,10 +15,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { Route } from "./lib/routes";
-import type { SshHost } from "./lib/types";
+import type { RecipeEditorOrigin, RecipeSourceOrigin, RecipeStudioDraft, SshHost } from "./lib/types";
 
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
 const Recipes = lazy(() => import("./pages/Recipes").then((m) => ({ default: m.Recipes })));
+const RecipeStudio = lazy(() => import("./pages/RecipeStudio").then((m) => ({ default: m.RecipeStudio })));
 const Cook = lazy(() => import("./pages/Cook").then((m) => ({ default: m.Cook })));
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
@@ -33,6 +34,9 @@ import { useInstanceManager } from "./hooks/useInstanceManager";
 import { useSshConnection } from "./hooks/useSshConnection";
 import { useInstancePersistence } from "./hooks/useInstancePersistence";
 import { useChannelCache } from "./hooks/useChannelCache";
+import { useAgentCache } from "./hooks/useAgentCache";
+import { useModelProfileCache } from "./hooks/useModelProfileCache";
+import { useInstanceDataStore } from "./hooks/useInstanceDataStore";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useWorkspaceTabs } from "./hooks/useWorkspaceTabs";
 import { useNavItems } from "./hooks/useNavItems";
@@ -46,11 +50,29 @@ export function App() {
   const [route, setRoute] = useState<Route>("home");
   const [recipeId, setRecipeId] = useState<string | null>(null);
   const [recipeSource, setRecipeSource] = useState<string | undefined>(undefined);
+  const [recipeSourceText, setRecipeSourceText] = useState<string | undefined>(undefined);
+  const [recipeSourceOrigin, setRecipeSourceOrigin] = useState<RecipeSourceOrigin>("saved");
+  const [recipeSourceWorkspaceSlug, setRecipeSourceWorkspaceSlug] = useState<string | undefined>(undefined);
+  const [recipeEditorRecipeId, setRecipeEditorRecipeId] = useState<string | null>(null);
+  const [recipeEditorRecipeName, setRecipeEditorRecipeName] = useState("");
+  const [recipeEditorSource, setRecipeEditorSource] = useState("");
+  const [recipeEditorOrigin, setRecipeEditorOrigin] = useState<RecipeEditorOrigin>("builtin");
+  const [recipeEditorWorkspaceSlug, setRecipeEditorWorkspaceSlug] = useState<string | undefined>(undefined);
+  const [cookReturnRoute, setCookReturnRoute] = useState<Route>("recipes");
   const [chatOpen, setChatOpen] = useState(false);
 
   const navigateRoute = useCallback((next: Route) => {
     startTransition(() => setRoute(next));
   }, []);
+
+  const openRecipeStudio = useCallback((draft: RecipeStudioDraft) => {
+    setRecipeEditorRecipeId(draft.recipeId);
+    setRecipeEditorRecipeName(draft.recipeName);
+    setRecipeEditorSource(draft.source);
+    setRecipeEditorOrigin(draft.origin);
+    setRecipeEditorWorkspaceSlug(draft.workspaceSlug);
+    navigateRoute("recipe-studio");
+  }, [navigateRoute]);
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
     if (type === "error") {
@@ -220,6 +242,39 @@ export function App() {
     isConnected,
   });
 
+  const agents = useAgentCache({
+    activeInstance,
+    route,
+    chatOpen,
+    instanceToken,
+    persistenceScope,
+    persistenceResolved,
+    isRemote,
+    isConnected,
+  });
+
+  const modelProfiles = useModelProfileCache({
+    activeInstance,
+    route,
+    instanceToken,
+    persistenceScope,
+    persistenceResolved,
+    isRemote,
+    isConnected,
+  });
+
+  const instanceDataStore = useInstanceDataStore({
+    activeInstance,
+    route,
+    instanceToken,
+    persistenceScope,
+    persistenceResolved,
+    isRemote,
+    isConnected,
+    setAgentsCache: agents.setAgentsCache,
+    refreshChannelNodesCache: channels.refreshChannelNodesCache,
+  });
+
   // ── App lifecycle ──
   const lifecycle = useAppLifecycle({
     showToast,
@@ -301,12 +356,42 @@ export function App() {
         isRemote,
         isDocker,
         isConnected,
+        instanceLabel: openTabs.find((tab) => tab.id === activeInstance)?.label || activeInstance,
         channelNodes: channels.channelNodes,
         discordGuildChannels: channels.discordGuildChannels,
         channelsLoading: channels.channelsLoading,
         discordChannelsLoading: channels.discordChannelsLoading,
+        discordChannelsResolved: channels.discordChannelsResolved,
+        agents: agents.agents,
+        agentsLoading: agents.agentsLoading,
+        modelProfiles: modelProfiles.modelProfiles,
+        modelProfilesLoading: modelProfiles.modelProfilesLoading,
+        channelsConfigSnapshot: instanceDataStore.channelsConfigSnapshot,
+        channelsRuntimeSnapshot: instanceDataStore.channelsRuntimeSnapshot,
+        channelsSnapshotsLoading: instanceDataStore.channelsSnapshotsLoading,
+        channelsSnapshotsLoaded: instanceDataStore.channelsSnapshotsLoaded,
+        historyItems: instanceDataStore.historyItems,
+        historyRuns: instanceDataStore.historyRuns,
+        historyLoading: instanceDataStore.historyLoading,
+        historyLoaded: instanceDataStore.historyLoaded,
+        sessionFiles: instanceDataStore.sessionFiles,
+        sessionAnalysis: instanceDataStore.sessionAnalysis,
+        sessionsLoading: instanceDataStore.sessionsLoading,
+        sessionsLoaded: instanceDataStore.sessionsLoaded,
+        backups: instanceDataStore.backups,
+        backupsLoading: instanceDataStore.backupsLoading,
+        backupsLoaded: instanceDataStore.backupsLoaded,
+        setAgentsCache: agents.setAgentsCache,
+        setSessionAnalysis: instanceDataStore.setSessionAnalysis,
+        setBackups: instanceDataStore.setBackups,
+        refreshAgentsCache: agents.refreshAgentsCache,
+        refreshModelProfilesCache: modelProfiles.refreshModelProfilesCache,
         refreshChannelNodesCache: channels.refreshChannelNodesCache,
         refreshDiscordChannelsCache: channels.refreshDiscordChannelsCache,
+        refreshChannelsSnapshotState: instanceDataStore.refreshChannelsSnapshotState,
+        refreshHistoryState: instanceDataStore.refreshHistoryState,
+        refreshSessionFiles: instanceDataStore.refreshSessionFiles,
+        refreshBackups: instanceDataStore.refreshBackups,
       }}>
       <div className="flex flex-1 overflow-hidden">
 
@@ -348,6 +433,7 @@ export function App() {
           isConnected={isConnected}
           sshTransferStats={sshTransferStats}
           inStart={inStart}
+          route={route}
           showToast={showToast}
           bumpConfigVersion={bumpConfigVersion}
         />
@@ -422,19 +508,57 @@ export function App() {
           )}
           {!inStart && route === "recipes" && (
             <Recipes
-              onCook={(id, source) => {
+              onCook={(id, options) => {
                 setRecipeId(id);
-                setRecipeSource(source);
+                setRecipeSource(options?.source);
+                setRecipeSourceText(options?.sourceText);
+                setRecipeSourceOrigin(options?.sourceOrigin ?? "saved");
+                setRecipeSourceWorkspaceSlug(options?.workspaceSlug);
+                setCookReturnRoute("recipes");
                 navigateRoute("cook");
               }}
+              onOpenStudio={openRecipeStudio}
+              onOpenRuntimeDashboard={() => navigateRoute("orchestrator")}
             />
+          )}
+          {!inStart && route === "recipe-studio" && recipeEditorRecipeId && (
+            <RecipeStudio
+              recipeId={recipeEditorRecipeId}
+              recipeName={recipeEditorRecipeName}
+              initialSource={recipeEditorSource}
+              origin={recipeEditorOrigin}
+              workspaceSlug={recipeEditorWorkspaceSlug}
+              onCookDraft={(draft) => {
+                setRecipeId(draft.recipeId);
+                setRecipeSource(undefined);
+                setRecipeSourceText(draft.source);
+                setRecipeSourceOrigin("draft");
+                setRecipeSourceWorkspaceSlug(draft.workspaceSlug);
+                setCookReturnRoute("recipe-studio");
+                setRecipeEditorRecipeId(draft.recipeId);
+                setRecipeEditorRecipeName(draft.recipeName);
+                setRecipeEditorSource(draft.source);
+                setRecipeEditorOrigin(draft.origin);
+                setRecipeEditorWorkspaceSlug(draft.workspaceSlug);
+                navigateRoute("cook");
+              }}
+              onBack={() => navigateRoute("recipes")}
+            />
+          )}
+          {!inStart && route === "recipe-studio" && !recipeEditorRecipeId && (
+            <p>{t("recipeStudio.noRecipeSelected")}</p>
           )}
           {!inStart && route === "cook" && recipeId && (
             <Cook
               recipeId={recipeId}
               recipeSource={recipeSource}
+              recipeSourceText={recipeSourceText}
+              recipeSourceOrigin={recipeSourceOrigin}
+              recipeWorkspaceSlug={recipeSourceWorkspaceSlug}
+              onOpenHistory={() => navigateRoute("history")}
+              onOpenRuntimeDashboard={() => navigateRoute("orchestrator")}
               onDone={() => {
-                navigateRoute("recipes");
+                navigateRoute(cookReturnRoute);
               }}
             />
           )}
@@ -446,7 +570,12 @@ export function App() {
             />
           )}
           {!inStart && route === "cron" && <Cron key={`cron-${activeInstance}-${configVersion}-${persistenceResolved ? "ready" : "pending"}-${persistenceScope ?? "none"}`} />}
-          {!inStart && route === "history" && <History key={`history-${activeInstance}-${configVersion}`} />}
+          {!inStart && route === "history" && (
+            <History
+              key={`history-${activeInstance}-${configVersion}`}
+              onOpenRuntimeDashboard={() => navigateRoute("orchestrator")}
+            />
+          )}
           {!inStart && route === "doctor" && (
             <Doctor key={activeInstance} />
           )}

@@ -1,19 +1,25 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
+use chrono::Utc;
 use clawpal_core::openclaw::OpenclawCli;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use crate::models::resolve_paths;
+use crate::recipe_executor::MaterializedExecutionPlan;
 use crate::ssh::SshConnectionPool;
 
 static ACTIVE_OPENCLAW_HOME_OVERRIDE: LazyLock<Mutex<Option<String>>> =
     LazyLock::new(|| Mutex::new(None));
 static ACTIVE_CLAWPAL_DATA_OVERRIDE: LazyLock<Mutex<Option<String>>> =
     LazyLock::new(|| Mutex::new(None));
+#[cfg(test)]
+static ACTIVE_OVERRIDE_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub fn set_active_openclaw_home_override(path: Option<String>) -> Result<(), String> {
     let mut guard = ACTIVE_OPENCLAW_HOME_OVERRIDE
@@ -53,6 +59,13 @@ pub fn get_active_clawpal_data_override() -> Option<String> {
         .lock()
         .ok()
         .and_then(|g| g.clone())
+}
+
+#[cfg(test)]
+pub fn lock_active_override_test_state() -> std::sync::MutexGuard<'static, ()> {
+    ACTIVE_OVERRIDE_TEST_MUTEX
+        .lock()
+        .expect("active override test mutex poisoned")
 }
 
 pub type CliOutput = clawpal_core::openclaw::CliOutput;
@@ -171,6 +184,141 @@ fn build_remote_openclaw_command(args: &[&str], env: Option<&HashMap<String, Str
     cmd_str
 }
 
+fn remote_config_root_from_path(config_path: &str) -> Result<String, String> {
+    std::path::Path::new(config_path)
+        .parent()
+        .and_then(|path| path.to_str())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("Failed to derive remote config root from path: {config_path}"))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn allowlisted_systemd_host_command_kind(command: &[String]) -> Option<&'static str> {
+    match command {
+        [bin, ..] if bin == "systemd-run" => Some("systemd-run"),
+        [bin, user, action, ..]
+            if bin == "systemctl"
+                && user == "--user"
+                && matches!(action.as_str(), "stop" | "reset-failed" | "daemon-reload") =>
+        {
+            Some("systemctl")
+        }
+        _ => None,
+    }
+}
+
+fn is_allowlisted_systemd_host_command(command: &[String]) -> bool {
+    allowlisted_systemd_host_command_kind(command).is_some()
+}
+
+fn build_remote_shell_command(
+    command: &[String],
+    env: Option<&HashMap<String, String>>,
+) -> Result<String, String> {
+    if command.is_empty() {
+        return Err("host command is empty".to_string());
+    }
+
+    let mut shell = String::new();
+    if let Some(env_vars) = env {
+        for (key, value) in env_vars {
+            shell.push_str(&format!("export {}={}; ", key, shell_quote(value)));
+        }
+    }
+    shell.push_str(
+        &command
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    Ok(shell)
+}
+
+fn run_local_host_command(
+    command: &[String],
+    env: Option<&HashMap<String, String>>,
+) -> Result<CliOutput, String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| "host command is empty".to_string())?;
+    let mut process = std::process::Command::new(program);
+    process.args(args);
+    if let Some(env_vars) = env {
+        process.envs(env_vars);
+    }
+    let output = process.output().map_err(|error| {
+        format!(
+            "failed to start host command '{}': {}",
+            command.join(" "),
+            error
+        )
+    })?;
+    Ok(CliOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(1),
+    })
+}
+
+fn run_allowlisted_systemd_local_command(command: &[String]) -> Result<Option<CliOutput>, String> {
+    if !is_allowlisted_systemd_host_command(command) {
+        return Ok(None);
+    }
+    run_local_host_command(command, None).map(Some)
+}
+
+async fn run_allowlisted_systemd_remote_command(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    command: &[String],
+) -> Result<Option<CliOutput>, String> {
+    if !is_allowlisted_systemd_host_command(command) {
+        return Ok(None);
+    }
+    let shell = build_remote_shell_command(command, None)?;
+    let output = pool.exec_login(host_id, &shell).await?;
+    Ok(Some(CliOutput {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.exit_code as i32,
+    }))
+}
+
+fn systemd_dropin_relative_path(target: &str, name: &str) -> String {
+    format!("~/.config/systemd/user/{}.d/{}", target, name)
+}
+
+fn write_local_systemd_dropin(target: &str, name: &str, content: &str) -> Result<(), String> {
+    let path =
+        PathBuf::from(shellexpand::tilde(&systemd_dropin_relative_path(target, name)).to_string());
+    crate::config_io::write_text(path.as_path(), content)
+}
+
+async fn write_remote_systemd_dropin(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    target: &str,
+    name: &str,
+    content: &str,
+) -> Result<(), String> {
+    let dir = format!("~/.config/systemd/user/{}.d", target);
+    let resolved_dir = pool.resolve_path(host_id, &dir).await?;
+    pool.exec(host_id, &format!("mkdir -p {}", shell_quote(&resolved_dir)))
+        .await?;
+    pool.sftp_write(
+        host_id,
+        &systemd_dropin_relative_path(target, name),
+        content,
+    )
+    .await
+}
+
 pub fn parse_json_output(output: &CliOutput) -> Result<Value, String> {
     clawpal_core::openclaw::parse_json_output(output).map_err(|e| e.to_string())
 }
@@ -198,6 +346,51 @@ mod tests {
         let cmd = build_remote_openclaw_command(&["config", "get", "a'b"], Some(&env));
         assert!(cmd.contains("export OPENCLAW_HOME='/tmp/a'\\''b';"));
         assert!(cmd.contains(" 'a'\\''b'"));
+    }
+
+    #[test]
+    fn allowlisted_systemd_host_commands_are_restricted_to_expected_shapes() {
+        assert!(is_allowlisted_systemd_host_command(&[
+            "systemd-run".into(),
+            "--unit=clawpal-job-hourly".into(),
+            "--".into(),
+            "openclaw".into(),
+            "doctor".into(),
+            "run".into(),
+        ]));
+        assert!(is_allowlisted_systemd_host_command(&[
+            "systemctl".into(),
+            "--user".into(),
+            "daemon-reload".into(),
+        ]));
+        assert!(!is_allowlisted_systemd_host_command(&[
+            "systemctl".into(),
+            "--system".into(),
+            "daemon-reload".into(),
+        ]));
+        assert!(!is_allowlisted_systemd_host_command(&[
+            "bash".into(),
+            "-lc".into(),
+            "echo nope".into(),
+        ]));
+    }
+
+    #[test]
+    fn rollback_command_supports_snapshot_id_prefix() {
+        let command = vec![
+            "__rollback__".to_string(),
+            "snapshot_01".to_string(),
+            "{\"ok\":true}".to_string(),
+        ];
+
+        assert_eq!(
+            rollback_command_snapshot_id(&command).as_deref(),
+            Some("snapshot_01")
+        );
+        assert_eq!(
+            rollback_command_content(&command).expect("rollback content"),
+            "{\"ok\":true}"
+        );
     }
 
     #[test]
@@ -358,6 +551,54 @@ mod tests {
     }
 
     #[test]
+    fn preview_direct_apply_skips_allowlisted_systemd_commands() {
+        let mut config = json!({"gateway": {"port": 18789}});
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Run hourly job".into(),
+            command: vec![
+                "systemd-run".into(),
+                "--unit=clawpal-job-hourly".into(),
+                "--".into(),
+                "openclaw".into(),
+                "doctor".into(),
+                "run".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let touched = apply_direct_preview_command(&mut config, &host_cmd)
+            .expect("preview should accept allowlisted host command")
+            .expect("host command should be handled directly");
+
+        assert_eq!(config["gateway"]["port"], json!(18789));
+        assert!(!touched.agents && !touched.channels && !touched.bindings && !touched.generic);
+    }
+
+    #[test]
+    fn preview_direct_apply_skips_internal_systemd_dropin_write_command() {
+        let mut config = json!({"gateway": {"port": 18789}});
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Write drop-in".into(),
+            command: vec![
+                crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND.into(),
+                "openclaw-gateway.service".into(),
+                "10-env.conf".into(),
+                "[Service]\nEnvironment=OPENCLAW_CHANNEL=discord".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        let touched = apply_direct_preview_command(&mut config, &host_cmd)
+            .expect("preview should accept internal drop-in write")
+            .expect("drop-in write should be handled directly");
+
+        assert_eq!(config["gateway"]["port"], json!(18789));
+        assert!(!touched.agents && !touched.channels && !touched.bindings && !touched.generic);
+    }
+
+    #[test]
     fn preview_side_effect_warning_marks_agent_commands() {
         let add_cmd = PendingCommand {
             id: "1".into(),
@@ -388,6 +629,154 @@ mod tests {
         assert!(preview_side_effect_warning(&delete_cmd)
             .expect("delete warning")
             .contains("filesystem cleanup"));
+    }
+
+    #[test]
+    fn preview_side_effect_warning_marks_systemd_commands() {
+        let host_cmd = PendingCommand {
+            id: "1".into(),
+            label: "Run hourly job".into(),
+            command: vec![
+                "systemd-run".into(),
+                "--unit=clawpal-job-hourly".into(),
+                "--".into(),
+                "openclaw".into(),
+                "doctor".into(),
+                "run".into(),
+            ],
+            created_at: String::new(),
+        };
+        let drop_in_cmd = PendingCommand {
+            id: "2".into(),
+            label: "Write drop-in".into(),
+            command: vec![
+                crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND.into(),
+                "openclaw-gateway.service".into(),
+                "10-env.conf".into(),
+                "[Service]\nEnvironment=OPENCLAW_CHANNEL=discord".into(),
+            ],
+            created_at: String::new(),
+        };
+
+        assert!(preview_side_effect_warning(&host_cmd)
+            .expect("systemd warning")
+            .contains("host-side systemd changes"));
+        assert!(preview_side_effect_warning(&drop_in_cmd)
+            .expect("drop-in warning")
+            .contains("does not write systemd drop-in"));
+    }
+
+    #[test]
+    fn summarize_activity_text_truncates_long_output() {
+        let long = "x".repeat(900);
+        let summary = summarize_activity_text(&long).expect("summary");
+
+        assert!(summary.len() <= 801);
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn display_command_for_activity_uses_label_for_internal_commands() {
+        let rendered = display_command_for_activity(
+            "Create agent: helper",
+            &[
+                crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND.into(),
+                "{\"agentId\":\"helper\"}".into(),
+            ],
+        )
+        .expect("display command");
+
+        assert_eq!(rendered, "Create agent: helper");
+    }
+
+    #[test]
+    fn remote_config_root_from_path_normal() {
+        let result = super::remote_config_root_from_path("/home/user/.openclaw/openclaw.json");
+        assert_eq!(result.unwrap(), "/home/user/.openclaw");
+    }
+
+    #[test]
+    fn remote_config_root_from_path_root_file() {
+        let result = super::remote_config_root_from_path("/openclaw.json");
+        assert_eq!(result.unwrap(), "/");
+    }
+
+    #[test]
+    fn remote_config_root_from_path_no_parent_errors() {
+        assert!(super::remote_config_root_from_path("").is_err());
+    }
+
+    #[test]
+    fn shell_quote_basic() {
+        assert_eq!(super::shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_with_single_quote() {
+        let quoted = super::shell_quote("it's");
+        assert!(quoted.contains("\'"));
+    }
+
+    #[test]
+    fn command_kind_for_activity_config_write() {
+        assert_eq!(
+            super::command_kind_for_activity(&["__config_write__".into()]),
+            "file_write"
+        );
+    }
+
+    #[test]
+    fn command_kind_for_activity_rollback() {
+        assert_eq!(
+            super::command_kind_for_activity(&["__rollback__".into()]),
+            "file_write"
+        );
+    }
+
+    #[test]
+    fn command_kind_for_activity_regular_command() {
+        assert_eq!(
+            super::command_kind_for_activity(&["openclaw".into(), "status".into()]),
+            "command"
+        );
+    }
+
+    #[test]
+    fn command_kind_for_activity_internal_prefix() {
+        assert_eq!(
+            super::command_kind_for_activity(&["__some_internal__".into()]),
+            "system_step"
+        );
+        assert_eq!(
+            super::command_kind_for_activity(&["internal_foo".into()]),
+            "system_step"
+        );
+    }
+
+    #[test]
+    fn summarize_activity_text_empty_returns_none() {
+        assert!(super::summarize_activity_text("").is_none());
+        assert!(super::summarize_activity_text("   ").is_none());
+    }
+
+    #[test]
+    fn summarize_activity_text_short_text() {
+        let result = super::summarize_activity_text("hello world").unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn display_command_for_activity_regular_command_is_shell_quoted() {
+        let result =
+            super::display_command_for_activity("Run test", &["echo".into(), "hello world".into()])
+                .unwrap();
+        assert!(result.contains("echo"));
+        assert!(result.contains("hello world"));
+    }
+
+    #[test]
+    fn display_command_for_activity_empty_returns_none() {
+        assert!(super::display_command_for_activity("label", &[]).is_none());
     }
 }
 
@@ -455,6 +844,26 @@ impl Default for CommandQueue {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn enqueue_materialized_plan(
+    queue: &CommandQueue,
+    plan: &MaterializedExecutionPlan,
+) -> Vec<PendingCommand> {
+    plan.commands
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let label = format!(
+                "[{}] {} ({}/{})",
+                plan.execution_kind,
+                plan.unit_name,
+                index + 1,
+                plan.commands.len()
+            );
+            queue.enqueue(label, command.clone())
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +1216,9 @@ fn apply_direct_preview_command(
     };
 
     match first {
+        crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND => {
+            return Ok(Some(PreviewTouchedDomains::default()));
+        }
         "__config_write__" | "__rollback__" => {
             let Some(content) = cmd.command.get(1) else {
                 return Err(format!("{}: missing config payload", cmd.label));
@@ -817,6 +1229,9 @@ fn apply_direct_preview_command(
             return Ok(Some(touched));
         }
         "openclaw" => {}
+        _ if is_allowlisted_systemd_host_command(&cmd.command) => {
+            return Ok(Some(PreviewTouchedDomains::default()));
+        }
         _ => return Ok(None),
     }
 
@@ -901,23 +1316,44 @@ fn apply_direct_preview_command(
 }
 
 fn preview_side_effect_warning(cmd: &PendingCommand) -> Option<String> {
+    if cmd.command.first().map(|value| value.as_str())
+        == Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND)
+    {
+        let target = cmd.command.get(1).map(String::as_str).unwrap_or("systemd");
+        let name = cmd.command.get(2).map(String::as_str).unwrap_or("drop-in");
+        return Some(format!(
+            "{}: preview does not write systemd drop-in '{}:{}'; file creation will run during apply.",
+            cmd.label, target, name
+        ));
+    }
+
+    if let Some(kind) = allowlisted_systemd_host_command_kind(&cmd.command) {
+        return Some(format!(
+            "{}: preview does not execute allowlisted {} command '{}'; host-side systemd changes will run during apply.",
+            cmd.label,
+            kind,
+            cmd.command.join(" ")
+        ));
+    }
+
     let [bin, category, action, target, ..] = cmd.command.as_slice() else {
         return None;
     };
-    if bin != "openclaw" || category != "agents" {
-        return None;
+    if bin == "openclaw" && category == "agents" {
+        return match action.as_str() {
+            "add" => Some(format!(
+                "{}: preview only validates config changes; agent workspace/filesystem setup for '{}' will run during apply.",
+                cmd.label, target
+            )),
+            "delete" => Some(format!(
+                "{}: preview only validates config changes; any filesystem cleanup for '{}' is not simulated.",
+                cmd.label, target
+            )),
+            _ => None,
+        };
     }
-    match action.as_str() {
-        "add" => Some(format!(
-            "{}: preview only validates config changes; agent workspace/filesystem setup for '{}' will run during apply.",
-            cmd.label, target
-        )),
-        "delete" => Some(format!(
-            "{}: preview only validates config changes; any filesystem cleanup for '{}' is not simulated.",
-            cmd.label, target
-        )),
-        _ => None,
-    }
+
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1194,20 +1630,673 @@ pub struct ApplyQueueResult {
     pub total_count: usize,
     pub error: Option<String>,
     pub rolled_back: bool,
+    #[serde(default)]
+    pub steps: Vec<ApplyQueueStepResult>,
 }
 
-#[tauri::command]
-pub async fn apply_queued_commands(
-    queue: tauri::State<'_, CommandQueue>,
-    cache: tauri::State<'_, CliCache>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyQueueStepResult {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub status: String,
+    pub side_effect: bool,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub display_command: Option<String>,
+    pub target: Option<String>,
+    pub exit_code: Option<i32>,
+    pub stdout_summary: Option<String>,
+    pub stderr_summary: Option<String>,
+    pub details: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct CookActivityEmitter {
+    app: AppHandle,
+    session_id: String,
+    run_id: Option<String>,
+    instance_id: String,
+}
+
+impl CookActivityEmitter {
+    pub fn new(
+        app: AppHandle,
+        session_id: String,
+        run_id: Option<String>,
+        instance_id: String,
+    ) -> Self {
+        Self {
+            app,
+            session_id,
+            run_id,
+            instance_id,
+        }
+    }
+
+    fn emit(&self, step: &ApplyQueueStepResult) {
+        let _ = self.app.emit(
+            "cook:activity",
+            json!({
+                "id": step.id,
+                "sessionId": self.session_id,
+                "runId": self.run_id,
+                "instanceId": self.instance_id,
+                "phase": "execute",
+                "kind": step.kind,
+                "label": step.label,
+                "status": step.status,
+                "sideEffect": step.side_effect,
+                "startedAt": step.started_at,
+                "finishedAt": step.finished_at,
+                "displayCommand": step.display_command,
+                "target": step.target,
+                "exitCode": step.exit_code,
+                "stdoutSummary": step.stdout_summary,
+                "stderrSummary": step.stderr_summary,
+                "details": step.details,
+            }),
+        );
+    }
+}
+
+fn summarize_activity_text(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut text = trimmed.replace("\r\n", "\n");
+    if text.len() > 800 {
+        text.truncate(800);
+        text.push('…');
+    }
+    Some(text)
+}
+
+fn command_kind_for_activity(command: &[String]) -> String {
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => "file_write".into(),
+        Some(value)
+            if value == crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND
+                || value == crate::commands::INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND
+                || value == crate::commands::INTERNAL_MARKDOWN_DOCUMENT_DELETE_COMMAND =>
+        {
+            "file_write".into()
+        }
+        Some(value) if value.starts_with("__") || value.starts_with("internal_") => {
+            "system_step".into()
+        }
+        _ => "command".into(),
+    }
+}
+
+fn display_command_for_activity(label: &str, command: &[String]) -> Option<String> {
+    match command.first().map(|value| value.as_str()) {
+        Some(value) if value.starts_with("__") || value.starts_with("internal_") => {
+            Some(label.to_string())
+        }
+        Some(_) => Some(
+            command
+                .iter()
+                .map(|part| shell_quote(part))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        None => None,
+    }
+}
+
+fn side_effect_for_activity(cmd: &PendingCommand) -> bool {
+    preview_side_effect_warning(cmd).is_some()
+        || matches!(
+            cmd.command.first().map(String::as_str),
+            Some("__config_write__")
+                | Some("__rollback__")
+                | Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND)
+                | Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND)
+                | Some(crate::commands::INTERNAL_AGENT_PERSONA_COMMAND)
+                | Some(crate::commands::INTERNAL_SET_AGENT_MODEL_COMMAND)
+                | Some(crate::commands::INTERNAL_ENSURE_MODEL_PROFILE_COMMAND)
+                | Some(crate::commands::INTERNAL_ENSURE_PROVIDER_AUTH_COMMAND)
+                | Some(crate::commands::INTERNAL_DELETE_MODEL_PROFILE_COMMAND)
+                | Some(crate::commands::INTERNAL_DELETE_PROVIDER_AUTH_COMMAND)
+                | Some(crate::commands::INTERNAL_DELETE_AGENT_COMMAND)
+                | Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND)
+                | Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_DELETE_COMMAND)
+        )
+}
+
+fn begin_activity_step(cmd: &PendingCommand) -> ApplyQueueStepResult {
+    ApplyQueueStepResult {
+        id: cmd.id.clone(),
+        kind: command_kind_for_activity(&cmd.command),
+        label: cmd.label.clone(),
+        status: "started".into(),
+        side_effect: side_effect_for_activity(cmd),
+        started_at: Utc::now().to_rfc3339(),
+        finished_at: None,
+        display_command: display_command_for_activity(&cmd.label, &cmd.command),
+        target: None,
+        exit_code: None,
+        stdout_summary: None,
+        stderr_summary: None,
+        details: None,
+    }
+}
+
+fn finish_activity_step(
+    mut step: ApplyQueueStepResult,
+    status: &str,
+    exit_code: Option<i32>,
+    stdout: Option<&str>,
+    stderr: Option<&str>,
+    details: Option<String>,
+) -> ApplyQueueStepResult {
+    step.status = status.to_string();
+    step.finished_at = Some(Utc::now().to_rfc3339());
+    step.exit_code = exit_code;
+    step.stdout_summary = stdout.and_then(summarize_activity_text);
+    step.stderr_summary = stderr.and_then(summarize_activity_text);
+    step.details = details;
+    step
+}
+
+fn rollback_command_snapshot_id(command: &[String]) -> Option<String> {
+    if command.first().map(|value| value.as_str()) != Some("__rollback__") {
+        return None;
+    }
+    if command.len() >= 3 {
+        return command
+            .get(1)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+    None
+}
+
+fn rollback_command_content(command: &[String]) -> Result<String, String> {
+    match command.first().map(|value| value.as_str()) {
+        Some("__rollback__") if command.len() >= 3 => command
+            .get(2)
+            .cloned()
+            .ok_or_else(|| "internal rollback is missing content".to_string()),
+        Some("__rollback__") | Some("__config_write__") => command
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "internal config write is missing content".to_string()),
+        _ => command
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "internal config write is missing content".to_string()),
+    }
+}
+
+fn apply_internal_local_command(
+    paths: &crate::models::OpenClawPaths,
+    command: &[String],
+) -> Result<bool, String> {
+    fn content(command: &[String]) -> Result<String, String> {
+        rollback_command_content(command)
+    }
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = content(command)?;
+            crate::config_io::write_text(&paths.config_path, &content)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            crate::agent_identity::write_local_agent_identity(
+                paths,
+                agent_id,
+                payload.get("name").and_then(serde_json::Value::as_str),
+                payload.get("emoji").and_then(serde_json::Value::as_str),
+                payload.get("persona").and_then(serde_json::Value::as_str),
+            )?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND) => {
+            let target = command
+                .get(1)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing target unit".to_string())?;
+            let name = command
+                .get(2)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing name".to_string())?;
+            let content = command
+                .get(3)
+                .map(String::as_str)
+                .ok_or_else(|| "systemd drop-in command missing content".to_string())?;
+            write_local_systemd_dropin(target, name, content)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_AGENT_PERSONA_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "agent persona command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "agent persona command missing agentId".to_string())?;
+            if payload.get("clear").and_then(serde_json::Value::as_bool) == Some(true) {
+                crate::agent_identity::clear_local_agent_persona(paths, agent_id)?;
+            } else {
+                let persona = payload
+                    .get("persona")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "agent persona command missing persona".to_string())?;
+                crate::agent_identity::set_local_agent_persona(paths, agent_id, persona)?;
+            }
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "markdown write command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            crate::markdown_document::write_local_markdown_document(paths, &payload)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_DELETE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "markdown delete command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            crate::markdown_document::delete_local_markdown_document(paths, &payload)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SET_AGENT_MODEL_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "set agent model command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "set agent model command missing agentId".to_string())?;
+            let model_value = payload
+                .get("modelValue")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            crate::commands::set_local_agent_model_for_recipe(paths, agent_id, model_value)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_ENSURE_MODEL_PROFILE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "ensure model profile command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "ensure model profile command missing profileId".to_string())?;
+            crate::commands::profiles::ensure_local_model_profiles_internal(
+                paths,
+                &[profile_id.to_string()],
+            )?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_ENSURE_PROVIDER_AUTH_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "ensure provider auth command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let provider = payload
+                .get("provider")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "ensure provider auth command missing provider".to_string())?;
+            let auth_ref = payload.get("authRef").and_then(serde_json::Value::as_str);
+            crate::commands::ensure_local_provider_auth_for_recipe(paths, provider, auth_ref)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_MODEL_PROFILE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete model profile command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete model profile command missing profileId".to_string())?;
+            let delete_auth_ref = payload
+                .get("deleteAuthRef")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            crate::commands::delete_local_model_profile_for_recipe(
+                paths,
+                profile_id,
+                delete_auth_ref,
+            )?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_PROVIDER_AUTH_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete provider auth command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let auth_ref = payload
+                .get("authRef")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete provider auth command missing authRef".to_string())?;
+            let force = payload
+                .get("force")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            crate::commands::delete_local_provider_auth_for_recipe(paths, auth_ref, force)?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_AGENT_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete agent command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete agent command missing agentId".to_string())?;
+            let force = payload
+                .get("force")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let rebind_channels_to = payload
+                .get("rebindChannelsTo")
+                .and_then(serde_json::Value::as_str);
+            crate::commands::delete_local_agent_for_recipe(
+                paths,
+                agent_id,
+                force,
+                rebind_channels_to,
+            )?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+async fn apply_internal_remote_command(
+    pool: &SshConnectionPool,
+    host_id: &str,
+    config_path: &str,
+    command: &[String],
+    cached_config: Option<&serde_json::Value>,
+) -> Result<bool, String> {
+    fn content(command: &[String]) -> Result<String, String> {
+        rollback_command_content(command)
+    }
+    match command.first().map(|value| value.as_str()) {
+        Some("__config_write__") | Some("__rollback__") => {
+            let content = content(command)?;
+            let action = if command.first().map(|value| value.as_str()) == Some("__rollback__") {
+                "rollback_write"
+            } else {
+                "internal_config_write"
+            };
+            crate::commands::logs::log_remote_config_write(
+                action,
+                host_id,
+                command.first().map(String::as_str),
+                config_path,
+                &content,
+            );
+            pool.sftp_write(host_id, config_path, &content).await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SETUP_IDENTITY_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "setup_identity command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "setup_identity command missing agent id".to_string())?;
+            crate::agent_identity::write_remote_agent_identity_with_config(
+                pool,
+                host_id,
+                agent_id,
+                payload.get("name").and_then(serde_json::Value::as_str),
+                payload.get("emoji").and_then(serde_json::Value::as_str),
+                payload.get("persona").and_then(serde_json::Value::as_str),
+                cached_config,
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SYSTEMD_DROPIN_WRITE_COMMAND) => {
+            let target = command
+                .get(1)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing target unit".to_string())?;
+            let name = command
+                .get(2)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "systemd drop-in command missing name".to_string())?;
+            let content = command
+                .get(3)
+                .map(String::as_str)
+                .ok_or_else(|| "systemd drop-in command missing content".to_string())?;
+            write_remote_systemd_dropin(pool, host_id, target, name, content).await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_AGENT_PERSONA_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "agent persona command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "agent persona command missing agentId".to_string())?;
+            if payload.get("clear").and_then(serde_json::Value::as_bool) == Some(true) {
+                crate::agent_identity::clear_remote_agent_persona(pool, host_id, agent_id).await?;
+            } else {
+                let persona = payload
+                    .get("persona")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "agent persona command missing persona".to_string())?;
+                crate::agent_identity::set_remote_agent_persona_with_config(
+                    pool,
+                    host_id,
+                    agent_id,
+                    persona,
+                    cached_config,
+                )
+                .await?;
+            }
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_WRITE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "markdown write command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            crate::markdown_document::write_remote_markdown_document(pool, host_id, &payload)
+                .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_MARKDOWN_DOCUMENT_DELETE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "markdown delete command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            crate::markdown_document::delete_remote_markdown_document(pool, host_id, &payload)
+                .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_SET_AGENT_MODEL_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "set agent model command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "set agent model command missing agentId".to_string())?;
+            let model_value = payload
+                .get("modelValue")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            crate::commands::set_remote_agent_model_for_recipe(
+                pool,
+                host_id,
+                agent_id,
+                model_value,
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_ENSURE_MODEL_PROFILE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "ensure model profile command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "ensure model profile command missing profileId".to_string())?;
+            crate::commands::profiles::ensure_remote_model_profiles_internal(
+                pool,
+                host_id,
+                &[profile_id.to_string()],
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_ENSURE_PROVIDER_AUTH_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "ensure provider auth command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let provider = payload
+                .get("provider")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "ensure provider auth command missing provider".to_string())?;
+            let auth_ref = payload.get("authRef").and_then(serde_json::Value::as_str);
+            crate::commands::ensure_remote_provider_auth_for_recipe(
+                pool, host_id, provider, auth_ref,
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_MODEL_PROFILE_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete model profile command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete model profile command missing profileId".to_string())?;
+            let delete_auth_ref = payload
+                .get("deleteAuthRef")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            crate::commands::delete_remote_model_profile_for_recipe(
+                pool,
+                host_id,
+                profile_id,
+                delete_auth_ref,
+            )
+            .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_PROVIDER_AUTH_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete provider auth command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let auth_ref = payload
+                .get("authRef")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete provider auth command missing authRef".to_string())?;
+            let force = payload
+                .get("force")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            crate::commands::delete_remote_provider_auth_for_recipe(pool, host_id, auth_ref, force)
+                .await?;
+            Ok(true)
+        }
+        Some(crate::commands::INTERNAL_DELETE_AGENT_COMMAND) => {
+            let payload = command
+                .get(1)
+                .ok_or_else(|| "delete agent command missing payload".to_string())?;
+            let payload: serde_json::Value =
+                serde_json::from_str(payload).map_err(|error| error.to_string())?;
+            let agent_id = payload
+                .get("agentId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "delete agent command missing agentId".to_string())?;
+            let force = payload
+                .get("force")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let rebind_channels_to = payload
+                .get("rebindChannelsTo")
+                .and_then(serde_json::Value::as_str);
+            crate::commands::delete_remote_agent_for_recipe(
+                pool,
+                host_id,
+                agent_id,
+                force,
+                rebind_channels_to,
+            )
+            .await?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+pub async fn apply_queued_commands_with_services(
+    queue: &CommandQueue,
+    cache: &CliCache,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+    activity_emitter: Option<CookActivityEmitter>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queue.list();
     if commands.is_empty() {
         return Err("No pending commands to apply".into());
     }
 
-    let queue_handle = queue.inner().clone();
-    let cache_handle = cache.inner().clone();
+    let queue_handle = queue.clone();
+    let cache_handle = cache.clone();
+    let activity_emitter = activity_emitter.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let paths = resolve_paths();
@@ -1232,47 +2321,81 @@ pub async fn apply_queued_commands(
             .any(|c| c.command.first().map(|s| s.as_str()) == Some("__rollback__"));
         let source = if is_rollback { "rollback" } else { "clawpal" };
         let can_rollback = !is_rollback;
+        let snapshot_recipe_id = snapshot_recipe_id
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(summary);
         let _ = crate::history::add_snapshot(
             &paths.history_dir,
             &paths.metadata_path,
-            Some(summary),
+            Some(snapshot_recipe_id),
             source,
             can_rollback,
             &config_before,
+            run_id.clone(),
             None,
+            snapshot_artifacts.clone().unwrap_or_default(),
         );
 
         // Execute each command for real
         let mut applied_count = 0;
+        let mut steps = Vec::new();
         for cmd in &commands {
-            if matches!(
-                cmd.command.first().map(|s| s.as_str()),
-                Some("__config_write__") | Some("__rollback__")
-            ) {
-                // Internal command: write config content directly
-                if let Some(content) = cmd.command.get(1) {
-                    if let Err(e) = crate::config_io::write_text(&paths.config_path, content) {
-                        let _ = crate::config_io::write_text(&paths.config_path, &config_before);
-                        queue_handle.clear();
-                        return Ok(ApplyQueueResult {
-                            ok: false,
-                            applied_count,
-                            total_count,
-                            error: Some(format!(
-                                "Step {} failed ({}): {}",
-                                applied_count + 1,
-                                cmd.label,
-                                e
-                            )),
-                            rolled_back: true,
-                        });
-                    }
-                }
-                applied_count += 1;
-                continue;
+            let step_started = begin_activity_step(cmd);
+            if let Some(emitter) = activity_emitter.as_ref() {
+                emitter.emit(&step_started);
             }
-            let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
-            let result = run_openclaw(&args);
+            match apply_internal_local_command(&paths, &cmd.command) {
+                Ok(true) => {
+                    let step_finished =
+                        finish_activity_step(step_started, "succeeded", Some(0), None, None, None);
+                    if let Some(emitter) = activity_emitter.as_ref() {
+                        emitter.emit(&step_finished);
+                    }
+                    steps.push(step_finished);
+                    applied_count += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    let step_failed = finish_activity_step(
+                        step_started,
+                        "failed",
+                        None,
+                        None,
+                        None,
+                        Some(e.clone()),
+                    );
+                    if let Some(emitter) = activity_emitter.as_ref() {
+                        emitter.emit(&step_failed);
+                    }
+                    steps.push(step_failed);
+                    let _ = crate::config_io::write_text(&paths.config_path, &config_before);
+                    queue_handle.clear();
+                    return Ok(ApplyQueueResult {
+                        ok: false,
+                        applied_count,
+                        total_count,
+                        error: Some(format!(
+                            "Step {} failed ({}): {}",
+                            applied_count + 1,
+                            cmd.label,
+                            e
+                        )),
+                        rolled_back: true,
+                        steps,
+                    });
+                }
+            }
+            let result = match run_allowlisted_systemd_local_command(&cmd.command) {
+                Ok(Some(output)) => Ok(output),
+                Ok(None) => {
+                    let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
+                    run_openclaw(&args)
+                }
+                Err(error) => Err(error),
+            };
             match result {
                 Ok(output) if output.exit_code != 0 => {
                     let detail = if !output.stderr.is_empty() {
@@ -1280,6 +2403,18 @@ pub async fn apply_queued_commands(
                     } else {
                         output.stdout.clone()
                     };
+                    let step_failed = finish_activity_step(
+                        step_started,
+                        "failed",
+                        Some(output.exit_code),
+                        Some(&output.stdout),
+                        Some(&output.stderr),
+                        summarize_activity_text(&detail),
+                    );
+                    if let Some(emitter) = activity_emitter.as_ref() {
+                        emitter.emit(&step_failed);
+                    }
+                    steps.push(step_failed);
 
                     // Rollback: restore config from snapshot
                     let _ = crate::config_io::write_text(&paths.config_path, &config_before);
@@ -1296,9 +2431,22 @@ pub async fn apply_queued_commands(
                             detail
                         )),
                         rolled_back: true,
+                        steps,
                     });
                 }
                 Err(e) => {
+                    let step_failed = finish_activity_step(
+                        step_started,
+                        "failed",
+                        None,
+                        None,
+                        None,
+                        Some(e.clone()),
+                    );
+                    if let Some(emitter) = activity_emitter.as_ref() {
+                        emitter.emit(&step_failed);
+                    }
+                    steps.push(step_failed);
                     let _ = crate::config_io::write_text(&paths.config_path, &config_before);
                     queue_handle.clear();
                     return Ok(ApplyQueueResult {
@@ -1312,9 +2460,22 @@ pub async fn apply_queued_commands(
                             e
                         )),
                         rolled_back: true,
+                        steps,
                     });
                 }
-                Ok(_) => {
+                Ok(output) => {
+                    let step_finished = finish_activity_step(
+                        step_started,
+                        "succeeded",
+                        Some(output.exit_code),
+                        Some(&output.stdout),
+                        Some(&output.stderr),
+                        None,
+                    );
+                    if let Some(emitter) = activity_emitter.as_ref() {
+                        emitter.emit(&step_finished);
+                    }
+                    steps.push(step_finished);
                     applied_count += 1;
                 }
             }
@@ -1336,10 +2497,30 @@ pub async fn apply_queued_commands(
             total_count,
             error: None,
             rolled_back: false,
+            steps,
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn apply_queued_commands(
+    queue: tauri::State<'_, CommandQueue>,
+    cache: tauri::State<'_, CliCache>,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+) -> Result<ApplyQueueResult, String> {
+    apply_queued_commands_with_services(
+        queue.inner(),
+        cache.inner(),
+        snapshot_recipe_id,
+        run_id,
+        snapshot_artifacts,
+        None,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,6 +2593,27 @@ impl Default for RemoteCommandQueues {
     }
 }
 
+pub fn enqueue_materialized_plan_remote(
+    queues: &RemoteCommandQueues,
+    host_id: &str,
+    plan: &MaterializedExecutionPlan,
+) -> Vec<PendingCommand> {
+    plan.commands
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let label = format!(
+                "[{}] {} ({}/{})",
+                plan.execution_kind,
+                plan.unit_name,
+                index + 1,
+                plan.commands.len()
+            );
+            queues.enqueue(host_id, label, command.clone())
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Remote queue management Tauri commands
 // ---------------------------------------------------------------------------
@@ -1480,10 +2682,11 @@ pub async fn remote_preview_queued_commands(
     let queue_size = commands.len();
 
     // Read current config via SSH
+    let config_path =
+        crate::commands::ssh::remote_resolve_openclaw_config_path(&pool, &host_id).await?;
+    let config_root = remote_config_root_from_path(&config_path)?;
     let read_started = Instant::now();
-    let config_before = pool
-        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
-        .await?;
+    let config_before = pool.sftp_read(&host_id, &config_path).await?;
     log_preview_stage(
         "remote",
         Some(&host_id),
@@ -1498,20 +2701,25 @@ pub async fn remote_preview_queued_commands(
     // Set up sandbox on remote: symlink all entries from real .openclaw/ into sandbox,
     // but copy openclaw.json so commands modify the copy, not the original.
     let sandbox_started = Instant::now();
-    pool.exec(
-        &host_id,
+    let sandbox_setup = format!(
         concat!(
-            "rm -rf ~/.clawpal/preview && ",
-            "mkdir -p ~/.clawpal/preview/.openclaw && ",
-            "for f in ~/.openclaw/*; do ",
+            "PREVIEW_ROOT=\"$HOME/.clawpal/preview\"; ",
+            "PREVIEW_CFG=\"$PREVIEW_ROOT/.openclaw\"; ",
+            "SRC_ROOT={}; ",
+            "SRC_CONFIG={}; ",
+            "rm -rf \"$PREVIEW_ROOT\" && ",
+            "mkdir -p \"$PREVIEW_CFG\" && ",
+            "for f in \"$SRC_ROOT\"/*; do ",
             "  name=$(basename \"$f\"); ",
             "  [ \"$name\" = \"openclaw.json\" ] && continue; ",
-            "  ln -s \"$f\" ~/.clawpal/preview/.openclaw/\"$name\"; ",
+            "  ln -s \"$f\" \"$PREVIEW_CFG/$name\"; ",
             "done && ",
-            "cp ~/.openclaw/openclaw.json ~/.clawpal/preview/.openclaw/openclaw.json",
+            "cp \"$SRC_CONFIG\" \"$PREVIEW_CFG/openclaw.json\""
         ),
-    )
-    .await?;
+        shell_quote(&config_root),
+        shell_quote(&config_path),
+    );
+    pool.exec(&host_id, &sandbox_setup).await?;
     log_preview_stage(
         "remote",
         Some(&host_id),
@@ -1727,11 +2935,14 @@ pub async fn remote_preview_queued_commands(
 // Remote apply — execute queue for real via SSH, rollback on failure
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub async fn remote_apply_queued_commands(
-    pool: tauri::State<'_, SshConnectionPool>,
-    queues: tauri::State<'_, RemoteCommandQueues>,
+pub async fn remote_apply_queued_commands_with_services(
+    pool: &SshConnectionPool,
+    queues: &RemoteCommandQueues,
     host_id: String,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+    activity_emitter: Option<CookActivityEmitter>,
 ) -> Result<ApplyQueueResult, String> {
     let commands = queues.list(&host_id);
     if commands.is_empty() {
@@ -1740,9 +2951,9 @@ pub async fn remote_apply_queued_commands(
     let total_count = commands.len();
 
     // Save snapshot on remote
-    let config_before = pool
-        .sftp_read(&host_id, "~/.openclaw/openclaw.json")
-        .await?;
+    let config_path =
+        crate::commands::ssh::remote_resolve_openclaw_config_path(pool, &host_id).await?;
+    let config_before = pool.sftp_read(&host_id, &config_path).await?;
     let ts = chrono::Utc::now().timestamp();
     let mut summary: String = commands
         .iter()
@@ -1771,71 +2982,84 @@ pub async fn remote_apply_queued_commands(
     let _ = pool
         .sftp_write(&host_id, &snapshot_path, &config_before)
         .await;
+    let snapshot_recipe_id = snapshot_recipe_id
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(summary.clone());
+    let snapshot_created_at = chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_else(|| ts.to_string());
+    let _ = crate::commands::config::record_remote_snapshot_metadata(
+        &pool,
+        &host_id,
+        crate::history::SnapshotMeta {
+            id: snapshot_filename.clone(),
+            recipe_id: Some(snapshot_recipe_id),
+            created_at: snapshot_created_at,
+            config_path: snapshot_path.clone(),
+            source: source.into(),
+            can_rollback: !is_rollback,
+            run_id: run_id.clone(),
+            rollback_of: None,
+            artifacts: snapshot_artifacts.clone().unwrap_or_default(),
+        },
+    )
+    .await;
+
+    // Parse config for internal commands — updated after each __config_write__
+    let mut cached_cfg: Option<serde_json::Value> = serde_json::from_str(&config_before).ok();
 
     // Execute each command
     let mut applied_count = 0;
+    let mut steps = Vec::new();
     for cmd in &commands {
-        // Handle internal commands (__config_write__, __rollback__) — write config directly
-        if matches!(
-            cmd.command.first().map(|s| s.as_str()),
-            Some("__config_write__") | Some("__rollback__")
-        ) {
-            if let Some(content) = cmd.command.get(1) {
-                if let Err(e) = pool
-                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", content)
-                    .await
-                {
-                    let _ = pool
-                        .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
-                        .await;
-                    queues.clear(&host_id);
-                    return Ok(ApplyQueueResult {
-                        ok: false,
-                        applied_count,
-                        total_count,
-                        error: Some(format!(
-                            "Step {} failed ({}): {}",
-                            applied_count + 1,
-                            cmd.label,
-                            e
-                        )),
-                        rolled_back: true,
-                    });
-                }
-            }
-            applied_count += 1;
-            continue;
+        let step_started = begin_activity_step(cmd);
+        if let Some(emitter) = activity_emitter.as_ref() {
+            emitter.emit(&step_started);
         }
-
-        let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
-        match run_openclaw_remote(&pool, &host_id, &args).await {
-            Ok(output) if output.exit_code != 0 => {
-                let detail = if !output.stderr.is_empty() {
-                    output.stderr.clone()
-                } else {
-                    output.stdout.clone()
-                };
-                // Rollback
-                let _ = pool
-                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
-                    .await;
-                queues.clear(&host_id);
-                return Ok(ApplyQueueResult {
-                    ok: false,
-                    applied_count,
-                    total_count,
-                    error: Some(format!(
-                        "Step {} failed ({}): {}",
-                        applied_count + 1,
-                        cmd.label,
-                        detail
-                    )),
-                    rolled_back: true,
-                });
+        // Update cached config when a __config_write__ is about to execute
+        if cmd.command.first().map(|s| s.as_str()) == Some("__config_write__") {
+            if let Ok(new_content) = rollback_command_content(&cmd.command) {
+                cached_cfg = serde_json::from_str(&new_content).ok();
             }
+        }
+        match apply_internal_remote_command(
+            &pool,
+            &host_id,
+            &config_path,
+            &cmd.command,
+            cached_cfg.as_ref(),
+        )
+        .await
+        {
+            Ok(true) => {
+                let step_finished =
+                    finish_activity_step(step_started, "succeeded", Some(0), None, None, None);
+                if let Some(emitter) = activity_emitter.as_ref() {
+                    emitter.emit(&step_finished);
+                }
+                steps.push(step_finished);
+                applied_count += 1;
+                continue;
+            }
+            Ok(false) => {}
             Err(e) => {
+                let step_failed =
+                    finish_activity_step(step_started, "failed", None, None, None, Some(e.clone()));
+                if let Some(emitter) = activity_emitter.as_ref() {
+                    emitter.emit(&step_failed);
+                }
+                steps.push(step_failed);
+                crate::commands::logs::log_remote_config_write(
+                    "rollback_restore",
+                    &host_id,
+                    Some("apply_error"),
+                    &config_path,
+                    &config_before,
+                );
                 let _ = pool
-                    .sftp_write(&host_id, "~/.openclaw/openclaw.json", &config_before)
+                    .sftp_write(&host_id, &config_path, &config_before)
                     .await;
                 queues.clear(&host_id);
                 return Ok(ApplyQueueResult {
@@ -1849,10 +3073,115 @@ pub async fn remote_apply_queued_commands(
                         e
                     )),
                     rolled_back: true,
+                    steps,
                 });
             }
-            Ok(_) => {
+        }
+
+        let result =
+            match run_allowlisted_systemd_remote_command(&pool, &host_id, &cmd.command).await {
+                Ok(Some(output)) => Ok(output),
+                Ok(None) => {
+                    let args: Vec<&str> = cmd.command.iter().skip(1).map(|s| s.as_str()).collect();
+                    run_openclaw_remote(&pool, &host_id, &args).await
+                }
+                Err(error) => Err(error),
+            };
+        match result {
+            Ok(output) if output.exit_code != 0 => {
+                let detail = if !output.stderr.is_empty() {
+                    output.stderr.clone()
+                } else {
+                    output.stdout.clone()
+                };
+                let step_failed = finish_activity_step(
+                    step_started,
+                    "failed",
+                    Some(output.exit_code),
+                    Some(&output.stdout),
+                    Some(&output.stderr),
+                    summarize_activity_text(&detail),
+                );
+                if let Some(emitter) = activity_emitter.as_ref() {
+                    emitter.emit(&step_failed);
+                }
+                steps.push(step_failed);
+                // Rollback
+                crate::commands::logs::log_remote_config_write(
+                    "rollback_restore",
+                    &host_id,
+                    Some("apply_nonzero_exit"),
+                    &config_path,
+                    &config_before,
+                );
+                let _ = pool
+                    .sftp_write(&host_id, &config_path, &config_before)
+                    .await;
+                queues.clear(&host_id);
+                return Ok(ApplyQueueResult {
+                    ok: false,
+                    applied_count,
+                    total_count,
+                    error: Some(format!(
+                        "Step {} failed ({}): {}",
+                        applied_count + 1,
+                        cmd.label,
+                        detail
+                    )),
+                    rolled_back: true,
+                    steps,
+                });
+            }
+            Err(e) => {
+                let step_failed =
+                    finish_activity_step(step_started, "failed", None, None, None, Some(e.clone()));
+                if let Some(emitter) = activity_emitter.as_ref() {
+                    emitter.emit(&step_failed);
+                }
+                steps.push(step_failed);
+                crate::commands::logs::log_remote_config_write(
+                    "rollback_restore",
+                    &host_id,
+                    Some("apply_command_error"),
+                    &config_path,
+                    &config_before,
+                );
+                let _ = pool
+                    .sftp_write(&host_id, &config_path, &config_before)
+                    .await;
+                queues.clear(&host_id);
+                return Ok(ApplyQueueResult {
+                    ok: false,
+                    applied_count,
+                    total_count,
+                    error: Some(format!(
+                        "Step {} failed ({}): {}",
+                        applied_count + 1,
+                        cmd.label,
+                        e
+                    )),
+                    rolled_back: true,
+                    steps,
+                });
+            }
+            Ok(output) => {
+                let step_finished = finish_activity_step(
+                    step_started,
+                    "succeeded",
+                    Some(output.exit_code),
+                    Some(&output.stdout),
+                    Some(&output.stderr),
+                    None,
+                );
+                if let Some(emitter) = activity_emitter.as_ref() {
+                    emitter.emit(&step_finished);
+                }
+                steps.push(step_finished);
                 applied_count += 1;
+                // Re-read config after CLI commands that may have modified it
+                if let Ok(updated) = pool.sftp_read(&host_id, &config_path).await {
+                    cached_cfg = serde_json::from_str(&updated).ok();
+                }
             }
         }
     }
@@ -1866,7 +3195,29 @@ pub async fn remote_apply_queued_commands(
         total_count,
         error: None,
         rolled_back: false,
+        steps,
     })
+}
+
+#[tauri::command]
+pub async fn remote_apply_queued_commands(
+    pool: tauri::State<'_, SshConnectionPool>,
+    queues: tauri::State<'_, RemoteCommandQueues>,
+    host_id: String,
+    snapshot_recipe_id: Option<String>,
+    run_id: Option<String>,
+    snapshot_artifacts: Option<Vec<crate::recipe_store::Artifact>>,
+) -> Result<ApplyQueueResult, String> {
+    remote_apply_queued_commands_with_services(
+        pool.inner(),
+        queues.inner(),
+        host_id,
+        snapshot_recipe_id,
+        run_id,
+        snapshot_artifacts,
+        None,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
