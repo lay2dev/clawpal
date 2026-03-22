@@ -40,42 +40,78 @@ fn merge_auth_precheck_issues(
     issues
 }
 
-fn emit_cook_activity(
-    app: &AppHandle,
-    session_id: Option<&str>,
-    instance_id: &str,
-    id: &str,
-    label: &str,
-    status: &str,
+struct PrecheckActivity<'a> {
+    app: &'a AppHandle,
+    session_id: &'a str,
+    instance_id: &'a str,
+    id: String,
+    label: &'a str,
     side_effect: bool,
-    target: Option<&str>,
-    display_command: Option<&str>,
-    started_at: &str,
-    finished_at: Option<&str>,
-    details: Option<String>,
-) {
-    let Some(session_id) = session_id else {
-        return;
-    };
+    target: Option<&'a str>,
+    display_command: Option<&'a str>,
+    started_at: String,
+}
 
-    let _ = app.emit(
-        "cook:activity",
-        json!({
-            "id": id,
-            "sessionId": session_id,
-            "instanceId": instance_id,
-            "phase": "planning.auth",
-            "kind": "auth_check",
-            "label": label,
-            "status": status,
-            "sideEffect": side_effect,
-            "target": target,
-            "displayCommand": display_command,
-            "startedAt": started_at,
-            "finishedAt": finished_at,
-            "details": details,
-        }),
-    );
+impl<'a> PrecheckActivity<'a> {
+    fn start(
+        app: &'a AppHandle,
+        session_id: Option<&'a str>,
+        instance_id: &'a str,
+        id: String,
+        label: &'a str,
+        side_effect: bool,
+        target: Option<&'a str>,
+        display_command: Option<&'a str>,
+    ) -> Option<Self> {
+        let session_id = session_id?;
+        let activity = Self {
+            app,
+            session_id,
+            instance_id,
+            id,
+            label,
+            side_effect,
+            target,
+            display_command,
+            started_at: chrono::Utc::now().to_rfc3339(),
+        };
+        activity.emit("started", None);
+        Some(activity)
+    }
+
+    fn succeeded(self, details: Option<String>) {
+        self.emit("succeeded", details);
+    }
+
+    fn failed(&self, details: Option<String>) {
+        self.emit("failed", details);
+    }
+
+    fn emit(&self, status: &str, details: Option<String>) {
+        let finished_at = if status != "started" {
+            Some(chrono::Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+        let _ = self.app.emit(
+            "cook:activity",
+            json!({
+                "id": self.id,
+                "sessionId": self.session_id,
+                "instanceId": self.instance_id,
+                "phase": "planning.auth",
+                "kind": "auth_check",
+                "label": self.label,
+                "status": status,
+                "sideEffect": self.side_effect,
+                "target": self.target,
+                "displayCommand": self.display_command,
+                "startedAt": self.started_at,
+                "finishedAt": finished_at,
+                "details": details,
+            }),
+        );
+    }
 }
 
 #[tauri::command]
@@ -158,106 +194,54 @@ pub async fn precheck_auth(
     match &instance.instance_type {
         clawpal_core::instance::InstanceType::RemoteSsh => {
             let session_id = activity_session_id.as_deref();
-            let collect_id = format!("{}:planning:auth:profiles", instance_id);
-            let collect_started_at = chrono::Utc::now().to_rfc3339();
-            emit_cook_activity(
+            let collect_activity = PrecheckActivity::start(
                 &app,
                 session_id,
                 &instance_id,
-                &collect_id,
+                format!("{}:planning:auth:profiles", instance_id),
                 "Collect remote model profiles",
-                "started",
                 false,
                 Some("remote OpenClaw config"),
                 Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
-                &collect_started_at,
-                None,
-                None,
             );
             let (profiles, extract_result) =
                 super::profiles::collect_remote_profiles_from_openclaw(&pool, &instance_id, true)
                     .await
                     .map_err(|error| {
-                        emit_cook_activity(
-                            &app,
-                            session_id,
-                            &instance_id,
-                            &collect_id,
-                            "Collect remote model profiles",
-                            "failed",
-                            false,
-                            Some("remote OpenClaw config"),
-                            Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
-                            &collect_started_at,
-                            Some(&chrono::Utc::now().to_rfc3339()),
-                            Some(error.clone()),
-                        );
+                        if let Some(ref a) = collect_activity {
+                            a.failed(Some(error.clone()));
+                        }
                         error
                     })?;
-            emit_cook_activity(
-                &app,
-                session_id,
-                &instance_id,
-                &collect_id,
-                "Collect remote model profiles",
-                "succeeded",
-                false,
-                Some("remote OpenClaw config"),
-                Some("Read remote openclaw.json and ~/.clawpal/model-profiles.json"),
-                &collect_started_at,
-                Some(&chrono::Utc::now().to_rfc3339()),
-                Some(format!("Loaded {} profile(s).", profiles.len())),
-            );
+            if let Some(a) = collect_activity {
+                a.succeeded(Some(format!("Loaded {} profile(s).", profiles.len())));
+            }
             if extract_result.created > 0 {
-                let sync_id = format!("{}:planning:auth:profile-cache", instance_id);
-                let sync_started_at = chrono::Utc::now().to_rfc3339();
-                emit_cook_activity(
+                if let Some(a) = PrecheckActivity::start(
                     &app,
                     session_id,
                     &instance_id,
-                    &sync_id,
+                    format!("{}:planning:auth:profile-cache", instance_id),
                     "Sync derived profile cache",
-                    "started",
                     true,
                     Some("~/.clawpal/model-profiles.json"),
                     Some("mkdir -p ~/.clawpal && write ~/.clawpal/model-profiles.json"),
-                    &sync_started_at,
-                    None,
-                    None,
-                );
-                emit_cook_activity(
-                    &app,
-                    session_id,
-                    &instance_id,
-                    &sync_id,
-                    "Sync derived profile cache",
-                    "succeeded",
-                    true,
-                    Some("~/.clawpal/model-profiles.json"),
-                    Some("mkdir -p ~/.clawpal && write ~/.clawpal/model-profiles.json"),
-                    &sync_started_at,
-                    Some(&chrono::Utc::now().to_rfc3339()),
-                    Some(format!(
+                ) {
+                    a.succeeded(Some(format!(
                         "Persisted {} newly derived profile(s) for future checks.",
                         extract_result.created
-                    )),
-                );
+                    )));
+                }
             }
-            let resolve_id = format!("{}:planning:auth:resolve", instance_id);
-            let resolve_started_at = chrono::Utc::now().to_rfc3339();
-            emit_cook_activity(
+            let resolve_activity = PrecheckActivity::start(
                 &app,
                 session_id,
                 &instance_id,
-                &resolve_id,
+                format!("{}:planning:auth:resolve", instance_id),
                 "Resolve provider credentials",
-                "started",
                 false,
                 Some(instance.label.as_str()),
                 Some("Inspect remote auth store and environment"),
-                &resolve_started_at,
-                None,
-                None,
             );
             let resolved = super::profiles::resolve_remote_api_keys_for_profiles(
                 &pool,
@@ -265,90 +249,40 @@ pub async fn precheck_auth(
                 &profiles,
             )
             .await;
-            emit_cook_activity(
-                &app,
-                session_id,
-                &instance_id,
-                &resolve_id,
-                "Resolve provider credentials",
-                "succeeded",
-                false,
-                Some(instance.label.as_str()),
-                Some("Inspect remote auth store and environment"),
-                &resolve_started_at,
-                Some(&chrono::Utc::now().to_rfc3339()),
-                Some(format!("Checked {} profile(s).", profiles.len())),
-            );
+            if let Some(a) = resolve_activity {
+                a.succeeded(Some(format!("Checked {} profile(s).", profiles.len())));
+            }
             Ok(merge_auth_precheck_issues(&profiles, &resolved))
         }
         _ => {
             let session_id = activity_session_id.as_deref();
-            let resolve_id = format!("{}:planning:auth:local", instance_id);
-            let resolve_started_at = chrono::Utc::now().to_rfc3339();
-            emit_cook_activity(
+            let resolve_activity = PrecheckActivity::start(
                 &app,
                 session_id,
                 &instance_id,
-                &resolve_id,
+                format!("{}:planning:auth:local", instance_id),
                 "Resolve provider credentials",
-                "started",
                 false,
                 Some("local shell"),
                 Some("Inspect local model profiles and auth environment"),
-                &resolve_started_at,
-                None,
-                None,
             );
             let openclaw = clawpal_core::openclaw::OpenclawCli::new();
             let profiles = clawpal_core::profile::list_profiles(&openclaw).map_err(|e| {
                 let message = e.to_string();
-                emit_cook_activity(
-                    &app,
-                    session_id,
-                    &instance_id,
-                    &resolve_id,
-                    "Resolve provider credentials",
-                    "failed",
-                    false,
-                    Some("local shell"),
-                    Some("Inspect local model profiles and auth environment"),
-                    &resolve_started_at,
-                    Some(&chrono::Utc::now().to_rfc3339()),
-                    Some(message.clone()),
-                );
+                if let Some(ref a) = resolve_activity {
+                    a.failed(Some(message.clone()));
+                }
                 message
             })?;
             let resolved = super::resolve_api_keys().map_err(|error| {
-                emit_cook_activity(
-                    &app,
-                    session_id,
-                    &instance_id,
-                    &resolve_id,
-                    "Resolve provider credentials",
-                    "failed",
-                    false,
-                    Some("local shell"),
-                    Some("Inspect local model profiles and auth environment"),
-                    &resolve_started_at,
-                    Some(&chrono::Utc::now().to_rfc3339()),
-                    Some(error.clone()),
-                );
+                if let Some(ref a) = resolve_activity {
+                    a.failed(Some(error.clone()));
+                }
                 error
             })?;
-            emit_cook_activity(
-                &app,
-                session_id,
-                &instance_id,
-                &resolve_id,
-                "Resolve provider credentials",
-                "succeeded",
-                false,
-                Some("local shell"),
-                Some("Inspect local model profiles and auth environment"),
-                &resolve_started_at,
-                Some(&chrono::Utc::now().to_rfc3339()),
-                Some(format!("Checked {} profile(s).", profiles.len())),
-            );
+            if let Some(a) = resolve_activity {
+                a.succeeded(Some(format!("Checked {} profile(s).", profiles.len())));
+            }
             Ok(merge_auth_precheck_issues(&profiles, &resolved))
         }
     }
