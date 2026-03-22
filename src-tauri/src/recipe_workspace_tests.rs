@@ -229,3 +229,32 @@ fn recipe_approval_digest_is_invalidated_after_workspace_recipe_changes() {
         .is_recipe_approved("channel-persona", &next_digest)
         .expect("approval should be invalidated"));
 }
+
+#[test]
+fn source_digest_is_deterministic() {
+    let d1 = RecipeWorkspace::source_digest(SAMPLE_SOURCE);
+    let d2 = RecipeWorkspace::source_digest(SAMPLE_SOURCE);
+    assert_eq!(d1, d2);
+    assert!(!d1.is_empty());
+}
+
+#[test]
+fn source_digest_changes_with_content() {
+    let d1 = RecipeWorkspace::source_digest(SAMPLE_SOURCE);
+    let d2 = RecipeWorkspace::source_digest(&SAMPLE_SOURCE.replace("easy", "hard"));
+    assert_ne!(d1, d2);
+}
+
+#[test]
+fn read_recipe_source_errors_for_unknown_slug() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
+    assert!(store.read_recipe_source("nonexistent").is_err());
+}
+
+#[test]
+fn delete_recipe_source_rejects_path_traversal() {
+    let root = temp_workspace_root();
+    let store = RecipeWorkspace::new(root.path().clone());
+    assert!(store.delete_recipe_source("../escape").is_err());
+}

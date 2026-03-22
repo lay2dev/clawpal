@@ -172,3 +172,58 @@ fn delete_runs_without_scope_clears_all_runs_and_instances() {
     assert!(store.list_all_runs().expect("list all runs").is_empty());
     assert!(store.list_instances().expect("list instances").is_empty());
 }
+
+#[test]
+fn recorded_run_preserves_multiple_audit_entries_in_order() {
+    let mut run = sample_run();
+    run.audit_trail.push(AuditEntry {
+        id: "audit_02".into(),
+        phase: "execute".into(),
+        kind: "command".into(),
+        label: "Apply config patch".into(),
+        status: "succeeded".into(),
+        side_effect: true,
+        started_at: "2026-03-11T10:00:01Z".into(),
+        finished_at: Some("2026-03-11T10:00:02Z".into()),
+        target: None,
+        display_command: Some("openclaw config set ...".into()),
+        exit_code: Some(0),
+        stdout_summary: Some("OK".into()),
+        stderr_summary: None,
+        details: None,
+    });
+
+    let store = RecipeStore::for_test();
+    store.record_run(run).expect("record run");
+
+    let runs = store.list_runs("inst_01").expect("list");
+    assert_eq!(runs[0].audit_trail.len(), 2);
+    assert_eq!(runs[0].audit_trail[0].phase, "planning.auth");
+    assert_eq!(runs[0].audit_trail[1].phase, "execute");
+    assert!(runs[0].audit_trail[1].side_effect);
+}
+
+#[test]
+fn recorded_run_preserves_multiple_resource_claims() {
+    let mut run = sample_run();
+    run.resource_claims.push(ResourceClaim {
+        kind: "agent".into(),
+        id: Some("helper".into()),
+        target: None,
+        path: None,
+    });
+
+    let store = RecipeStore::for_test();
+    store.record_run(run).expect("record run");
+
+    let runs = store.list_runs("inst_01").expect("list");
+    assert_eq!(runs[0].resource_claims.len(), 2);
+    assert_eq!(runs[0].resource_claims[1].kind, "agent");
+}
+
+#[test]
+fn list_runs_unknown_instance_returns_empty() {
+    let store = RecipeStore::for_test();
+    store.record_run(sample_run()).expect("record");
+    assert!(store.list_runs("nonexistent").expect("list").is_empty());
+}

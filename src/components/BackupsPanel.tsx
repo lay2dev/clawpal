@@ -74,7 +74,7 @@ export function BackupsPanel() {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : backups.length === 0 ? (
+      ) : !backups || backups.length === 0 ? (
         <p className="text-muted-foreground text-sm">{t("doctor.noBackups")}</p>
       ) : (
         <div className="space-y-2">
