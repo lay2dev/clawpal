@@ -189,3 +189,44 @@ describe("cook execution helpers", () => {
     });
   });
 });
+
+test("marks all steps as done when execution completes", () => {
+  const statuses: CookStepStatus[] = [
+    { label: "Step 1", state: "running" },
+    { label: "Step 2", state: "pending" },
+  ];
+  const result = markCookStatuses(statuses, "done");
+  expect(result.every((s) => s.state === "done")).toBe(true);
+});
+
+test("markCookFailure restores running to pending and keeps done", () => {
+  const statuses: CookStepStatus[] = [
+    { label: "Step 1", state: "done" },
+    { label: "Step 2", state: "running" },
+    { label: "Step 3", state: "pending" },
+  ];
+  const result = markCookFailure(statuses);
+  expect(result[0].state).toBe("done");
+  expect(result[1].state).toBe("pending");
+  expect(result[2].state).toBe("pending");
+});
+
+test("buildCookPhaseItems includes params and confirm phases", () => {
+  const items = buildCookPhaseItems("params");
+  const labels = items.map((i) => i.phase);
+  expect(labels).toContain("params");
+  expect(labels).toContain("confirm");
+  expect(labels).toContain("execute");
+  expect(labels).toContain("done");
+});
+
+test("getCookPlanningProgress returns null for non-planning stages", () => {
+  expect(
+    getCookPlanningProgress(null, {
+      authRequired: false,
+      configRequired: false,
+      completedCount: 0,
+      totalCount: 0,
+    }),
+  ).toBeNull();
+});

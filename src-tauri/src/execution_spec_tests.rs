@@ -80,3 +80,85 @@ resources:
 
     assert!(parse_execution_spec(raw).is_ok());
 }
+
+#[test]
+fn execution_spec_rejects_wrong_kind() {
+    let raw = r#"apiVersion: strategy.platform/v1
+kind: NotAnExecutionSpec
+execution: { kind: job }"#;
+    assert!(parse_execution_spec(raw).is_err());
+}
+
+#[test]
+fn execution_spec_rejects_unsupported_execution_kind() {
+    let raw = r#"apiVersion: strategy.platform/v1
+kind: ExecutionSpec
+execution: { kind: fantasy }"#;
+    assert!(parse_execution_spec(raw).is_err());
+}
+
+#[test]
+fn execution_spec_accepts_all_supported_execution_kinds() {
+    for kind in &["job", "service", "schedule", "attachment"] {
+        let raw = format!(
+            r#"apiVersion: strategy.platform/v1
+kind: ExecutionSpec
+execution:
+  kind: {}"#,
+            kind
+        );
+        assert!(
+            parse_execution_spec(&raw).is_ok(),
+            "expected kind '{}' to be accepted",
+            kind
+        );
+    }
+}
+
+#[test]
+fn execution_spec_valid_bundle_alignment() {
+    let bundle_raw = r#"apiVersion: strategy.platform/v1
+kind: StrategyBundle
+capabilities: { allowed: ["config.write"] }
+resources: { supportedKinds: ["file"] }
+execution: { supportedKinds: ["job"] }"#;
+    let spec_raw = r#"apiVersion: strategy.platform/v1
+kind: ExecutionSpec
+execution: { kind: "job" }
+capabilities: { usedCapabilities: ["config.write"] }
+resources: { claims: [{ kind: "file", path: "/tmp/cfg" }] }"#;
+
+    let bundle = parse_recipe_bundle(bundle_raw).unwrap();
+    let spec = parse_execution_spec(spec_raw).unwrap();
+    assert!(validate_execution_spec_against_bundle(&bundle, &spec).is_ok());
+}
+
+#[test]
+fn execution_spec_bundle_rejects_mismatched_execution_kind() {
+    let bundle_raw = r#"apiVersion: strategy.platform/v1
+kind: StrategyBundle
+execution: { supportedKinds: ["service"] }"#;
+    let spec_raw = r#"apiVersion: strategy.platform/v1
+kind: ExecutionSpec
+execution: { kind: "job" }"#;
+
+    let bundle = parse_recipe_bundle(bundle_raw).unwrap();
+    let spec = parse_execution_spec(spec_raw).unwrap();
+    assert!(validate_execution_spec_against_bundle(&bundle, &spec).is_err());
+}
+
+#[test]
+fn execution_spec_empty_bundle_capabilities_accepts_all() {
+    let bundle_raw = r#"apiVersion: strategy.platform/v1
+kind: StrategyBundle
+execution: { supportedKinds: ["job"] }"#;
+    let spec_raw = r#"apiVersion: strategy.platform/v1
+kind: ExecutionSpec
+execution: { kind: "job" }
+capabilities: { usedCapabilities: ["anything.goes"] }"#;
+
+    let bundle = parse_recipe_bundle(bundle_raw).unwrap();
+    let spec = parse_execution_spec(spec_raw).unwrap();
+    // Empty allowed = no restrictions
+    assert!(validate_execution_spec_against_bundle(&bundle, &spec).is_ok());
+}

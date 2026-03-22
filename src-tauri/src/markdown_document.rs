@@ -435,4 +435,64 @@ mod tests {
 
         assert_eq!(next, "# Notes\n\n## Persona\nNew\n\n## Other\nStay\n");
     }
+
+
+    #[test]
+    fn relative_path_validation_accepts_simple_paths() {
+        assert!(validate_relative_path("notes.md").is_ok());
+        assert!(validate_relative_path("dir/file.md").is_ok());
+    }
+
+    #[test]
+    fn relative_path_validation_rejects_absolute_paths() {
+        assert!(validate_relative_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn relative_path_validation_trims_and_rejects_empty() {
+        assert!(validate_relative_path("").is_err());
+        assert!(validate_relative_path("   ").is_err());
+    }
+
+    #[test]
+    fn upsert_section_appends_when_missing() {
+        let result = upsert_markdown_section("# Doc\n\nIntro\n", "Persona", "New content");
+        assert!(result.contains("## Persona\nNew content"));
+        assert!(result.contains("# Doc"));
+    }
+
+    #[test]
+    fn upsert_section_handles_empty_document() {
+        let result = upsert_markdown_section("", "Notes", "Some notes");
+        assert!(result.contains("## Notes\nSome notes"));
+    }
+
+    #[test]
+    fn upsert_section_preserves_content_after_replaced_section() {
+        let doc = "# Top\n\n## Target\nOld stuff\n\n## Footer\nKeep this\n";
+        let result = upsert_markdown_section(doc, "Target", "New stuff");
+        assert!(result.contains("## Target\nNew stuff"));
+        assert!(result.contains("## Footer\nKeep this"));
+    }
+
+    #[test]
+    fn normalize_remote_dir_trims_trailing_slash() {
+        assert_eq!(super::normalize_remote_dir("/home/user/"), "/home/user");
+        assert_eq!(super::normalize_remote_dir("/home/user"), "/home/user");
+    }
+
+    #[test]
+    fn normalize_optional_text_returns_none_for_empty() {
+        assert!(super::normalize_optional_text(None).is_none());
+        assert!(super::normalize_optional_text(Some("")).is_none());
+        assert!(super::normalize_optional_text(Some("   ")).is_none());
+    }
+
+    #[test]
+    fn normalize_optional_text_trims() {
+        assert_eq!(
+            super::normalize_optional_text(Some("  hello  ")),
+            Some("hello".to_string())
+        );
+    }
 }

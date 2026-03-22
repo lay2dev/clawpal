@@ -265,3 +265,58 @@ describe("cook plan context helpers", () => {
     });
   });
 });
+
+test("hasBlockingAuthIssues returns false for empty array", () => {
+  expect(hasBlockingAuthIssues([])).toBe(false);
+});
+
+test("hasBlockingAuthIssues returns false for warn-only issues", () => {
+  expect(
+    hasBlockingAuthIssues([
+      { code: "AUTH_MISSING", severity: "warn", message: "Optional", autoFixable: false },
+    ]),
+  ).toBe(false);
+});
+
+test("hasBlockingAuthIssues returns true for error severity", () => {
+  expect(
+    hasBlockingAuthIssues([
+      { code: "AUTH_MISSING", severity: "error", message: "Missing key", autoFixable: false },
+    ]),
+  ).toBe(true);
+});
+
+test("buildCookRouteSummary returns local kind for non-SSH non-Docker instances", () => {
+  const summary = buildCookRouteSummary({
+    instanceId: "local-1",
+    instanceType: "local",
+    instanceLabel: "My Local",
+    isRemote: false,
+    isDocker: false,
+  });
+  expect(summary.kind).toBe("local");
+  expect(summary.targetLabel).toBe("My Local");
+});
+
+test("buildCookRouteSummary returns remote kind for SSH instances", () => {
+  const summary = buildCookRouteSummary({
+    instanceId: "ssh:pi",
+    instanceType: "remote_ssh",
+    instanceLabel: "Pi Server",
+    isRemote: true,
+    isDocker: false,
+  });
+  expect(summary.kind).toBe("remote");
+  expect(summary.targetLabel).toBe("Pi Server");
+});
+
+test("buildCookRouteSummary returns docker kind for Docker instances", () => {
+  const summary = buildCookRouteSummary({
+    instanceId: "docker:lab",
+    instanceType: "docker",
+    instanceLabel: "Lab",
+    isRemote: false,
+    isDocker: true,
+  });
+  expect(summary.kind).toBe("docker");
+});
