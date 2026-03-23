@@ -68,8 +68,8 @@ use crate::commands::{
     sftp_remove_file, sftp_write_file, ssh_connect, ssh_connect_with_passphrase, ssh_disconnect,
     ssh_exec, ssh_status, start_watchdog, stop_watchdog, test_model_profile, trigger_cron_job,
     uninstall_watchdog, upgrade_bundled_recipe_workspace_source, upsert_model_profile,
-    upsert_ssh_host, validate_recipe_source_text, workspace_git_backup,
-    workspace_git_init, workspace_git_status,
+    upsert_ssh_host, validate_recipe_source_text, workspace_git_backup, workspace_git_init,
+    workspace_git_status,
 };
 use crate::install::commands::{
     install_create_session, install_decide_target, install_get_session, install_list_methods,
