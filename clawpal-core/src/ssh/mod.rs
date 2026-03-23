@@ -219,7 +219,7 @@ impl SshSession {
                     }
                     Ok((exit_code, stderr))
                 });
-                return Ok((rx, handle));
+                Ok((rx, handle))
             }
             Backend::Russh { handle } => {
                 let handle_clone = handle.clone();
