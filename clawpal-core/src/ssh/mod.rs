@@ -191,6 +191,104 @@ impl SshSession {
         })
     }
 
+    /// Execute a command and stream stdout lines as they arrive via a bounded mpsc channel.
+    ///
+    /// Returns `(receiver, join_handle)`. The receiver yields one `String` per line.
+    /// The join handle resolves to `(exit_code, stderr)` when the command completes.
+    /// For the Legacy backend, this falls back to `exec()` and sends all lines at once.
+    pub async fn exec_streaming(
+        &self,
+        cmd: &str,
+    ) -> Result<(
+        tokio::sync::mpsc::Receiver<String>,
+        tokio::task::JoinHandle<Result<(i32, String)>>,
+    )> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+
+        match &self.backend {
+            Backend::Legacy => {
+                // Fallback: exec all at once, then send lines
+                let result = self.exec_legacy(cmd).await?;
+                let exit_code = result.exit_code;
+                let stderr = result.stderr.clone();
+                let handle = tokio::spawn(async move {
+                    for line in result.stdout.lines() {
+                        if tx.send(line.to_string()).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok((exit_code, stderr))
+                });
+                return Ok((rx, handle));
+            }
+            Backend::Russh { handle } => {
+                let handle_clone = handle.clone();
+                let mut channel = handle_clone
+                    .channel_open_session()
+                    .await
+                    .map_err(|e| SshError::Channel(e.to_string()))?;
+                channel
+                    .exec(true, cmd)
+                    .await
+                    .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+                let exec_timeout_secs = russh_exec_timeout_secs();
+                let join = tokio::spawn(async move {
+                    let wait_result = timeout(Duration::from_secs(exec_timeout_secs), async {
+                        let mut line_buf = Vec::new();
+                        let mut stderr = Vec::new();
+                        let mut exit_code: i32 = -1;
+                        while let Some(msg) = channel.wait().await {
+                            match msg {
+                                russh::ChannelMsg::Data { data } => {
+                                    for &byte in data.as_ref() {
+                                        if byte == b'\n' {
+                                            let line =
+                                                String::from_utf8_lossy(&line_buf).to_string();
+                                            line_buf.clear();
+                                            if tx.send(line).await.is_err() {
+                                                return (exit_code, stderr);
+                                            }
+                                        } else {
+                                            line_buf.push(byte);
+                                        }
+                                    }
+                                }
+                                russh::ChannelMsg::ExtendedData { data, ext } => {
+                                    if ext == 1 {
+                                        stderr.extend_from_slice(&data);
+                                    }
+                                }
+                                russh::ChannelMsg::ExitStatus { exit_status } => {
+                                    exit_code = exit_status as i32;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !line_buf.is_empty() {
+                            let line = String::from_utf8_lossy(&line_buf).to_string();
+                            let _ = tx.send(line).await;
+                        }
+                        (exit_code, stderr)
+                    })
+                    .await;
+
+                    match wait_result {
+                        Ok((exit_code, stderr)) => Ok((
+                            exit_code,
+                            String::from_utf8_lossy(&stderr).trim_end().to_string(),
+                        )),
+                        Err(_) => Err(SshError::CommandFailed(format!(
+                            "russh exec_streaming timed out after {exec_timeout_secs}s"
+                        ))),
+                    }
+                });
+
+                Ok((rx, join))
+            }
+        }
+    }
+
     pub async fn sftp_read(&self, path: &str) -> Result<Vec<u8>> {
         let handle = match &self.backend {
             Backend::Russh { handle } => handle.clone(),

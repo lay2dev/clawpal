@@ -392,6 +392,41 @@ impl SshConnectionPool {
         })
     }
 
+    /// Execute a command over SSH and stream stdout lines incrementally.
+    ///
+    /// Returns `(receiver, join_handle)`. The receiver yields stdout lines as they arrive.
+    /// The join handle resolves to `(exit_code, stderr)` when the remote command finishes.
+    pub async fn exec_streaming(
+        &self,
+        id: &str,
+        command: &str,
+    ) -> Result<
+        (
+            tokio::sync::mpsc::Receiver<String>,
+            tokio::task::JoinHandle<clawpal_core::ssh::Result<(i32, String)>>,
+        ),
+        String,
+    > {
+        let conn = self.lookup_connected_host(id).await?;
+        crate::commands::logs::log_dev(format!(
+            "[dev][ssh_pool] exec_streaming start id={} command={}",
+            id, command
+        ));
+        let _permit = conn
+            .op_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| format!("ssh limiter acquire failed: {e}"))?;
+        self.record_transfer(id, command.len() as u64, 0).await;
+        let session = conn.session.lock().await.clone();
+        let (rx, join) = session
+            .exec_streaming(command)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((rx, join))
+    }
+
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
         let wrapped = build_login_shell_wrapper(command);
         self.exec(id, &wrapped).await

@@ -928,12 +928,9 @@ async fn stream_remote_session_analysis(
             break;
         }
 
-        let result = pool
-            .exec(&host_id, &build_remote_agent_analysis_script(&agent))
+        let (mut rx, join) = pool
+            .exec_streaming(&host_id, &build_remote_agent_analysis_script(&agent))
             .await?;
-        if result.exit_code != 0 && result.stdout.trim().is_empty() {
-            continue;
-        }
 
         let mut batch = Vec::new();
         let mut total_files = 0usize;
@@ -942,11 +939,11 @@ async fn stream_remote_session_analysis(
         let mut low_value_count = 0usize;
         let mut valuable_count = 0usize;
 
-        for line in result.stdout.lines() {
+        while let Some(line) = rx.recv().await {
             if stream_cancelled(cancel_flag) {
                 break;
             }
-            let Some(session) = clawpal_core::sessions::parse_session_analysis_entry_line(line)?
+            let Some(session) = clawpal_core::sessions::parse_session_analysis_entry_line(&line)?
             else {
                 continue;
             };
@@ -976,6 +973,30 @@ async fn stream_remote_session_analysis(
                         done: false,
                     },
                 )?;
+            }
+        }
+
+        // Await the SSH command completion and check for errors
+        match join.await {
+            Ok(Ok((exit_code, stderr))) => {
+                if exit_code != 0 && total_files == 0 {
+                    crate::commands::logs::log_dev(format!(
+                        "[dev][session_stream] remote analysis for agent {} exited with code {}: {}",
+                        agent, exit_code, stderr
+                    ));
+                }
+            }
+            Ok(Err(e)) => {
+                crate::commands::logs::log_dev(format!(
+                    "[dev][session_stream] remote analysis SSH error for agent {}: {}",
+                    agent, e
+                ));
+            }
+            Err(e) => {
+                crate::commands::logs::log_dev(format!(
+                    "[dev][session_stream] remote analysis join error for agent {}: {}",
+                    agent, e
+                ));
             }
         }
 
