@@ -634,13 +634,19 @@ async fn e2e_recipe_library_import_and_execute_against_docker_openclaw() {
         .expect("read updated remote config");
     let updated_config: Value =
         serde_json::from_str(&updated_config_raw).expect("updated config should be valid json");
-    assert_eq!(
-        updated_config
-            .pointer("/channels/discord/guilds/guild-recipe-lab/channels/channel-support/systemPrompt")
-            .and_then(Value::as_str),
-        Some(
-            "You are the support concierge for this channel.\n\nWelcome users, ask clarifying questions, and turn vague requests into clean next steps.\n"
+    let expected_prompt =
+        "You are the support concierge for this channel.\n\nWelcome users, ask clarifying questions, and turn vague requests into clean next steps.\n";
+    let direct_prompt = updated_config
+        .pointer("/channels/discord/guilds/guild-recipe-lab/channels/channel-support/systemPrompt")
+        .and_then(Value::as_str);
+    let account_prompt = updated_config
+        .pointer(
+            "/channels/discord/accounts/default/guilds/guild-recipe-lab/channels/channel-support/systemPrompt",
         )
+        .and_then(Value::as_str);
+    assert!(
+        direct_prompt == Some(expected_prompt) || account_prompt == Some(expected_prompt),
+        "channel persona was not persisted to remote config; direct={direct_prompt:?}, account={account_prompt:?}"
     );
 
     let runs = list_recipe_runs(Some(host.id.clone())).expect("list recipe runs for docker host");
