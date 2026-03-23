@@ -12,7 +12,6 @@ import { api } from "./lib/api";
 import { withGuidance } from "./lib/guidance";
 import { useFont } from "./lib/use-font";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { toast, Toaster } from "sonner";
 import type { Route } from "./lib/routes";
 import type { SshHost } from "./lib/types";
@@ -37,6 +36,7 @@ import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useWorkspaceTabs } from "./hooks/useWorkspaceTabs";
 import { useNavItems } from "./hooks/useNavItems";
 import { PassphraseDialog, SshEditDialog } from "./components/AppDialogs";
+import { SidebarNavButton } from "./components/SidebarNavButton";
 import { SidebarFooter } from "./components/SidebarFooter";
 
 export function App() {
@@ -321,20 +321,10 @@ export function App() {
 
         <nav className="flex flex-col gap-0.5 px-3 flex-1">
           {navItems.map((item) => (
-              <button
-                key={item.key}
-                className={cn(
-                  "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer",
-                  item.active
-                    ? "bg-primary/10 text-primary shadow-sm"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-                onClick={item.onClick}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-                {item.badge}
-              </button>
+            <SidebarNavButton
+              key={item.key}
+              item={item}
+            />
           ))}
 
           <div className="my-3 h-px bg-border/60" />
