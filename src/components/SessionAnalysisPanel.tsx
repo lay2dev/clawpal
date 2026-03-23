@@ -159,7 +159,10 @@ export function SessionAnalysisPanel() {
     setPreviewLoading(false);
     setPreviewTitle("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ua.instanceId, ua.instanceToken, ua.isRemote, ua.isConnected]);
+  // Note: ua.isConnected intentionally excluded — connection flaps should not
+  // reset the entire UI state (modal, analysis results, expanded agents).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ua.instanceId, ua.instanceToken, ua.isRemote]);
 
   useEffect(() => {
     let disposed = false;

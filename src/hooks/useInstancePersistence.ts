@@ -41,6 +41,7 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
 
   const [configVersion, setConfigVersion] = useState(0);
   const [instanceToken, setInstanceToken] = useState(0);
+  const prevActiveInstanceRef = useRef(activeInstance);
   const [persistenceScope, setPersistenceScope] = useState<string | null>("local");
   const [persistenceResolved, setPersistenceResolved] = useState(true);
 
@@ -237,7 +238,14 @@ export function useInstancePersistence(params: UseInstancePersistenceParams) {
     let cancelled = false;
     let nextHome: string | null = null;
     let nextDataDir: string | null = null;
-    setInstanceToken(0);
+    // Only reset token to 0 when the active instance actually changes.
+    // Other dependency changes (e.g. registeredInstances array ref) should
+    // recompute the token without an intermediate 0 that causes UI flicker.
+    const instanceChanged = prevActiveInstanceRef.current !== activeInstance;
+    prevActiveInstanceRef.current = activeInstance;
+    if (instanceChanged) {
+      setInstanceToken(0);
+    }
     const activeRegistered = registeredInstances.find((item) => item.id === activeInstance);
     if (activeInstance === "local" || isRemote) {
       nextHome = null;
