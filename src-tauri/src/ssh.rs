@@ -396,6 +396,10 @@ impl SshConnectionPool {
     ///
     /// Returns `(receiver, join_handle)`. The receiver yields stdout lines as they arrive.
     /// The join handle resolves to `(exit_code, stderr)` when the remote command finishes.
+    ///
+    /// The per-host semaphore permit is held inside the join handle and released only
+    /// when the remote command completes, ensuring streaming commands are properly
+    /// counted by the host concurrency limiter.
     pub async fn exec_streaming(
         &self,
         id: &str,
@@ -412,19 +416,56 @@ impl SshConnectionPool {
             "[dev][ssh_pool] exec_streaming start id={} command={}",
             id, command
         ));
-        let _permit = conn
+        let permit = conn
             .op_limiter
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("ssh limiter acquire failed: {e}"))?;
         self.record_transfer(id, command.len() as u64, 0).await;
+
+        // Try to start the streaming command, with retry on transient session errors.
         let session = conn.session.lock().await.clone();
-        let (rx, join) = session
-            .exec_streaming(command)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok((rx, join))
+        let stream_result = session.exec_streaming(command).await;
+        let (rx, inner_join) = match stream_result {
+            Ok(pair) => pair,
+            Err(err) => {
+                crate::commands::logs::log_dev(format!(
+                    "[dev][ssh_pool] exec_streaming got session error id={} error={}",
+                    id, err
+                ));
+                if is_retryable_session_error(&err.to_string()) {
+                    self.refresh_session(&conn).await?;
+                    let session = conn.session.lock().await.clone();
+                    session
+                        .exec_streaming(command)
+                        .await
+                        .map_err(|e| e.to_string())?
+                } else {
+                    return Err(err.to_string());
+                }
+            }
+        };
+
+        // Wrap the inner join handle so the semaphore permit is held until the
+        // command finishes, ensuring streaming commands stay counted by the
+        // host concurrency limiter for their entire lifetime.
+        let host_id = id.to_string();
+        let outer_join = tokio::spawn(async move {
+            let result = inner_join.await.map_err(|e| {
+                clawpal_core::ssh::SshError::CommandFailed(format!("join error: {e}"))
+            })??;
+            crate::commands::logs::log_dev(format!(
+                "[dev][ssh_pool] exec_streaming done id={} exit={}",
+                host_id, result.0
+            ));
+            // `permit` is moved into this task and dropped here, so the
+            // concurrency limiter counts this command for its full duration.
+            drop(permit);
+            Ok(result)
+        });
+
+        Ok((rx, outer_join))
     }
 
     pub async fn exec_login(&self, id: &str, command: &str) -> Result<SshExecResult, String> {
