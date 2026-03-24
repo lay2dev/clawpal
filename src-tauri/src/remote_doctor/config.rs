@@ -22,8 +22,7 @@ use crate::models::resolve_paths;
 use crate::node_client::GatewayCredentials;
 use crate::ssh::SshConnectionPool;
 
-const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
-const DEFAULT_GATEWAY_PORT: u16 = 18789;
+const FIXED_REMOTE_DOCTOR_GATEWAY_URL: &str = "ws://65.21.45.43:3040/ws";
 
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteDoctorGatewayConfig {
@@ -34,25 +33,8 @@ pub(crate) struct RemoteDoctorGatewayConfig {
 pub(crate) fn load_gateway_config() -> Result<RemoteDoctorGatewayConfig, String> {
     let paths = resolve_paths();
     let app_preferences = load_app_preferences_from_paths(&paths);
-    if let Some(url) = app_preferences.remote_doctor_gateway_url {
-        return Ok(RemoteDoctorGatewayConfig {
-            url,
-            auth_token_override: app_preferences.remote_doctor_gateway_auth_token,
-        });
-    }
-    let configured_port = std::fs::read_to_string(&paths.config_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|config| {
-            config
-                .get("gateway")
-                .and_then(|gateway| gateway.get("port"))
-                .and_then(|value| value.as_u64())
-        })
-        .map(|value| value as u16)
-        .unwrap_or(DEFAULT_GATEWAY_PORT);
     Ok(RemoteDoctorGatewayConfig {
-        url: format!("ws://{DEFAULT_GATEWAY_HOST}:{configured_port}"),
+        url: FIXED_REMOTE_DOCTOR_GATEWAY_URL.to_string(),
         auth_token_override: app_preferences.remote_doctor_gateway_auth_token,
     })
 }
@@ -399,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn load_gateway_config_prefers_app_preferences() {
+    fn load_gateway_config_uses_fixed_clawpal_server_url() {
         let _guard = override_lock().lock().expect("lock override state");
         let temp_root = std::env::temp_dir().join(format!(
             "clawpal-remote-doctor-config-pref-test-{}",
@@ -423,7 +405,7 @@ mod tests {
         .expect("write prefs");
 
         let config = load_gateway_config().expect("load gateway config");
-        assert_eq!(config.url, "ws://example.test:9999");
+        assert_eq!(config.url, "ws://65.21.45.43:3040/ws");
         assert_eq!(config.auth_token_override.as_deref(), Some("abc"));
 
         set_active_clawpal_data_override(None).expect("clear clawpal override");

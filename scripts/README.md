@@ -20,6 +20,8 @@ These scripts mirror the repository CI checks locally without installing system 
 - `scripts/precommit.sh`
   All-in-one script to run the pre-commit checks manually. Supports `--staged` flag.
   Runs frontend CI, Rust CI, and metrics CI before each commit.
+- `scripts/remote-doctor-bootstrap.sh`
+  One-off remote-host bootstrap script that creates the `clawpal-remote-doctor` agent entry, dedicated workspace, and planner bootstrap files under `~/.openclaw`.
 
 All scripts resolve the repo root from their own path and can be run from anywhere inside the worktree.
 

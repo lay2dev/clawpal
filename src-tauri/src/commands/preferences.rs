@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::bug_report::settings::{
     normalize_settings as normalize_bug_report_settings, BugReportSettings,
@@ -65,6 +66,32 @@ fn normalize_remote_doctor_gateway_auth_token(value: Option<String>) -> Option<S
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
+}
+
+const FIXED_REMOTE_DOCTOR_INVITE_EXCHANGE_URL: &str =
+    "http://65.21.45.43:3040/api-keys/exchange";
+
+fn parse_invite_exchange_response(status: u16, body_text: &str) -> Result<String, String> {
+    let payload: Option<Value> = serde_json::from_str(body_text).ok();
+    if status == 200 {
+        let api_key = payload
+            .as_ref()
+            .and_then(|obj| obj.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "apiKey missing in exchange response".to_string())?;
+        return Ok(api_key.to_string());
+    }
+    let error_text = payload
+        .as_ref()
+        .and_then(|obj| obj.get("error"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("HTTP {status}"));
+    Err(error_text)
 }
 
 fn load_stored_preferences_from_paths(paths: &OpenClawPaths) -> StoredAppPreferences {
@@ -174,6 +201,29 @@ pub fn set_remote_doctor_gateway_auth_token_preference(
     prefs.remote_doctor_gateway_auth_token = normalize_remote_doctor_gateway_auth_token(auth_token);
     save_app_preferences_from_paths(&paths, &prefs)?;
     Ok(prefs)
+}
+
+#[tauri::command]
+pub fn exchange_remote_doctor_invite_code(invite_code: String) -> Result<String, String> {
+    let trimmed = invite_code.trim();
+    if trimmed.is_empty() {
+        return Err("inviteCode is required".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("request client init failed: {error}"))?;
+    let response = client
+        .post(FIXED_REMOTE_DOCTOR_INVITE_EXCHANGE_URL)
+        .json(&serde_json::json!({ "inviteCode": trimmed }))
+        .send()
+        .map_err(|error| format!("request failed: {error}"))?;
+    let status = response.status().as_u16();
+    let body_text = response
+        .text()
+        .map_err(|error| format!("response read failed: {error}"))?;
+    parse_invite_exchange_response(status, &body_text)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +406,20 @@ mod tests {
         assert!(app_prefs.remote_doctor_gateway_url.is_none());
         assert!(app_prefs.remote_doctor_gateway_auth_token.is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_invite_exchange_response_returns_api_key_on_success() {
+        let api_key = parse_invite_exchange_response(200, r#"{"apiKey":"abc-123"}"#)
+            .expect("api key should parse");
+        assert_eq!(api_key, "abc-123");
+    }
+
+    #[test]
+    fn parse_invite_exchange_response_returns_error_message() {
+        let error = parse_invite_exchange_response(400, r#"{"error":"invalid invite code"}"#)
+            .expect_err("should parse error");
+        assert_eq!(error, "invalid invite code");
     }
 
     #[test]

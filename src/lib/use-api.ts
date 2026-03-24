@@ -623,6 +623,8 @@ export function useApi() {
         api.testBugReportConnection,
         ["getBugReportStats"],
       ),
+      captureFrontendError: api.captureFrontendError,
+      logAppEvent: api.logAppEvent,
       setSshTransferSpeedUiPreference: withGlobalInvalidation(
         api.setSshTransferSpeedUiPreference,
         ["getAppPreferences"],
@@ -635,6 +637,7 @@ export function useApi() {
         api.setRemoteDoctorGatewayAuthTokenPreference,
         ["getAppPreferences"],
       ),
+      exchangeRemoteDoctorInviteCode: api.exchangeRemoteDoctorInviteCode,
       ensureAccessProfile: api.ensureAccessProfile,
       recordInstallExperience: api.recordInstallExperience,
       openUrl: api.openUrl,

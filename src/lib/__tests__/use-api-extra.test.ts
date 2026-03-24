@@ -180,4 +180,12 @@ describe("remote doctor api bindings", () => {
   test("exposes remote doctor gateway auth token preference binding", () => {
     expect(typeof api.setRemoteDoctorGatewayAuthTokenPreference).toBe("function");
   });
+
+  test("exposes invite exchange binding", () => {
+    expect(typeof api.exchangeRemoteDoctorInviteCode).toBe("function");
+  });
+
+  test("exposes app event logging binding", () => {
+    expect(typeof api.logAppEvent).toBe("function");
+  });
 });

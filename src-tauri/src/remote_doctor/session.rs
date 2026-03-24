@@ -24,6 +24,23 @@ pub(crate) fn append_session_log(session_id: &str, payload: Value) {
     let _ = writeln!(file, "{}", payload);
 }
 
+pub(crate) fn append_gateway_connect_failure_log(
+    session_id: &str,
+    gateway_url: &str,
+    gateway_auth_token_override: bool,
+    error: &str,
+) {
+    append_session_log(
+        session_id,
+        serde_json::json!({
+            "event": "gateway_connect_failed",
+            "gatewayUrl": gateway_url,
+            "gatewayAuthTokenOverride": gateway_auth_token_override,
+            "error": error,
+        }),
+    );
+}
+
 pub(crate) fn emit_session_progress<R: Runtime>(
     app: Option<&AppHandle<R>>,
     session_id: &str,
@@ -165,5 +182,38 @@ mod tests {
         assert_eq!(warning.round, 5);
         assert_eq!(warning.last_plan_kind, "repair");
         assert!(!warning.latest_diagnosis_healthy);
+    }
+
+    #[test]
+    fn append_gateway_connect_failure_log_writes_context() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "clawpal-remote-doctor-connect-failure-log-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let clawpal_dir = temp_root.join(".clawpal");
+        std::fs::create_dir_all(&clawpal_dir).expect("create clawpal dir");
+        set_active_clawpal_data_override(Some(clawpal_dir.to_string_lossy().to_string()))
+            .expect("set clawpal override");
+
+        append_gateway_connect_failure_log(
+            "sess-connect",
+            "ws://65.21.45.43:3040/ws",
+            true,
+            "Connection lost while waiting for response: server closed (close code 1008: invalid token)",
+        );
+
+        set_active_clawpal_data_override(None).expect("clear clawpal override");
+
+        let log_path = clawpal_dir
+            .join("doctor")
+            .join("remote")
+            .join("sess-connect.jsonl");
+        let log_text = std::fs::read_to_string(&log_path).expect("read session log");
+        assert!(log_text.contains("\"event\":\"gateway_connect_failed\""));
+        assert!(log_text.contains("\"gatewayUrl\":\"ws://65.21.45.43:3040/ws\""));
+        assert!(log_text.contains("\"gatewayAuthTokenOverride\":true"));
+        assert!(log_text.contains("invalid token"));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

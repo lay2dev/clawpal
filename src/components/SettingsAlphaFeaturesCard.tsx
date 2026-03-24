@@ -8,26 +8,20 @@ import { DisclosureCard } from "@/components/DisclosureCard";
 
 interface SettingsAlphaFeaturesCardProps {
   showSshTransferSpeedUi: boolean;
-  remoteDoctorGatewayUrl: string;
-  remoteDoctorGatewayAuthToken: string;
-  remoteDoctorGatewayUrlInputRef?: Ref<HTMLInputElement>;
+  remoteDoctorInviteCode: string;
+  remoteDoctorInviteCodeInputRef?: Ref<HTMLInputElement>;
   onSshTransferSpeedUiToggle: (checked: boolean) => void;
-  onRemoteDoctorGatewayUrlChange: (value: string) => void;
-  onRemoteDoctorGatewayUrlSave: () => void;
-  onRemoteDoctorGatewayAuthTokenChange: (value: string) => void;
-  onRemoteDoctorGatewayAuthTokenSave: () => void;
+  onRemoteDoctorInviteCodeChange: (value: string) => void;
+  onRemoteDoctorInviteCodeSave: () => void;
 }
 
 export function SettingsAlphaFeaturesCard({
   showSshTransferSpeedUi,
-  remoteDoctorGatewayUrl,
-  remoteDoctorGatewayAuthToken,
-  remoteDoctorGatewayUrlInputRef,
+  remoteDoctorInviteCode,
+  remoteDoctorInviteCodeInputRef,
   onSshTransferSpeedUiToggle,
-  onRemoteDoctorGatewayUrlChange,
-  onRemoteDoctorGatewayUrlSave,
-  onRemoteDoctorGatewayAuthTokenChange,
-  onRemoteDoctorGatewayAuthTokenSave,
+  onRemoteDoctorInviteCodeChange,
+  onRemoteDoctorInviteCodeSave,
 }: SettingsAlphaFeaturesCardProps) {
   const { t } = useTranslation();
 
@@ -49,51 +43,28 @@ export function SettingsAlphaFeaturesCard({
         {t("settings.alphaEnableSshTransferSpeedUiHint")}
       </p>
       <div className="space-y-2">
-        <Label htmlFor="remote-doctor-gateway-url" className="text-sm font-medium">
-          {t("settings.remoteDoctorGatewayUrl")}
+        <Label htmlFor="remote-doctor-invite-code" className="text-sm font-medium">
+          {t("settings.remoteDoctorInviteCode")}
         </Label>
         <div className="flex gap-2">
           <Input
-            id="remote-doctor-gateway-url"
-            ref={remoteDoctorGatewayUrlInputRef}
-            value={remoteDoctorGatewayUrl}
-            onChange={(event) => onRemoteDoctorGatewayUrlChange(event.target.value)}
-            placeholder={t("settings.remoteDoctorGatewayUrlPlaceholder")}
-          />
-          <button
-            type="button"
-            onClick={onRemoteDoctorGatewayUrlSave}
-            className="inline-flex items-center justify-center rounded-md border px-3 text-sm"
-          >
-            {t("settings.save")}
-          </button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.remoteDoctorGatewayUrlHint")}
-        </p>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="remote-doctor-gateway-auth-token" className="text-sm font-medium">
-          {t("settings.remoteDoctorGatewayAuthToken")}
-        </Label>
-        <div className="flex gap-2">
-          <Input
-            id="remote-doctor-gateway-auth-token"
+            id="remote-doctor-invite-code"
             type="password"
-            value={remoteDoctorGatewayAuthToken}
-            onChange={(event) => onRemoteDoctorGatewayAuthTokenChange(event.target.value)}
-            placeholder={t("settings.remoteDoctorGatewayAuthTokenPlaceholder")}
+            ref={remoteDoctorInviteCodeInputRef}
+            value={remoteDoctorInviteCode}
+            onChange={(event) => onRemoteDoctorInviteCodeChange(event.target.value)}
+            placeholder={t("settings.remoteDoctorInviteCodePlaceholder")}
           />
           <button
             type="button"
-            onClick={onRemoteDoctorGatewayAuthTokenSave}
+            onClick={onRemoteDoctorInviteCodeSave}
             className="inline-flex items-center justify-center rounded-md border px-3 text-sm"
           >
             {t("settings.save")}
           </button>
         </div>
         <p className="text-xs text-muted-foreground">
-          {t("settings.remoteDoctorGatewayAuthTokenHint")}
+          {t("settings.remoteDoctorInviteCodeHint")}
         </p>
       </div>
     </DisclosureCard>

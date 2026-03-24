@@ -50,6 +50,7 @@ pub struct NodeClient {
     inner: Arc<Mutex<Option<NodeClientInner>>>,
     credentials: Arc<Mutex<Option<GatewayCredentials>>>,
     pending_chat_final: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    last_disconnect_reason: Arc<Mutex<Option<String>>>,
 }
 
 impl NodeClient {
@@ -58,6 +59,7 @@ impl NodeClient {
             inner: Arc::new(Mutex::new(None)),
             credentials: Arc::new(Mutex::new(None)),
             pending_chat_final: Arc::new(Mutex::new(None)),
+            last_disconnect_reason: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -72,6 +74,7 @@ impl NodeClient {
 
         // Store credentials for use in handshake
         *self.credentials.lock().await = creds;
+        *self.last_disconnect_reason.lock().await = None;
 
         let (ws_stream, _) = connect_async(url)
             .await
@@ -95,6 +98,7 @@ impl NodeClient {
         let inner_ref = Arc::clone(&self.inner);
         let app_clone = app.clone();
         let chat_ref = Arc::clone(&self.pending_chat_final);
+        let disconnect_reason_ref = Arc::clone(&self.last_disconnect_reason);
 
         tokio::spawn(async move {
             while let Some(msg) = rx.next().await {
@@ -112,20 +116,24 @@ impl NodeClient {
                         Self::handle_message_payload(&bytes, &inner_ref, &chat_ref, &app_clone)
                             .await;
                     }
-                    Ok(Message::Close(_)) => {
+                    Ok(Message::Close(frame)) => {
+                        let reason = format_close_reason(frame.as_ref());
+                        *disconnect_reason_ref.lock().await = Some(reason.clone());
                         let _ = app_clone
-                            .emit("doctor:disconnected", json!({"reason": "server closed"}));
+                            .emit("doctor:disconnected", json!({"reason": reason}));
                         let mut guard = inner_ref.lock().await;
                         *guard = None;
                         break;
                     }
                     Err(e) => {
+                        let reason = format!("websocket error: {e}");
+                        *disconnect_reason_ref.lock().await = Some(reason.clone());
                         let _ = app_clone.emit(
                             "doctor:error",
                             json!({"message": format!("WebSocket error: {e}")}),
                         );
                         let _ = app_clone
-                            .emit("doctor:disconnected", json!({"reason": format!("{e}")}));
+                            .emit("doctor:disconnected", json!({"reason": reason}));
                         let mut guard = inner_ref.lock().await;
                         *guard = None;
                         break;
@@ -203,7 +211,8 @@ impl NodeClient {
                 if let Some(inner) = guard.as_mut() {
                     inner.pending.remove(&id);
                 }
-                Err("Connection lost while waiting for response".into())
+                let reason = self.last_disconnect_reason.lock().await.clone();
+                Err(connection_lost_error_message(reason.as_deref()))
             }
             Err(_) => {
                 let mut guard = self.inner.lock().await;
@@ -538,5 +547,56 @@ fn sign_challenge(
 impl Default for NodeClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn format_close_reason(
+    frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFrame<'_>>,
+) -> String {
+    let Some(frame) = frame else {
+        return "server closed".to_string();
+    };
+    let code = u16::from(frame.code);
+    let reason = frame.reason.trim();
+    if reason.is_empty() {
+        format!("server closed (close code {code})")
+    } else {
+        format!("server closed (close code {code}: {reason})")
+    }
+}
+
+fn connection_lost_error_message(last_disconnect_reason: Option<&str>) -> String {
+    match last_disconnect_reason.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(reason) => format!("Connection lost while waiting for response: {reason}"),
+        None => "Connection lost while waiting for response".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+
+    #[test]
+    fn format_close_reason_includes_code_and_text() {
+        let frame = CloseFrame {
+            code: CloseCode::Policy,
+            reason: "invalid token".into(),
+        };
+
+        assert_eq!(
+            format_close_reason(Some(&frame)),
+            "server closed (close code 1008: invalid token)"
+        );
+    }
+
+    #[test]
+    fn connection_lost_error_message_includes_disconnect_reason() {
+        assert_eq!(
+            connection_lost_error_message(Some(
+                "server closed (close code 1008: invalid token)"
+            )),
+            "Connection lost while waiting for response: server closed (close code 1008: invalid token)"
+        );
     }
 }

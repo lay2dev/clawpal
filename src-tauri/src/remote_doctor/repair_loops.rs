@@ -25,7 +25,7 @@ use super::legacy::{
     run_agent_request_with_bridge,
 };
 use super::plan::request_plan;
-use super::session::append_session_log;
+use super::session::{append_gateway_connect_failure_log, append_session_log};
 use super::types::{
     parse_target_location, PlanKind, RemoteDoctorProtocol, RemoteDoctorRepairResult, TargetLocation,
 };
@@ -67,7 +67,15 @@ pub(crate) async fn start_remote_doctor_repair_impl<R: Runtime>(
     );
 
     let client = NodeClient::new();
-    client.connect(&gateway.url, app.clone(), creds).await?;
+    if let Err(error) = client.connect(&gateway.url, app.clone(), creds).await {
+        append_gateway_connect_failure_log(
+            &session_id,
+            &gateway.url,
+            gateway.auth_token_override.is_some(),
+            &error,
+        );
+        return Err(format!("Remote Doctor gateway connect failed: {error}"));
+    }
     let bridge = BridgeClient::new();
 
     let forced_protocol = configured_remote_doctor_protocol();

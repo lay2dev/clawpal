@@ -1,5 +1,3 @@
-use super::*;
-
 const MAX_LOG_TAIL_LINES: usize = 400;
 
 fn clamp_log_lines(lines: Option<usize>) -> usize {

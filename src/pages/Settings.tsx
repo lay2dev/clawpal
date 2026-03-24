@@ -109,9 +109,8 @@ export function Settings({
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
-  const [remoteDoctorGatewayUrl, setRemoteDoctorGatewayUrl] = useState("");
-  const [remoteDoctorGatewayAuthToken, setRemoteDoctorGatewayAuthToken] = useState("");
-  const remoteDoctorGatewayUrlInputRef = useRef<HTMLInputElement | null>(null);
+  const [remoteDoctorInviteCode, setRemoteDoctorInviteCode] = useState("");
+  const remoteDoctorInviteCodeInputRef = useRef<HTMLInputElement | null>(null);
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -119,7 +118,7 @@ export function Settings({
   const { appVersion, appUpdate, appUpdateChecking, appUpdating, appUpdateProgress, handleCheckForUpdates, handleAppUpdate } = useAppUpdate(hasAppUpdate, onAppUpdateSeen);
 
   const focusRemoteDoctorGatewayUrlInput = useCallback(() => {
-    const input = remoteDoctorGatewayUrlInputRef.current;
+    const input = remoteDoctorInviteCodeInputRef.current;
     if (!input) return;
     input.scrollIntoView({ behavior: "smooth", block: "center" });
     window.setTimeout(() => {
@@ -186,8 +185,6 @@ export function Settings({
     ua.getAppPreferences()
       .then((prefs) => {
         setShowSshTransferSpeedUi(Boolean(prefs.showSshTransferSpeedUi));
-        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
-        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
       })
       .catch((e) => console.error("Failed to load app preferences:", e));
   }, [ua]);
@@ -481,31 +478,76 @@ export function Settings({
       });
   }, [t, ua]);
 
-  const handleRemoteDoctorGatewayUrlSave = useCallback(() => {
-    const nextValue = remoteDoctorGatewayUrl.trim();
-    ua.setRemoteDoctorGatewayUrlPreference(nextValue || null)
-      .then((prefs) => {
-        setRemoteDoctorGatewayUrl(prefs.remoteDoctorGatewayUrl ?? "");
-        toast.success(t("settings.remoteDoctorGatewayUrlSaved"));
-      })
-      .catch((e) => {
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.remoteDoctorGatewayUrlSaveFailed", { error: errorText }));
+  const logRemoteDoctorInviteCodeFailure = useCallback(
+    (errorCode: string, errorMessage: string, inviteCodeLength: number) => {
+      const payload = {
+        event: "remote_doctor_invite_code_exchange_failed",
+        errorCode,
+        errorMessage,
+        inviteCodeLength,
+        gatewayUrl: "ws://65.21.45.43:3040/ws",
+      };
+      console.error("Remote doctor invite code exchange failed:", payload);
+      void ua.logAppEvent(`[invite_exchange][error] ${JSON.stringify(payload)}`).catch((logError) => {
+        if (import.meta.env.DEV) {
+          console.warn("[dev ignored error] logRemoteDoctorInviteCodeFailure", logError);
+        }
       });
-  }, [remoteDoctorGatewayUrl, t, ua]);
+      void ua.captureFrontendError(
+        `Remote doctor invite code exchange failed: ${errorCode}`,
+        JSON.stringify(payload),
+        "error",
+      ).catch((reportError: unknown) => {
+        if (import.meta.env.DEV) {
+          console.warn("[dev ignored error] captureFrontendError invite exchange", reportError);
+        }
+      });
+    },
+    [ua],
+  );
 
-  const handleRemoteDoctorGatewayAuthTokenSave = useCallback(() => {
-    const nextValue = remoteDoctorGatewayAuthToken.trim();
-    ua.setRemoteDoctorGatewayAuthTokenPreference(nextValue || null)
-      .then((prefs) => {
-        setRemoteDoctorGatewayAuthToken(prefs.remoteDoctorGatewayAuthToken ?? "");
-        toast.success(t("settings.remoteDoctorGatewayAuthTokenSaved"));
+  const classifyInviteExchangeFailure = useCallback((error: unknown): { code: string; message: string } => {
+    const text = error instanceof Error ? error.message : String(error);
+    const lower = text.toLowerCase();
+    if (lower.includes("invitecode is required")) {
+      return { code: "INVITE_CODE_REQUIRED", message: "inviteCode is required" };
+    }
+    if (lower.includes("invalid invite code")) {
+      return { code: "INVALID_INVITE_CODE", message: "invalid invite code" };
+    }
+    if (lower.includes("request failed") || lower.includes("timed out") || lower.includes("connect")) {
+      return { code: "NETWORK_ERROR", message: text };
+    }
+    return { code: "EXCHANGE_FAILED", message: text };
+  }, []);
+
+  const handleRemoteDoctorInviteCodeSave = useCallback(() => {
+    const inviteCode = remoteDoctorInviteCode.trim();
+    if (!inviteCode) {
+      logRemoteDoctorInviteCodeFailure("INVITE_CODE_REQUIRED", "inviteCode is required", 0);
+      toast.error(t("settings.inviteCodeRequired"));
+      return;
+    }
+    ua.exchangeRemoteDoctorInviteCode(inviteCode)
+      .then((apiKey) => ua.setRemoteDoctorGatewayAuthTokenPreference(apiKey))
+      .then(() => {
+        setRemoteDoctorInviteCode("");
+        toast.success(t("settings.remoteDoctorInviteCodeSaved"));
       })
-      .catch((e) => {
-        const errorText = e instanceof Error ? e.message : String(e);
-        toast.error(t("settings.remoteDoctorGatewayAuthTokenSaveFailed", { error: errorText }));
+      .catch((error) => {
+        const classified = classifyInviteExchangeFailure(error);
+        logRemoteDoctorInviteCodeFailure(classified.code, classified.message, inviteCode.length);
+        if (classified.code === "INVITE_CODE_REQUIRED") {
+          toast.error(t("settings.inviteCodeRequired"));
+          return;
+        }
+        if (classified.code === "INVALID_INVITE_CODE") {
+          toast.error(t("settings.inviteCodeInvalid"));
+          return;
+        }
+        toast.error(t("settings.inviteCodeExchangeFailed", { error: classified.message }));
       });
-  }, [remoteDoctorGatewayAuthToken, t, ua]);
+  }, [classifyInviteExchangeFailure, logRemoteDoctorInviteCodeFailure, remoteDoctorInviteCode, t, ua]);
 
   return (
     <section>
@@ -737,14 +779,11 @@ export function Settings({
             {showPreferences && (
               <SettingsAlphaFeaturesCard
                 showSshTransferSpeedUi={showSshTransferSpeedUi}
-                remoteDoctorGatewayUrl={remoteDoctorGatewayUrl}
-                remoteDoctorGatewayAuthToken={remoteDoctorGatewayAuthToken}
-                remoteDoctorGatewayUrlInputRef={remoteDoctorGatewayUrlInputRef}
+                remoteDoctorInviteCode={remoteDoctorInviteCode}
+                remoteDoctorInviteCodeInputRef={remoteDoctorInviteCodeInputRef}
                 onSshTransferSpeedUiToggle={handleSshTransferSpeedUiToggle}
-                onRemoteDoctorGatewayUrlChange={setRemoteDoctorGatewayUrl}
-                onRemoteDoctorGatewayUrlSave={handleRemoteDoctorGatewayUrlSave}
-                onRemoteDoctorGatewayAuthTokenChange={setRemoteDoctorGatewayAuthToken}
-                onRemoteDoctorGatewayAuthTokenSave={handleRemoteDoctorGatewayAuthTokenSave}
+                onRemoteDoctorInviteCodeChange={setRemoteDoctorInviteCode}
+                onRemoteDoctorInviteCodeSave={handleRemoteDoctorInviteCodeSave}
               />
             )}
 
@@ -838,6 +877,7 @@ export function Settings({
                       const currentRef = p.authRef.trim();
                       return {
                         ...p,
+                        apiKey: "",
                         authRef: currentRef || defaultEnvAuthRef(p.provider),
                       };
                     }

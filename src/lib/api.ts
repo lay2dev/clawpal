@@ -18,12 +18,16 @@ export const api = {
     invoke("test_bug_report_connection", {}),
   captureFrontendError: (message: string, stack?: string, level?: string) =>
     invoke("capture_frontend_error", { message, stack, level }),
+  logAppEvent: (message: string): Promise<void> =>
+    invoke("log_app_event", { message }),
   setSshTransferSpeedUiPreference: (showUi: boolean): Promise<AppPreferences> =>
     invoke("set_ssh_transfer_speed_ui_preference", { showUi }),
   setRemoteDoctorGatewayUrlPreference: (gatewayUrl: string | null): Promise<AppPreferences> =>
     invoke("set_remote_doctor_gateway_url_preference", { gatewayUrl }),
   setRemoteDoctorGatewayAuthTokenPreference: (authToken: string | null): Promise<AppPreferences> =>
     invoke("set_remote_doctor_gateway_auth_token_preference", { authToken }),
+  exchangeRemoteDoctorInviteCode: (inviteCode: string): Promise<string> =>
+    invoke("exchange_remote_doctor_invite_code", { inviteCode }),
   explainOperationError: (
     instanceId: string,
     operation: string,
