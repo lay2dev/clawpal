@@ -355,6 +355,9 @@ export function Channels({
                       {(() => {
                         const guildWarning = channels.find(
                           (channel) =>
+                            channel.guildName === channel.guildId && Boolean(channel.guildResolutionWarning ?? channel.resolutionWarning),
+                        )?.guildResolutionWarning ?? channels.find(
+                          (channel) =>
                             channel.guildName === channel.guildId && Boolean(channel.resolutionWarning),
                         )?.resolutionWarning;
                         return (
@@ -377,8 +380,8 @@ export function Channels({
                             {ch.channelName === ch.channelId ? (
                               <span className="text-muted-foreground font-mono text-xs">
                                 {ch.channelId}
-                                {ch.resolutionWarning ? (
-                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                {(ch.channelResolutionWarning ?? (ch.channelName === ch.channelId ? ch.resolutionWarning : undefined)) ? (
+                                  <ResolutionWarningIcon message={ch.channelResolutionWarning ?? ch.resolutionWarning!} />
                                 ) : !discordChannelsResolved ? (
                                   <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
                                 ) : null}
@@ -386,8 +389,8 @@ export function Channels({
                             ) : (
                               <>
                                 {ch.channelName}
-                                {ch.resolutionWarning ? (
-                                  <ResolutionWarningIcon message={ch.resolutionWarning} />
+                                {(ch.channelResolutionWarning ?? (ch.channelName === ch.channelId ? ch.resolutionWarning : undefined)) ? (
+                                  <ResolutionWarningIcon message={ch.channelResolutionWarning ?? ch.resolutionWarning!} />
                                 ) : null}
                               </>
                             )}

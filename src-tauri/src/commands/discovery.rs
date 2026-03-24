@@ -236,6 +236,8 @@ pub async fn remote_list_discord_guild_channels(
             channel_name: c.channel_name.clone(),
             default_agent_id: None,
             resolution_warning: None,
+            guild_resolution_warning: None,
+            channel_resolution_warning: None,
         })
         .collect();
     let mut channel_ids: Vec<String> = entries.iter().map(|e| e.channel_id.clone()).collect();
@@ -274,6 +276,8 @@ pub async fn remote_list_discord_guild_channels(
                                 channel_name,
                                 default_agent_id: None,
                                 resolution_warning: None,
+                                guild_resolution_warning: None,
+                                channel_resolution_warning: None,
                             });
                         }
                     }
@@ -319,6 +323,8 @@ pub async fn remote_list_discord_guild_channels(
                         channel_name: channel_id,
                         default_agent_id: None,
                         resolution_warning: None,
+                        guild_resolution_warning: None,
+                        channel_resolution_warning: None,
                     });
                 }
             } else if r.exit_code != 0 {
@@ -504,31 +510,32 @@ pub async fn remote_list_discord_guild_channels(
 
     for entry in &mut entries {
         entry.resolution_warning = None;
+        entry.guild_resolution_warning = None;
+        entry.channel_resolution_warning = None;
         if entry.channel_name == entry.channel_id {
-            if let Some(message) = channel_warning_by_id.get(&entry.channel_id) {
-                append_resolution_warning(&mut entry.resolution_warning, message);
+            let msg = if let Some(message) = channel_warning_by_id.get(&entry.channel_id) {
+                message.clone()
             } else if let Some(message) = shared_channel_warning.as_deref() {
-                append_resolution_warning(&mut entry.resolution_warning, message);
+                message.to_string()
             } else if let Some(message) = config_command_warning.as_deref() {
-                append_resolution_warning(&mut entry.resolution_warning, message);
+                message.to_string()
             } else {
-                append_resolution_warning(
-                    &mut entry.resolution_warning,
-                    "Discord channel name is still unresolved after fallback to cached data.",
-                );
-            }
+                "Discord channel name could not be resolved (network request failed, no cache hit)."
+                    .to_string()
+            };
+            entry.channel_resolution_warning = Some(msg.clone());
+            append_resolution_warning(&mut entry.resolution_warning, &msg);
         }
         if entry.guild_name == entry.guild_id {
-            if let Some(message) = shared_guild_warning.as_deref() {
-                append_resolution_warning(&mut entry.resolution_warning, message);
+            let msg = if let Some(message) = shared_guild_warning.as_deref() {
+                message.to_string()
             } else if let Some(message) = config_command_warning.as_deref() {
-                append_resolution_warning(&mut entry.resolution_warning, message);
+                message.to_string()
             } else {
-                append_resolution_warning(
-                    &mut entry.resolution_warning,
-                    "Discord guild name is still unresolved after fallback to cached data.",
-                );
-            }
+                "Discord guild (server) name could not be resolved (network request failed, no cache hit).".to_string()
+            };
+            entry.guild_resolution_warning = Some(msg.clone());
+            append_resolution_warning(&mut entry.resolution_warning, &msg);
         }
     }
 
@@ -836,6 +843,8 @@ pub async fn list_discord_guild_channels_fast() -> Result<Vec<DiscordGuildChanne
                     channel_name: ch.channel_name.clone(),
                     default_agent_id: None,
                     resolution_warning: None,
+                    guild_resolution_warning: None,
+                    channel_resolution_warning: None,
                 });
             }
         }
@@ -951,6 +960,8 @@ pub async fn remote_list_discord_guild_channels_fast(
                 channel_name: ch.channel_name.clone(),
                 default_agent_id: None,
                 resolution_warning: None,
+                guild_resolution_warning: None,
+                channel_resolution_warning: None,
             });
         }
     }
@@ -1051,6 +1062,8 @@ pub async fn refresh_discord_guild_channels(
                             channel_name: channel_id.clone(),
                             default_agent_id: None,
                             resolution_warning: None,
+                            guild_resolution_warning: None,
+                            channel_resolution_warning: None,
                         });
                     }
                 }
@@ -1114,6 +1127,8 @@ pub async fn refresh_discord_guild_channels(
                     channel_name: channel_id.clone(),
                     default_agent_id: None,
                     resolution_warning: None,
+                    guild_resolution_warning: None,
+                    channel_resolution_warning: None,
                 });
             }
         }
@@ -1178,6 +1193,8 @@ pub async fn refresh_discord_guild_channels(
                             channel_name,
                             default_agent_id: None,
                             resolution_warning: None,
+                            guild_resolution_warning: None,
+                            channel_resolution_warning: None,
                         });
                     }
                 }
@@ -1213,6 +1230,8 @@ pub async fn refresh_discord_guild_channels(
                         channel_name: channel_id,
                         default_agent_id: None,
                         resolution_warning: None,
+                        guild_resolution_warning: None,
+                        channel_resolution_warning: None,
                     });
                 }
             }

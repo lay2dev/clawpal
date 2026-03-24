@@ -543,6 +543,10 @@ pub struct DiscordGuildChannel {
     pub default_agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution_warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_resolution_warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_resolution_warning: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -5845,6 +5849,8 @@ mod discord_directory_parse_tests {
                 channel_name: "chan-1".into(),
                 default_agent_id: None,
                 resolution_warning: None,
+                guild_resolution_warning: None,
+                channel_resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "1".into(),
@@ -5853,6 +5859,8 @@ mod discord_directory_parse_tests {
                 channel_name: "chan-2".into(),
                 default_agent_id: None,
                 resolution_warning: None,
+                guild_resolution_warning: None,
+                channel_resolution_warning: None,
             },
             DiscordGuildChannel {
                 guild_id: "2".into(),
@@ -5861,6 +5869,8 @@ mod discord_directory_parse_tests {
                 channel_name: "chan-3".into(),
                 default_agent_id: None,
                 resolution_warning: None,
+                guild_resolution_warning: None,
+                channel_resolution_warning: None,
             },
         ];
         let text = serde_json::to_string(&payload).expect("serialize payload");
