@@ -85,14 +85,29 @@ export function mergeDiscordGuildChannels(
       isResolvedName(channel.guildName, channel.guildId)
       && isResolvedName(channel.channelName, channel.channelId);
 
+    const mergedGuildName = pickRicherName(existing.guildName, channel.guildName, existing.guildId);
+    const mergedChannelName = pickRicherName(existing.channelName, channel.channelName, existing.channelId);
+    // Clear warning if the merged result has resolved names (e.g. from cache),
+    // even if the backend reported a warning because the network call failed.
+    const mergedFullyResolved =
+      isResolvedName(mergedGuildName, existing.guildId)
+      && isResolvedName(mergedChannelName, existing.channelId);
+
     merged.set(key, {
       ...existing,
-      guildName: pickRicherName(existing.guildName, channel.guildName, existing.guildId),
-      channelName: pickRicherName(existing.channelName, channel.channelName, existing.channelId),
+      guildName: mergedGuildName,
+      channelName: mergedChannelName,
       defaultAgentId: channel.defaultAgentId ?? existing.defaultAgentId,
-      resolutionWarning:
-        channel.resolutionWarning
-        ?? (incomingResolved ? undefined : existing.resolutionWarning),
+      resolutionWarning: mergedFullyResolved
+        ? undefined
+        : (channel.resolutionWarning
+          ?? (incomingResolved ? undefined : existing.resolutionWarning)),
+      guildResolutionWarning: isResolvedName(mergedGuildName, existing.guildId)
+        ? undefined
+        : (channel.guildResolutionWarning ?? existing.guildResolutionWarning),
+      channelResolutionWarning: isResolvedName(mergedChannelName, existing.channelId)
+        ? undefined
+        : (channel.channelResolutionWarning ?? existing.channelResolutionWarning),
     });
   }
 

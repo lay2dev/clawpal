@@ -44,6 +44,8 @@ export interface DiscordGuildChannel {
   channelName: string;
   defaultAgentId?: string;
   resolutionWarning?: string;
+  guildResolutionWarning?: string;
+  channelResolutionWarning?: string;
 }
 
 export interface RecipeParam {
