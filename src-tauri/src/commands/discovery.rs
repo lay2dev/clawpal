@@ -46,11 +46,13 @@ pub async fn remote_list_discord_guild_channels(
             }
         });
 
-    // Extract bot token: top-level first, then fall back to first account token
+    // Check whether a bot token is configured (used to decide whether to attempt
+    // Discord API resolution). The actual token value is never read — API calls
+    // are proxied through SSH so the token stays on the remote host.
     let bot_token = discord_cfg
         .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
         .and_then(Value::as_str)
-        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
         .or_else(|| {
             discord_cfg
                 .and_then(|d| d.get("accounts"))
@@ -60,7 +62,6 @@ pub async fn remote_list_discord_guild_channels(
                         acct.get("token")
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
                     })
                 })
         });
@@ -92,45 +93,55 @@ pub async fn remote_list_discord_guild_channels(
     unresolved_guild_ids.sort();
     unresolved_guild_ids.dedup();
 
-    // Fallback A: if we have token + guild ids, fetch channels from Discord REST directly.
-    // This avoids hard-failing when CLI rejects config due non-critical schema drift.
+    // Fallback A: if we have token + guild ids, fetch channels via Discord REST on the REMOTE host.
+    // The bot token never leaves the remote host — the API call is proxied through SSH.
     if channel_ids.is_empty() {
         let configured_guild_ids = collect_discord_config_guild_ids(discord_cfg);
-        if let Some(token) = bot_token.clone() {
-            let rest_entries = tokio::task::spawn_blocking(move || {
-                let mut out: Vec<DiscordGuildChannel> = Vec::new();
-                for guild_id in configured_guild_ids {
-                    if let Ok(channels) = fetch_discord_guild_channels(&token, &guild_id) {
-                        for (channel_id, channel_name) in channels {
-                            if out
-                                .iter()
-                                .any(|e| e.guild_id == guild_id && e.channel_id == channel_id)
-                            {
-                                continue;
+        if bot_token.is_some() && !configured_guild_ids.is_empty() {
+            for guild_id in &configured_guild_ids {
+                let cmd = format!(
+                    "curl -sf -H \"Authorization: Bot $(openclaw config get channels.discord.botToken --raw 2>/dev/null || openclaw config get channels.discord.token --raw 2>/dev/null)\" \
+                     https://discord.com/api/v10/guilds/{}/channels 2>/dev/null",
+                    guild_id
+                );
+                if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
+                    if r.exit_code == 0 && !r.stdout.trim().is_empty() {
+                        if let Ok(arr) = serde_json::from_str::<Vec<Value>>(r.stdout.trim()) {
+                            for item in &arr {
+                                let ch_type =
+                                    item.get("type").and_then(Value::as_u64).unwrap_or(0);
+                                if ch_type == 4 || ch_type == 2 || ch_type == 13 {
+                                    continue;
+                                }
+                                let id = item
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty());
+                                let name = item
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty());
+                                if let (Some(channel_id), Some(channel_name)) = (id, name) {
+                                    if entries.iter().any(|e| {
+                                        e.guild_id == *guild_id && e.channel_id == channel_id
+                                    }) {
+                                        continue;
+                                    }
+                                    channel_ids.push(channel_id.clone());
+                                    entries.push(DiscordGuildChannel {
+                                        guild_id: guild_id.clone(),
+                                        guild_name: guild_id.clone(),
+                                        channel_id,
+                                        channel_name,
+                                        default_agent_id: None,
+                                    });
+                                }
                             }
-                            out.push(DiscordGuildChannel {
-                                guild_id: guild_id.clone(),
-                                guild_name: guild_id.clone(),
-                                channel_id,
-                                channel_name,
-                                default_agent_id: None,
-                            });
                         }
                     }
                 }
-                out
-            })
-            .await
-            .unwrap_or_default();
-            for entry in rest_entries {
-                if entries
-                    .iter()
-                    .any(|e| e.guild_id == entry.guild_id && e.channel_id == entry.channel_id)
-                {
-                    continue;
-                }
-                channel_ids.push(entry.channel_id.clone());
-                entries.push(entry);
             }
         }
     }
@@ -184,25 +195,30 @@ pub async fn remote_list_discord_guild_channels(
         }
     }
 
-    // Resolve guild names via Discord REST API (guild names can't be resolved by openclaw CLI)
-    // Must use spawn_blocking because reqwest::blocking panics in async context
-    if let Some(token) = bot_token {
-        if !unresolved_guild_ids.is_empty() {
-            let guild_name_map = tokio::task::spawn_blocking(move || {
-                let mut map = std::collections::HashMap::new();
-                for gid in &unresolved_guild_ids {
-                    if let Ok(name) = fetch_discord_guild_name(&token, gid) {
-                        map.insert(gid.clone(), name);
+    // Resolve guild names via Discord REST API on the REMOTE host.
+    // Bot token stays on the remote — we proxy the request through SSH + curl.
+    if bot_token.is_some() && !unresolved_guild_ids.is_empty() {
+        let mut guild_name_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for gid in &unresolved_guild_ids {
+            let cmd = format!(
+                "curl -sf -H \"Authorization: Bot $(openclaw config get channels.discord.botToken --raw 2>/dev/null || openclaw config get channels.discord.token --raw 2>/dev/null)\" \
+                 https://discord.com/api/v10/guilds/{} 2>/dev/null",
+                gid
+            );
+            if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
+                if r.exit_code == 0 && !r.stdout.trim().is_empty() {
+                    if let Ok(body) = serde_json::from_str::<Value>(r.stdout.trim()) {
+                        if let Some(name) = body.get("name").and_then(Value::as_str) {
+                            guild_name_map.insert(gid.clone(), name.to_string());
+                        }
                     }
                 }
-                map
-            })
-            .await
-            .unwrap_or_default();
-            for entry in &mut entries {
-                if let Some(name) = guild_name_map.get(&entry.guild_id) {
-                    entry.guild_name = name.clone();
-                }
+            }
+        }
+        for entry in &mut entries {
+            if let Some(name) = guild_name_map.get(&entry.guild_id) {
+                entry.guild_name = name.clone();
             }
         }
     }
