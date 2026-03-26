@@ -1,5 +1,19 @@
 use super::*;
 
+/// Shell helper that resolves a Discord bot token on the remote host.
+/// Tries: botToken → token → first non-empty account token.
+/// The token never leaves the remote — it's resolved inline in the shell.
+const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; openclaw config get channels.discord.accounts --json 2>/dev/null | python3 -c 'import sys,json; accts=json.load(sys.stdin); [print(v["token"]) or sys.exit(0) for v in (accts.values() if isinstance(accts,dict) else []) if v.get("token")]' 2>/dev/null; };"#;
+
+/// Escape a string for safe interpolation into a remote shell command.
+/// Only allows alphanumeric chars, hyphens, and underscores (sufficient for Discord IDs).
+fn shell_escape_strict(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect()
+}
+
+
 #[tauri::command]
 pub async fn remote_list_discord_guild_channels(
     pool: State<'_, SshConnectionPool>,
@@ -99,11 +113,14 @@ pub async fn remote_list_discord_guild_channels(
         let configured_guild_ids = collect_discord_config_guild_ids(discord_cfg);
         if bot_token.is_some() && !configured_guild_ids.is_empty() {
             for guild_id in &configured_guild_ids {
+                let safe_gid = shell_escape_strict(guild_id);
                 let cmd = format!(
-                    "curl -sf -H \"Authorization: Bot $(openclaw config get channels.discord.botToken --raw 2>/dev/null || openclaw config get channels.discord.token --raw 2>/dev/null)\" \
+                    "curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
                      https://discord.com/api/v10/guilds/{}/channels 2>/dev/null",
-                    guild_id
+                    safe_gid
                 );
+                // Prepend the token-lookup helper function
+                let cmd = format!("{} {}", REMOTE_DISCORD_TOKEN_HELPER, cmd);
                 if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
                     if r.exit_code == 0 && !r.stdout.trim().is_empty() {
                         if let Ok(arr) = serde_json::from_str::<Vec<Value>>(r.stdout.trim()) {
@@ -200,11 +217,14 @@ pub async fn remote_list_discord_guild_channels(
         let mut guild_name_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for gid in &unresolved_guild_ids {
+            let safe_gid = shell_escape_strict(gid);
             let cmd = format!(
-                "curl -sf -H \"Authorization: Bot $(openclaw config get channels.discord.botToken --raw 2>/dev/null || openclaw config get channels.discord.token --raw 2>/dev/null)\" \
+                "curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
                  https://discord.com/api/v10/guilds/{} 2>/dev/null",
-                gid
+                safe_gid
             );
+            // Prepend the token-lookup helper function
+            let cmd = format!("{} {}", REMOTE_DISCORD_TOKEN_HELPER, cmd);
             if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
                 if r.exit_code == 0 && !r.stdout.trim().is_empty() {
                     if let Ok(body) = serde_json::from_str::<Value>(r.stdout.trim()) {
