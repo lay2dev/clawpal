@@ -292,8 +292,7 @@ pub async fn remote_list_discord_guild_channels(
                     if r.exit_code == 0 && !r.stdout.trim().is_empty() {
                         if let Ok(arr) = serde_json::from_str::<Vec<Value>>(r.stdout.trim()) {
                             for item in &arr {
-                                let ch_type =
-                                    item.get("type").and_then(Value::as_u64).unwrap_or(0);
+                                let ch_type = item.get("type").and_then(Value::as_u64).unwrap_or(0);
                                 if ch_type == 4 || ch_type == 2 || ch_type == 13 {
                                     continue;
                                 }
