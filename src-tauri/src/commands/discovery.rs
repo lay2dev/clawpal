@@ -3,7 +3,7 @@ use super::*;
 /// Shell helper that resolves a Discord bot token on the remote host.
 /// Tries: botToken → token → first non-empty account token.
 /// The token never leaves the remote — it's resolved inline in the shell.
-const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.accounts --json 2>/dev/null | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"token"[[:space:]]*:[[:space:]]*"//;s/"$//'); [ -n "$t" ] && echo "$t"; };"#;
+const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; for t in $(openclaw config get channels.discord.accounts --json 2>/dev/null | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"//;s/"$//'); do [ -n "$t" ] && echo "$t" && return; done; };"#;
 
 /// Escape a string for safe interpolation into a remote shell command.
 /// Only allows alphanumeric chars, hyphens, and underscores (sufficient for Discord IDs).
