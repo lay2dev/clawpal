@@ -3,14 +3,22 @@ use super::*;
 /// Shell helper that resolves a Discord bot token on the remote host.
 /// Tries: botToken → token → first non-empty account token.
 /// The token never leaves the remote — it's resolved inline in the shell.
-const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; openclaw config get channels.discord.accounts --json 2>/dev/null | python3 -c 'import sys,json; accts=json.load(sys.stdin); [print(v["token"]) or sys.exit(0) for v in (accts.values() if isinstance(accts,dict) else []) if v.get("token")]' 2>/dev/null; };"#;
+const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.accounts --json 2>/dev/null | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"token"[[:space:]]*:[[:space:]]*"//;s/"$//'); [ -n "$t" ] && echo "$t"; };"#;
 
 /// Escape a string for safe interpolation into a remote shell command.
 /// Only allows alphanumeric chars, hyphens, and underscores (sufficient for Discord IDs).
-fn shell_escape_strict(s: &str) -> String {
-    s.chars()
+/// Sanitize a string for safe shell interpolation. Returns None if the
+/// sanitized result is empty (invalid ID — caller should skip).
+fn shell_escape_strict(s: &str) -> Option<String> {
+    let escaped: String = s
+        .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect()
+        .collect();
+    if escaped.is_empty() {
+        None
+    } else {
+        Some(escaped)
+    }
 }
 
 
@@ -113,7 +121,10 @@ pub async fn remote_list_discord_guild_channels(
         let configured_guild_ids = collect_discord_config_guild_ids(discord_cfg);
         if bot_token.is_some() && !configured_guild_ids.is_empty() {
             for guild_id in &configured_guild_ids {
-                let safe_gid = shell_escape_strict(guild_id);
+                let safe_gid = match shell_escape_strict(guild_id) {
+                    Some(id) => id,
+                    None => continue,
+                };
                 let cmd = format!(
                     "curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
                      https://discord.com/api/v10/guilds/{}/channels 2>/dev/null",
@@ -217,7 +228,10 @@ pub async fn remote_list_discord_guild_channels(
         let mut guild_name_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for gid in &unresolved_guild_ids {
-            let safe_gid = shell_escape_strict(gid);
+            let safe_gid = match shell_escape_strict(gid) {
+                Some(id) => id,
+                None => continue,
+            };
             let cmd = format!(
                 "curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
                  https://discord.com/api/v10/guilds/{} 2>/dev/null",
