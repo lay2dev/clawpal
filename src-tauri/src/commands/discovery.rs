@@ -9,6 +9,25 @@ fn unix_now_secs() -> u64 {
         .as_secs()
 }
 
+/// Shell helper that resolves a Discord bot token on the remote host.
+/// Tries: botToken → token → first non-empty account token.
+/// The token never leaves the remote — it's resolved inline in the shell.
+const REMOTE_DISCORD_TOKEN_HELPER: &str = r#"_oc_discord_token() { local t; t=$(openclaw config get channels.discord.botToken --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; t=$(openclaw config get channels.discord.token --raw 2>/dev/null); [ -n "$t" ] && echo "$t" && return; for t in $(openclaw config get channels.discord.accounts --json 2>/dev/null | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"//;s/"$//'); do [ -n "$t" ] && echo "$t" && return; done; };"#;
+
+/// Sanitize a string for safe shell interpolation. Returns None if the
+/// sanitized result is empty (invalid ID — caller should skip).
+fn shell_escape_strict(s: &str) -> Option<String> {
+    let escaped: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if escaped.is_empty() {
+        None
+    } else {
+        Some(escaped)
+    }
+}
+
 fn extract_discord_bot_token(discord_cfg: Option<&Value>) -> Option<String> {
     discord_cfg
         .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
@@ -180,7 +199,8 @@ pub async fn remote_list_discord_guild_channels(
             }
         });
 
-    // Extract bot token: top-level first, then fall back to first account token
+    // Check if a bot token is configured (used as boolean gate only — actual
+    // token value stays on the remote host, resolved inline via SSH)
     let bot_token = discord_cfg
         .and_then(|d| d.get("botToken").or_else(|| d.get("token")))
         .and_then(Value::as_str)
@@ -253,48 +273,62 @@ pub async fn remote_list_discord_guild_channels(
     let mut shared_channel_warning: Option<String> = None;
     let mut shared_guild_warning: Option<String> = None;
 
-    // Fallback A: if we have token + guild ids, fetch channels from Discord REST directly.
-    // This avoids hard-failing when CLI rejects config due non-critical schema drift.
+    // Fallback A: if we have token + guild ids, fetch channels via Discord REST on the REMOTE host.
+    // The bot token never leaves the remote host — the API call is proxied through SSH.
     if channel_ids.is_empty() {
         let configured_guild_ids = collect_discord_config_guild_ids(discord_cfg);
-        if let Some(token) = bot_token.clone() {
-            let rest_entries = tokio::task::spawn_blocking(move || {
-                let mut out: Vec<DiscordGuildChannel> = Vec::new();
-                for guild_id in configured_guild_ids {
-                    if let Ok(channels) = fetch_discord_guild_channels(&token, &guild_id) {
-                        for (channel_id, channel_name) in channels {
-                            if out
-                                .iter()
-                                .any(|e| e.guild_id == guild_id && e.channel_id == channel_id)
-                            {
-                                continue;
+        if bot_token.is_some() && !configured_guild_ids.is_empty() {
+            for guild_id in &configured_guild_ids {
+                let safe_gid = match shell_escape_strict(guild_id) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let cmd = format!(
+                    "{} curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
+                     https://discord.com/api/v10/guilds/{}/channels 2>/dev/null",
+                    REMOTE_DISCORD_TOKEN_HELPER, safe_gid
+                );
+                if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
+                    if r.exit_code == 0 && !r.stdout.trim().is_empty() {
+                        if let Ok(arr) = serde_json::from_str::<Vec<Value>>(r.stdout.trim()) {
+                            for item in &arr {
+                                let ch_type =
+                                    item.get("type").and_then(Value::as_u64).unwrap_or(0);
+                                if ch_type == 4 || ch_type == 2 || ch_type == 13 {
+                                    continue;
+                                }
+                                let id = item
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty());
+                                let name = item
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty());
+                                if let (Some(channel_id), Some(channel_name)) = (id, name) {
+                                    if entries.iter().any(|e| {
+                                        e.guild_id == *guild_id && e.channel_id == channel_id
+                                    }) {
+                                        continue;
+                                    }
+                                    channel_ids.push(channel_id.clone());
+                                    entries.push(DiscordGuildChannel {
+                                        guild_id: guild_id.clone(),
+                                        guild_name: guild_id.clone(),
+                                        channel_id,
+                                        channel_name,
+                                        default_agent_id: None,
+                                        resolution_warning: None,
+                                        guild_resolution_warning: None,
+                                        channel_resolution_warning: None,
+                                    });
+                                }
                             }
-                            out.push(DiscordGuildChannel {
-                                guild_id: guild_id.clone(),
-                                guild_name: guild_id.clone(),
-                                channel_id,
-                                channel_name,
-                                default_agent_id: None,
-                                resolution_warning: None,
-                                guild_resolution_warning: None,
-                                channel_resolution_warning: None,
-                            });
                         }
                     }
                 }
-                out
-            })
-            .await
-            .unwrap_or_default();
-            for entry in rest_entries {
-                if entries
-                    .iter()
-                    .any(|e| e.guild_id == entry.guild_id && e.channel_id == entry.channel_id)
-                {
-                    continue;
-                }
-                channel_ids.push(entry.channel_id.clone());
-                entries.push(entry);
             }
         }
     }
@@ -469,26 +503,35 @@ pub async fn remote_list_discord_guild_channels(
             })
             .collect();
 
-        if let Some(token) = bot_token {
-            if !needs_rest.is_empty() {
-                let guild_name_map = tokio::task::spawn_blocking(move || {
-                    let mut map = std::collections::HashMap::new();
-                    for gid in &needs_rest {
-                        if let Ok(name) = fetch_discord_guild_name(&token, gid) {
-                            map.insert(gid.clone(), name);
+        if bot_token.is_some() && !needs_rest.is_empty() {
+            let mut guild_name_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for gid in &needs_rest {
+                let safe_gid = match shell_escape_strict(gid) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let cmd = format!(
+                    "{} curl -sf --max-time 8 -H \"Authorization: Bot $(_oc_discord_token)\" \
+                     https://discord.com/api/v10/guilds/{} 2>/dev/null",
+                    REMOTE_DISCORD_TOKEN_HELPER, safe_gid
+                );
+                if let Ok(r) = pool.exec_login(&host_id, &cmd).await {
+                    if r.exit_code == 0 && !r.stdout.trim().is_empty() {
+                        if let Ok(body) = serde_json::from_str::<Value>(r.stdout.trim()) {
+                            if let Some(name) = body.get("name").and_then(Value::as_str) {
+                                guild_name_map.insert(gid.clone(), name.to_string());
+                            }
                         }
                     }
-                    map
-                })
-                .await
-                .unwrap_or_default();
-                for (gid, name) in &guild_name_map {
-                    id_cache.put_guild(gid.clone(), name.clone(), now_secs);
                 }
-                for entry in &mut entries {
-                    if let Some(name) = guild_name_map.get(&entry.guild_id) {
-                        entry.guild_name = name.clone();
-                    }
+            }
+            for (gid, name) in &guild_name_map {
+                id_cache.put_guild(gid.clone(), name.clone(), now_secs);
+            }
+            for entry in &mut entries {
+                if let Some(name) = guild_name_map.get(&entry.guild_id) {
+                    entry.guild_name = name.clone();
                 }
             }
         } else if !needs_rest.is_empty() {
