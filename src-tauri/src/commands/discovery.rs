@@ -21,7 +21,6 @@ fn shell_escape_strict(s: &str) -> Option<String> {
     }
 }
 
-
 #[tauri::command]
 pub async fn remote_list_discord_guild_channels(
     pool: State<'_, SshConnectionPool>,
