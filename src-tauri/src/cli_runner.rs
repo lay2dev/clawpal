@@ -107,7 +107,18 @@ pub async fn run_openclaw_remote_with_env(
     env: Option<&HashMap<String, String>>,
 ) -> Result<CliOutput, String> {
     let cmd_str = build_remote_openclaw_command(args, env);
-    let result = pool.exec_login(host_id, &cmd_str).await?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        pool.exec_login(host_id, &cmd_str),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Remote command timed out after 30s: openclaw {}",
+            args.join(" ")
+        )
+    })?
+    .map_err(|e| e.to_string())?;
     Ok(CliOutput {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -3187,17 +3198,11 @@ pub async fn remote_apply_queued_commands_with_services(
     }
 
     queues.clear(&host_id);
-    {
-        let pool_clone = pool.clone();
-        let host_clone = host_id.clone();
-        tokio::spawn(async move {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
-                pool_clone.exec_login(&host_clone, "openclaw gateway restart"),
-            )
-            .await;
-        });
-    }
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        pool.exec_login(&host_id, "openclaw gateway restart"),
+    )
+    .await;
 
     Ok(ApplyQueueResult {
         ok: true,
