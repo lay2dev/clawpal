@@ -113,9 +113,14 @@ export function PendingChangesBar({ onApplied, onDiscarded, showToast }: Pending
   const handleApply = useCallback(() => {
     setApplying(true);
     setApplyError("");
+    const safetyTimeout = setTimeout(() => {
+      setApplying(false);
+      refreshCount();
+    }, 30_000);
     api
       .applyQueuedCommands()
       .then((result) => {
+        clearTimeout(safetyTimeout);
         if (result.ok) {
           setShowPreview(false);
           setExpanded(false);
@@ -131,7 +136,10 @@ export function PendingChangesBar({ onApplied, onDiscarded, showToast }: Pending
           }
         }
       })
-      .catch((e) => setApplyError(String(e)))
+      .catch((e) => {
+        clearTimeout(safetyTimeout);
+        setApplyError(String(e));
+      })
       .finally(() => setApplying(false));
   }, [api, refreshCount, showToast, onApplied, t]);
 

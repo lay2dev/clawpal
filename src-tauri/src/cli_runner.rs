@@ -3187,7 +3187,17 @@ pub async fn remote_apply_queued_commands_with_services(
     }
 
     queues.clear(&host_id);
-    let _ = pool.exec_login(&host_id, "openclaw gateway restart").await;
+    {
+        let pool_clone = pool.clone();
+        let host_clone = host_id.clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                pool_clone.exec_login(&host_clone, "openclaw gateway restart"),
+            )
+            .await;
+        });
+    }
 
     Ok(ApplyQueueResult {
         ok: true,
