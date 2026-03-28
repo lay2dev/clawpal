@@ -3,7 +3,7 @@
   "nav.recipes": "菜谱",
   "nav.channels": "频道",
   "nav.history": "历史",
-  "nav.doctor": "\uD83E\uDD9E help \uD83E\uDD9E",
+  "nav.doctor": "🦞 help 🦞",
   "nav.sessions": "会话管理",
   "nav.orchestrator": "编排器",
   "nav.settings": "设置",
@@ -11,7 +11,6 @@
   "nav.context": "上下文",
   "nav.website": "官网",
   "nav.chat": "聊天",
-
   "config.pendingChanges": "待应用变更",
   "config.applyChanges": "应用变更",
   "config.discard": "放弃",
@@ -27,7 +26,6 @@
   "config.discardFailed": "放弃失败：{{error}}",
   "config.sshFailed": "SSH 连接失败：{{error}}",
   "config.noRecipeSelected": "未选择菜谱。",
-
   "home.title": "首页",
   "home.status": "状态",
   "home.health": "健康状态",
@@ -128,7 +126,6 @@
   "installChat.gatewayLogsApp": "Gateway 日志（应用）",
   "installChat.gatewayLogsError": "Gateway 日志（错误）",
   "installChat.diagnosticSourceRemote": "远程（{{hostId}}）",
-
   "install.docker.setupFailed": "Docker 安装失败",
   "install.docker.precheck.summary": "Docker 预检完成",
   "install.docker.precheck.details": "Docker、Docker Compose 和 git 均可用",
@@ -138,7 +135,6 @@
   "install.docker.init.details": "已构建 OpenClaw Docker 镜像 (openclaw:local)",
   "install.docker.verify.summary": "Docker 验证完成",
   "install.docker.verify.details": "Docker Compose 配置和本地镜像验证通过",
-
   "install.local.precheck.summary": "本地预检完成",
   "install.local.precheck.failed": "本地预检失败",
   "install.local.precheck.detailsFound": "检测到本地已安装 OpenClaw",
@@ -150,7 +146,6 @@
   "install.local.init.failed": "本地初始化失败",
   "install.local.init.details": "已初始化 OpenClaw 目录",
   "install.local.verify.summary": "本地验证完成",
-
   "install.ssh.precheck.summary": "远程 SSH 预检完成",
   "install.ssh.precheck.failed": "远程 SSH 预检失败",
   "install.ssh.precheck.detailsFound": "检测到远程主机已安装 OpenClaw",
@@ -164,7 +159,6 @@
   "install.ssh.init.details": "已初始化远程主机 ~/.openclaw 目录",
   "install.ssh.verify.summary": "远程 SSH 验证完成",
   "install.ssh.verify.failed": "远程 SSH 验证失败",
-
   "install.wsl2.precheck.summary": "WSL2 预检完成",
   "install.wsl2.install.summary": "WSL2 安装完成",
   "install.wsl2.init.summary": "WSL2 初始化完成",
@@ -180,7 +174,6 @@
   "home.deleteBackupFailed": "删除失败：{{error}}",
   "home.remoteReadFailed": "无法读取远程 OpenClaw 实例：{{error}}",
   "home.remoteAgentsFailed": "无法加载远程 Agent：{{error}}",
-
   "settings.title": "设置",
   "settings.oauthHint": "对于 OAuth 提供商，你可以在“添加配置”里直接完成授权（开始 OAuth -> 粘贴回调 URL/授权码）。仍然支持通过 CLI 登录。",
   "settings.oauthHintSuffix": "通过 CLI 创建的配置将显示在右侧列表中。",
@@ -359,8 +352,7 @@
   "settings.bugReportStatsLastHour": "最近一小时发送：{{count}}",
   "settings.bugReportStatsDropped": "限流丢弃：{{count}}",
   "settings.bugReportStatsLastSent": "最近发送：{{value}}",
-
-  "doctor.title": "\uD83E\uDD9E help \uD83E\uDD9E",
+  "doctor.title": "🦞 help 🦞",
   "doctor.healthScore": "健康评分：{{score}}",
   "doctor.healthSummary": "健康度: {{score}}",
   "doctor.fix": "修复",
@@ -388,8 +380,8 @@
   "doctor.failedLoadRemoteSessions": "加载远程会话文件失败",
   "doctor.filesCount": "{{count}} 个文件（{{size}}）",
   "doctor.noSessionFiles": "未找到会话文件。",
-  "doctor.collapse": "\u25B2 折叠",
-  "doctor.details": "\u25BC 详情",
+  "doctor.collapse": "▲ 折叠",
+  "doctor.details": "▼ 详情",
   "doctor.empty": "{{count}} 个空会话",
   "doctor.lowValue": "{{count}} 个低价值",
   "doctor.valuable": "{{count}} 个有价值",
@@ -602,7 +594,6 @@
   "doctor.fullAutoWarning": "全自动模式下，Agent 发出的所有命令将立即执行，无需你的审批。这包括写入操作和任意 Shell 命令。请仅在信任 Agent 来源时启用。",
   "doctor.fullAutoConfirm": "启用",
   "doctor.cancel": "取消",
-
   "orchestrator.title": "Recipe 活动",
   "orchestrator.description": "查看每个 recipe 改了什么、什么时候运行，以及应用到了哪个环境。",
   "orchestrator.scope.current": "这个环境",
@@ -630,7 +621,6 @@
   "orchestrator.statusCompleted": "已完成",
   "orchestrator.statusNeedsAttention": "需要注意",
   "orchestrator.statusInProgress": "进行中",
-
   "history.title": "历史",
   "history.rollback": "回滚",
   "history.reverted": "已恢复 {{details}}",
@@ -654,7 +644,6 @@
   "history.runArtifacts": "产物",
   "history.runClaims": "资源声明",
   "history.sourceTrace": "来源追踪",
-
   "channels.title": "频道",
   "channels.noChannels": "未配置频道。请在 OpenClaw 配置中添加频道插件，然后刷新查看。",
   "channels.refresh": "刷新",
@@ -667,7 +656,6 @@
   "channels.mainDefault": "main（默认）",
   "channels.defaultModel": "默认模型",
   "channels.newAgent": "+ 新建 Agent...",
-
   "recipes.title": "菜谱",
   "recipes.sourceLabel": "Recipe 来源",
   "recipes.import": "导入",
@@ -821,7 +809,6 @@
   "recipeStudio.saveFailed": "保存 recipe draft 失败：{{error}}",
   "recipeStudio.deleteSuccess": "已删除工作区 recipe：{{slug}}",
   "recipeStudio.deleteFailed": "删除工作区 recipe 失败：{{error}}",
-
   "cook.recipeNotFound": "未找到菜谱",
   "cook.next": "下一步",
   "cook.skippedEmpty": "（已跳过 — 参数为空）",
@@ -914,14 +901,12 @@
   "cook.progressChecksBoth": "正在运行鉴权和配置检查（{{complete}}/{{total}}）",
   "cook.progressChecksAuth": "正在运行鉴权检查（{{complete}}/{{total}}）",
   "cook.progressChecksConfig": "正在加载配置上下文（{{complete}}/{{total}}）",
-
   "chat.new": "新对话",
   "chat.thinking": "思考中...",
   "chat.placeholder": "向你的 OpenClaw Agent 提问...",
   "chat.send": "发送",
   "chat.noResponse": "无响应",
   "chat.noAgents": "暂无可用 Agent，请先创建一个。",
-
   "createAgent.title": "新建 Agent",
   "createAgent.agentId": "Agent ID",
   "createAgent.agentIdPlaceholder": "例如 my-agent",
@@ -934,7 +919,6 @@
   "createAgent.creating": "创建中...",
   "createAgent.create": "创建",
   "createAgent.agentIdRequired": "Agent ID 为必填项",
-
   "upgrade.title": "升级 OpenClaw",
   "upgrade.backupTitle": "正在创建备份...",
   "upgrade.upgradingTitle": "升级中...",
@@ -955,7 +939,6 @@
   "upgrade.startUpgrade": "开始升级",
   "upgrade.retryBackup": "重试备份",
   "upgrade.close": "关闭",
-
   "recipeCard.steps_one": "{{count}} 个步骤",
   "recipeCard.steps_other": "{{count}} 个步骤",
   "recipeCard.easy": "简单",
@@ -965,7 +948,6 @@
   "recipeCard.viewSource": "查看源文档",
   "recipeCard.editSource": "编辑源文档",
   "recipeCard.forkToWorkspace": "Fork 到工作区",
-
   "paramForm.isRequired": "{{label}} 为必填项",
   "paramForm.tooShort": "{{label}} 太短",
   "paramForm.tooLong": "{{label}} 太长",
@@ -977,7 +959,6 @@
   "paramForm.selectAgent": "选择 Agent",
   "paramForm.selectModel": "选择模型",
   "paramForm.useGlobalDefault": "使用全局默认",
-
   "instance.local": "本地",
   "instance.start": "Start",
   "instance.typeLocal": "本地",
@@ -1044,7 +1025,6 @@
   "instance.keyGuideClose": "知道了",
   "instance.keyGuideCopy": "复制",
   "instance.keyGuideCopied": "已复制！",
-
   "ssh.errorConnectionRefused": "连接被拒绝，请检查 Host 和 Port 是否正确",
   "ssh.errorNoSuchFile": "密钥文件不存在，请检查 Key Path",
   "ssh.errorHostUnreachable": "主机不可达或主机名无法解析，请检查 Host（例如未知别名可改用可达 IP/FQDN）",
@@ -1073,7 +1053,6 @@
   "ssh.passphraseLabel": "口令",
   "ssh.passphrasePlaceholder": "若密钥未加密可留空",
   "ssh.passphraseConfirm": "连接",
-
   "nav.cron": "定时任务",
   "cron.title": "定时任务",
   "cron.noJobs": "未配置定时任务",
@@ -1145,7 +1124,6 @@
   "watchdog.stopSuccess": "看门狗已停止",
   "watchdog.actionFailed": "看门狗操作失败：{{error}}",
   "watchdog.startingHint": "等待首次健康检查...",
-
   "queue.pendingCount_one": "{{count}} 项待执行变更",
   "queue.pendingCount_other": "{{count}} 项待执行变更",
   "queue.remove": "移除",
@@ -1163,7 +1141,6 @@
   "queue.discardFailed": "放弃失败：{{error}}",
   "queue.discardTitle": "放弃所有排队变更？",
   "queue.discardDescription": "这将移除 {{count}} 条排队命令，不会应用任何变更。",
-
   "start.welcome": "欢迎使用 ClawPal",
   "start.welcomeHint": "选择一个实例进行管理，或连接新实例。",
   "start.addInstance": "连接实例",
@@ -1215,9 +1192,7 @@
   "quickDiagnose.placeholder": "请诊断当前问题并给出可执行的下一步。",
   "quickDiagnose.buttonLabel": "快速诊断",
   "quickDiagnose.diagnoseWithZeroclaw": "使用 Zeroclaw 诊断",
-
   "instance.close": "关闭标签页",
-
   "onboarding.summary": "该实例还需要一些配置才能正常使用",
   "onboarding.noProfilesSummary": "暂未检测到可用模型配置。小龙虾至少需要一个可用的模型配置才能工作。",
   "onboarding.actionCheckDoctor": "前往 Doctor 页面检查 — 实例健康状态异常",
@@ -1225,5 +1200,33 @@
   "onboarding.actionSetDefault": "在首页选择默认模型",
   "onboarding.actionSyncProfiles": "前往设置页，从已有 OpenClaw 配置同步/提取模型配置",
   "onboarding.actionConnectInstanceFirst": "请先在 Start 连接实例，再配置模型",
-  "onboarding.actionOpenConnectEntry": "打开 Start → 连接实例"
+  "onboarding.actionOpenConnectEntry": "打开 Start → 连接实例",
+  "recipes.loading": "加载中...",
+  "recipes.load": "加载",
+  "recipes.loadedFrom": "加载自：{{source}}",
+  "recipes.builtinSource": "内置 / clawpal 菜谱",
+  "createAgent.independent": "独立 Agent（独立工作区）",
+  "createAgent.displayName": "显示名称",
+  "createAgent.displayNamePlaceholder": "例如 MyBot",
+  "createAgent.emoji": "表情符号",
+  "home.gitBackup": "Git 备份",
+  "home.gitBackupDescription": "通过 git 备份工作区。建议使用私有仓库。",
+  "home.gitNotInitialized": "工作区尚未初始化为 git 仓库。",
+  "home.gitInitRepo": "初始化 Git",
+  "home.gitInitialized": "Git 仓库已初始化，已创建 .gitignore。",
+  "home.gitAlreadyInitialized": "已经是 git 仓库。",
+  "home.gitNoRemote": "未配置远程仓库。请运行：git remote add origin <url>",
+  "home.gitSync": "立即同步",
+  "home.gitSyncing": "同步中...",
+  "home.gitSynced": "工作区同步成功。",
+  "home.gitSyncFailed": "Git 同步失败：{{error}}",
+  "home.gitBranch": "分支：{{branch}}",
+  "home.gitRemote": "远程：{{url}}",
+  "home.gitUncommitted": "{{count}} 个未提交的更改",
+  "home.gitAhead": "领先 {{count}} 个提交",
+  "home.gitBehind": "落后 {{count}} 个提交",
+  "home.gitLastCommit": "最近：{{message}}",
+  "home.gitClean": "工作区已干净 — 无需提交。",
+  "home.gitInitFailed": "初始化失败：{{error}}",
+  "home.gitLocalOnly": "仅本地（无远程仓库）"
 }

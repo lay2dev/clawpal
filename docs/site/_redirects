@@ -1,0 +1,9 @@
+# Cloudflare Pages redirects
+# https://developers.cloudflare.com/pages/configuration/redirects/
+
+# Redirect old/alternate domains to canonical domain
+https://clawpal.zhixian.io/* https://clawpal.xyz/:splat 301
+https://clawpal.pages.dev/* https://clawpal.xyz/:splat 301
+
+# Force HTTPS (Cloudflare handles this, but explicit for clarity)
+http://clawpal.xyz/* https://clawpal.xyz/:splat 301

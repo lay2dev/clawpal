@@ -50,7 +50,13 @@ pub async fn remote_backup_before_upgrade(
                 "mkdir -p \"$BDIR\"; ",
                 "cp \"$HOME/.openclaw/openclaw.json\" \"$BDIR/\" 2>/dev/null || true; ",
                 "cp -r \"$HOME/.openclaw/agents\" \"$BDIR/\" 2>/dev/null || true; ",
-                "cp -r \"$HOME/.openclaw/memory\" \"$BDIR/\" 2>/dev/null || true; ",
+                // Resolve workspace from config (default: ~/.openclaw/workspace)
+                "WS=$(cat \"$HOME/.openclaw/openclaw.json\" 2>/dev/null ",
+                "| python3 -c \"import sys,json; c=json.load(sys.stdin); print(c.get('agents',{{}}).get('defaults',{{}}).get('workspace',c.get('agent',{{}}).get('workspace','')))\" 2>/dev/null ",
+                "| head -1); ",
+                "WS=${{WS:-$HOME/.openclaw/workspace}}; ",
+                "WS=$(echo \"$WS\" | sed \"s|^~/|$HOME/|\"); ",
+                "[ -d \"$WS\" ] && cp -r \"$WS\" \"$BDIR/workspace\" 2>/dev/null || true; ",
                 "du -sk \"$BDIR\" 2>/dev/null | awk '{{print $1 * 1024}}' || echo 0"
             ),
             name = escaped_name
@@ -201,7 +207,16 @@ pub async fn remote_restore_from_backup(
                 "[ -d \"$BDIR\" ] || {{ echo 'Backup not found'; exit 1; }}; ",
                 "cp \"$BDIR/openclaw.json\" \"$HOME/.openclaw/openclaw.json\" 2>/dev/null || true; ",
                 "[ -d \"$BDIR/agents\" ] && cp -r \"$BDIR/agents\" \"$HOME/.openclaw/\" 2>/dev/null || true; ",
-                "[ -d \"$BDIR/memory\" ] && cp -r \"$BDIR/memory\" \"$HOME/.openclaw/\" 2>/dev/null || true; ",
+                // Restore workspace if it was backed up
+                "if [ -d \"$BDIR/workspace\" ]; then ",
+                "WS=$(cat \"$HOME/.openclaw/openclaw.json\" 2>/dev/null ",
+                "| python3 -c \"import sys,json; c=json.load(sys.stdin); print(c.get('agents',{{}}).get('defaults',{{}}).get('workspace',c.get('agent',{{}}).get('workspace','')))\" 2>/dev/null ",
+                "| head -1); ",
+                "WS=${{WS:-$HOME/.openclaw/workspace}}; ",
+                "WS=$(echo \"$WS\" | sed \"s|^~/|$HOME/|\"); ",
+                "mkdir -p \"$WS\"; ",
+                "cp -r \"$BDIR/workspace/.\" \"$WS/\" 2>/dev/null || true; ",
+                "fi; ",
                 "echo 'Restored from backup '{name}"
             ),
             name = escaped_name
@@ -590,6 +605,31 @@ pub fn backup_before_upgrade() -> Result<BackupInfo, String> {
             .collect();
         copy_dir_recursive(&paths.base_dir, &backup_dir, &skip_dirs, &mut total_bytes)?;
 
+        // Also copy workspace if it lives outside ~/.openclaw/ (custom workspace path)
+        let cfg = read_openclaw_config(&paths).unwrap_or_default();
+        let ws_raw = cfg
+            .pointer("/agents/defaults/workspace")
+            .or_else(|| cfg.pointer("/agents/default/workspace"))
+            .or_else(|| cfg.pointer("/agent/workspace"))
+            .and_then(Value::as_str);
+        if let Some(ws_str) = ws_raw {
+            let ws_path = if let Some(rest) = ws_str.strip_prefix("~/") {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(rest)
+            } else {
+                PathBuf::from(ws_str)
+            };
+            // Only copy if workspace is outside base_dir (otherwise already copied above)
+            if ws_path.exists() && !ws_path.starts_with(&paths.base_dir) {
+                let ws_dest = backup_dir.join("workspace");
+                fs::create_dir_all(&ws_dest)
+                    .map_err(|e| format!("Failed to create workspace backup dir: {e}"))?;
+                let ws_skip: HashSet<&str> = [".git"].iter().copied().collect();
+                copy_dir_recursive(&ws_path, &ws_dest, &ws_skip, &mut total_bytes)?;
+            }
+        }
+
         Ok(BackupInfo {
             name: name.clone(),
             path: backup_dir.to_string_lossy().to_string(),
@@ -653,11 +693,36 @@ pub fn restore_from_backup(backup_name: String) -> Result<String, String> {
         }
 
         // Restore other directories (agents except sessions/archive, memory, etc.)
-        let skip_dirs: HashSet<&str> = ["sessions", "archive", ".clawpal"]
+        let skip_dirs: HashSet<&str> = ["sessions", "archive", ".clawpal", "workspace"]
             .iter()
             .copied()
             .collect();
         restore_dir_recursive(&backup_dir, &paths.base_dir, &skip_dirs)?;
+
+        // Restore workspace if it was backed up separately (custom workspace path)
+        let ws_backup = backup_dir.join("workspace");
+        if ws_backup.exists() {
+            let cfg = read_openclaw_config(&paths).unwrap_or_default();
+            let ws_raw = cfg
+                .pointer("/agents/defaults/workspace")
+                .or_else(|| cfg.pointer("/agents/default/workspace"))
+                .or_else(|| cfg.pointer("/agent/workspace"))
+                .and_then(Value::as_str);
+            if let Some(ws_str) = ws_raw {
+                let ws_path = if let Some(rest) = ws_str.strip_prefix("~/") {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join(rest)
+                } else {
+                    PathBuf::from(ws_str)
+                };
+                if !ws_path.starts_with(&paths.base_dir) {
+                    fs::create_dir_all(&ws_path).map_err(|e| e.to_string())?;
+                    let ws_skip: HashSet<&str> = HashSet::new();
+                    restore_dir_recursive(&ws_backup, &ws_path, &ws_skip)?;
+                }
+            }
+        }
 
         Ok(format!("Restored from backup '{}'", backup_name))
     })
@@ -785,4 +850,227 @@ pub(crate) fn restore_dir_recursive(
         }
     }
     Ok(())
+}
+
+// ---- Workspace Git Backup Commands ----
+
+/// Resolve the workspace path from the OpenClaw config.
+/// Returns the tilde-based path (e.g. "~/.openclaw/workspace") suitable for shell commands,
+/// and the expanded absolute path for local file operations.
+fn resolve_workspace_paths() -> Result<(String, PathBuf), String> {
+    let paths = resolve_paths();
+    let cfg = read_openclaw_config(&paths).unwrap_or_default();
+    let ws_raw = cfg
+        .pointer("/agents/defaults/workspace")
+        .or_else(|| cfg.pointer("/agents/default/workspace"))
+        .or_else(|| cfg.pointer("/agent/workspace"))
+        .and_then(Value::as_str)
+        .unwrap_or("~/.openclaw/workspace");
+    let expanded = if let Some(rest) = ws_raw.strip_prefix("~/") {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(rest)
+    } else {
+        PathBuf::from(ws_raw)
+    };
+    Ok((ws_raw.to_string(), expanded))
+}
+
+/// Resolve the workspace path from a remote OpenClaw config.
+/// Returns the shell-safe path string (tilde form or absolute).
+async fn resolve_remote_workspace_path(
+    pool: &SshConnectionPool,
+    host_id: &str,
+) -> Result<String, String> {
+    let result = pool
+        .exec_login(
+            host_id,
+            concat!("cat \"$HOME/.openclaw/openclaw.json\" 2>/dev/null || echo '{}'"),
+        )
+        .await?;
+    let cfg: Value = serde_json::from_str(result.stdout.trim()).unwrap_or_default();
+    let ws = cfg
+        .pointer("/agents/defaults/workspace")
+        .or_else(|| cfg.pointer("/agents/default/workspace"))
+        .or_else(|| cfg.pointer("/agent/workspace"))
+        .and_then(Value::as_str)
+        .unwrap_or("~/.openclaw/workspace");
+    let shell_path = if let Some(rest) = ws.strip_prefix("~/") {
+        format!("\"$HOME/{}\"", rest)
+    } else {
+        format!("\"{}\"", ws)
+    };
+    Ok(shell_path)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBackupResult {
+    pub committed: bool,
+    pub pushed: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+pub fn workspace_git_status() -> Result<clawpal_core::backup::WorkspaceGitStatus, String> {
+    let (_ws_raw, ws_path) = resolve_workspace_paths()?;
+    let ws_str = ws_path.to_string_lossy().to_string();
+    let cmd = clawpal_core::backup::build_git_status_probe_cmd(&ws_str);
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .map_err(|e| format!("Failed to run git status: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(clawpal_core::backup::parse_workspace_git_status(&stdout))
+}
+
+#[tauri::command]
+pub fn workspace_git_backup(message: Option<String>) -> Result<GitBackupResult, String> {
+    let (_ws_raw, ws_path) = resolve_workspace_paths()?;
+    let ws_str = ws_path.to_string_lossy().to_string();
+    let msg = message.unwrap_or_else(|| {
+        let now = chrono::Utc::now();
+        format!("Workspace backup {}", now.format("%Y-%m-%d %H:%M"))
+    });
+    let cmd = clawpal_core::backup::build_git_backup_cmd(&ws_str, &msg);
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .map_err(|e| format!("Failed to run git backup: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.code().unwrap_or(1) != 0 {
+        return Err(format!("{stdout}\n{stderr}").trim().to_string());
+    }
+
+    if stdout.contains("NOTHING_TO_COMMIT") {
+        return Ok(GitBackupResult {
+            committed: false,
+            pushed: false,
+            message: "Nothing to commit — workspace is clean".to_string(),
+        });
+    }
+
+    let pushed = stdout.contains("PUSHED");
+    Ok(GitBackupResult {
+        committed: true,
+        pushed,
+        message: if pushed {
+            "Committed and pushed to remote".to_string()
+        } else if stdout.contains("COMMITTED_NO_REMOTE") {
+            "Committed locally (no remote configured)".to_string()
+        } else {
+            "Committed".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+pub fn workspace_git_init() -> Result<String, String> {
+    let (_ws_raw, ws_path) = resolve_workspace_paths()?;
+    if !ws_path.exists() {
+        return Err(format!(
+            "Workspace directory does not exist: {}",
+            ws_path.display()
+        ));
+    }
+    let ws_str = ws_path.to_string_lossy().to_string();
+    let cmd = clawpal_core::backup::build_git_init_cmd(&ws_str);
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .map_err(|e| format!("Failed to init git repo: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.code().unwrap_or(1) != 0 {
+        return Err(format!("{stdout}\n{stderr}").trim().to_string());
+    }
+
+    if stdout.contains("ALREADY_INITIALIZED") {
+        Ok("already_initialized".to_string())
+    } else {
+        Ok("initialized".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn remote_workspace_git_status(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<clawpal_core::backup::WorkspaceGitStatus, String> {
+    let ws = resolve_remote_workspace_path(&pool, &host_id).await?;
+    let cmd = clawpal_core::backup::build_git_status_probe_cmd(&ws);
+    let result = pool.exec_login(&host_id, &cmd).await?;
+    Ok(clawpal_core::backup::parse_workspace_git_status(
+        &result.stdout,
+    ))
+}
+
+#[tauri::command]
+pub async fn remote_workspace_git_backup(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+    message: Option<String>,
+) -> Result<GitBackupResult, String> {
+    let ws = resolve_remote_workspace_path(&pool, &host_id).await?;
+    let msg = message.unwrap_or_else(|| {
+        let now = chrono::Utc::now();
+        format!("Workspace backup {}", now.format("%Y-%m-%d %H:%M"))
+    });
+    let cmd = clawpal_core::backup::build_git_backup_cmd(&ws, &msg);
+    let result = pool.exec_login(&host_id, &cmd).await?;
+
+    if result.exit_code != 0 {
+        return Err(format!("{}\n{}", result.stdout, result.stderr)
+            .trim()
+            .to_string());
+    }
+
+    if result.stdout.contains("NOTHING_TO_COMMIT") {
+        return Ok(GitBackupResult {
+            committed: false,
+            pushed: false,
+            message: "Nothing to commit — workspace is clean".to_string(),
+        });
+    }
+
+    let pushed = result.stdout.contains("PUSHED");
+    Ok(GitBackupResult {
+        committed: true,
+        pushed,
+        message: if pushed {
+            "Committed and pushed to remote".to_string()
+        } else if result.stdout.contains("COMMITTED_NO_REMOTE") {
+            "Committed locally (no remote configured)".to_string()
+        } else {
+            "Committed".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn remote_workspace_git_init(
+    pool: State<'_, SshConnectionPool>,
+    host_id: String,
+) -> Result<String, String> {
+    let ws = resolve_remote_workspace_path(&pool, &host_id).await?;
+    let cmd = clawpal_core::backup::build_git_init_cmd(&ws);
+    let result = pool.exec_login(&host_id, &cmd).await?;
+
+    if result.exit_code != 0 {
+        return Err(format!("{}\n{}", result.stdout, result.stderr)
+            .trim()
+            .to_string());
+    }
+
+    if result.stdout.contains("ALREADY_INITIALIZED") {
+        Ok("already_initialized".to_string())
+    } else {
+        Ok("initialized".to_string())
+    }
 }

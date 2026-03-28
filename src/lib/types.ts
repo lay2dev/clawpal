@@ -723,10 +723,23 @@ export interface BackupErrorEvent {
 }
 
 
+export interface WorkspaceGitStatus {
+  isGitRepo: boolean;
+  hasRemote: boolean;
+  remoteUrl?: string;
+  branch?: string;
+  uncommittedCount: number;
+  ahead: number;
+  behind: number;
+  lastCommitTime?: string;
+  lastCommitMessage?: string;
+}
 
-
-
-
+export interface GitBackupResult {
+  committed: boolean;
+  pushed: boolean;
+  message: string;
+}
 
 
 

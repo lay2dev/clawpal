@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
 import { useInstance } from "@/lib/instance-context";
 import { formatBackupProgressLabel, runBackupStream } from "@/lib/backup-stream";
+import { WorkspaceGitBackup } from "@/components/WorkspaceGitBackup";
 import { formatBytes, formatTime } from "@/lib/utils";
 import type { BackupInfo } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,7 +41,9 @@ export function BackupsPanel() {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-4">
+      <WorkspaceGitBackup />
+
+      <div className="flex items-center justify-between mb-4 mt-6">
         <AsyncActionButton
           size="sm"
           variant="outline"

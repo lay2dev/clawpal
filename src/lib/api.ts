@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, ExecuteRecipeRequest, ExecuteRecipeResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecipeActionCatalogEntry, RecipeLibraryImportResult, RecipePlan, RecipeRuntimeInstance, RecipeRuntimeRun, RecipeSourceDiagnostics, RecipeSourceImportResult, RecipeSourceSaveResult, RecipeWorkspaceEntry, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SessionPreviewMessage, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus } from "./types";
-
-export const api = {
+import type { AgentOverview, AgentSessionAnalysis, AppPreferences, ApplyQueueResult, ApplyResult, BackupInfo, Binding, BugReportSettings, BugReportStats, ChannelNode, ChannelsConfigSnapshot, ChannelsRuntimeSnapshot, CronConfigSnapshot, CronJob, CronRun, CronRuntimeSnapshot, DiscordGuildChannel, DiscoveredInstance, DockerInstance, EnsureAccessResult, ExecuteRecipeRequest, ExecuteRecipeResult, GuidanceAction, HistoryItem, InstallMethodCapability, InstallOrchestratorDecision, InstallSession, InstallStepResult, InstallTargetDecision, InstanceConfigSnapshot, InstanceRuntimeSnapshot, InstanceStatus, StatusExtra, ModelCatalogProvider, ModelProfile, PendingCommand, PrecheckIssue, PreviewQueueResult, PreviewResult, ProfilePushResult, ProviderAuthSuggestion, Recipe, RecipeActionCatalogEntry, RecipeLibraryImportResult, RecipePlan, RecipeRuntimeInstance, RecipeRuntimeRun, RecipeSourceDiagnostics, RecipeSourceImportResult, RecipeSourceSaveResult, RecipeWorkspaceEntry, RecordInstallExperienceResult, RegisteredInstance, RelatedSecretPushResult, RemoteAuthSyncResult, RescueBotAction, RescueBotManageResult, RescuePrimaryDiagnosisResult, RescuePrimaryRepairResult, ResolvedApiKey, SessionPreviewMessage, SshConfigHostSuggestion, SshConnectionProfile, SshDiagnosticReport, SshHost, SshIntent, SshTransferStats, SystemStatus, DoctorReport, SessionFile, WatchdogStatus, GitBackupResult, WorkspaceGitStatus } from "./types";export const api = {
   setActiveOpenclawHome: (path: string | null): Promise<boolean> =>
     invoke("set_active_openclaw_home", { path }),
   setActiveClawpalDataDir: (path: string | null): Promise<boolean> =>
@@ -227,6 +225,12 @@ export const api = {
     invoke("restore_from_backup", { backupName }),
   deleteBackup: (backupName: string): Promise<boolean> =>
     invoke("delete_backup", { backupName }),
+  workspaceGitStatus: (): Promise<WorkspaceGitStatus> =>
+    invoke("workspace_git_status", {}),
+  workspaceGitBackup: (message?: string): Promise<GitBackupResult> =>
+    invoke("workspace_git_backup", { message }),
+  workspaceGitInit: (): Promise<string> =>
+    invoke("workspace_git_init", {}),
   listChannelsMinimal: (): Promise<ChannelNode[]> =>
     invoke("list_channels_minimal", {}),
   getChannelsConfigSnapshot: (): Promise<ChannelsConfigSnapshot> =>
@@ -407,6 +411,12 @@ export const api = {
     invoke("remote_restore_from_backup", { hostId, backupName }),
   remoteDeleteBackup: (hostId: string, backupName: string): Promise<boolean> =>
     invoke("remote_delete_backup", { hostId, backupName }),
+  remoteWorkspaceGitStatus: (hostId: string): Promise<WorkspaceGitStatus> =>
+    invoke("remote_workspace_git_status", { hostId }),
+  remoteWorkspaceGitBackup: (hostId: string, message?: string): Promise<GitBackupResult> =>
+    invoke("remote_workspace_git_backup", { hostId, message }),
+  remoteWorkspaceGitInit: (hostId: string): Promise<string> =>
+    invoke("remote_workspace_git_init", { hostId }),
 
   // Upgrade
   checkOpenclawUpdate: (): Promise<{ upgradeAvailable: boolean; latestVersion: string | null; installedVersion: string }> =>
