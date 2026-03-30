@@ -361,6 +361,9 @@ fn extract_profiles_from_openclaw_config(
             api_key: None,
             base_url,
             description: Some(format!("Extracted from config ({scope_label})")),
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         };
         let key = profile_to_model_value(&profile);
@@ -1330,6 +1333,9 @@ mod tests {
             api_key: api_key.map(|v| v.to_string()),
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         }
     }
@@ -1596,6 +1602,9 @@ mod tests {
                 api_key: None,
                 base_url: Some("https://openrouter.example/v1".to_string()),
                 description: None,
+                sync_source_device_name: None,
+                sync_source_host_id: None,
+                sync_synced_at: None,
                 enabled: true,
             },
             provider_key: "openrouter".to_string(),
@@ -1739,6 +1748,9 @@ pub fn resolve_provider_auth(provider: String) -> Result<ProviderAuthSuggestion,
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         };
         let key = resolve_profile_api_key(&probe_profile, &global_base);
