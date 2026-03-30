@@ -307,6 +307,9 @@ fn run_profile_command(command: ProfileCommands) -> Result<serde_json::Value, St
                 api_key,
                 base_url: None,
                 description: None,
+                sync_source_device_name: None,
+                sync_source_host_id: None,
+                sync_synced_at: None,
                 enabled: true,
             };
             let saved = upsert_profile(&openclaw, profile).map_err(|e| e.to_string())?;

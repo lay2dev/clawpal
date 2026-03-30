@@ -529,6 +529,9 @@ export interface ModelProfile {
   apiKey?: string;
   baseUrl?: string;
   description?: string;
+  syncSourceDeviceName?: string;
+  syncSourceHostId?: string;
+  syncSyncedAt?: string;
   enabled: boolean;
 }
 

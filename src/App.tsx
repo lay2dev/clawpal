@@ -175,7 +175,6 @@ export function App() {
   });
 
   const {
-    profileSyncStatus,
     showSshTransferSpeedUi,
     sshTransferStats,
     doctorNavPulse,
@@ -417,7 +416,6 @@ export function App() {
         </nav>
 
         <SidebarFooter
-          profileSyncStatus={profileSyncStatus}
           showSshTransferSpeedUi={showSshTransferSpeedUi}
           isRemote={isRemote}
           isConnected={isConnected}

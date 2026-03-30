@@ -235,6 +235,9 @@ fn run_case(case: &ModelCase) -> CaseResult {
         api_key: Some(api_key.clone()),
         base_url: None,
         description: Some(format!("E2E — {}/{}", case.provider, case.model)),
+        sync_source_device_name: None,
+        sync_source_host_id: None,
+        sync_synced_at: None,
         enabled: true,
     };
 
