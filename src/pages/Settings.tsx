@@ -58,6 +58,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { PlusIcon, RefreshCwIcon } from "lucide-react";
 
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
@@ -618,10 +619,23 @@ export function Settings({
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <CardTitle>{t('settings.modelProfiles')}</CardTitle>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Button size="sm" variant="outline" onClick={() => setSyncDialogOpen(true)}>
-                      {t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      onClick={() => setSyncDialogOpen(true)}
+                      title={t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
+                      aria-label={t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
+                    >
+                      <RefreshCwIcon className="h-4 w-4" />
                     </Button>
-                    <Button size="sm" onClick={openAddProfile}>{t('settings.addProfile')}</Button>
+                    <Button
+                      size="icon"
+                      onClick={openAddProfile}
+                      title={t("settings.addProfile")}
+                      aria-label={t("settings.addProfile")}
+                    >
+                      <PlusIcon className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
