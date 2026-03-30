@@ -227,6 +227,9 @@ fn merge_remote_profile_into_local(
     remote: &ModelProfile,
     resolved_api_key: Option<String>,
     resolved_base_url: Option<String>,
+    source_device_name: &str,
+    source_host_id: &str,
+    synced_at: &str,
 ) -> bool {
     let remote_key = normalize_profile_key(remote);
     let target_idx = local_profiles
@@ -282,6 +285,9 @@ fn merge_remote_profile_into_local(
         if !existing.enabled && remote.enabled {
             existing.enabled = true;
         }
+        existing.sync_source_device_name = Some(source_device_name.to_string());
+        existing.sync_source_host_id = Some(source_host_id.to_string());
+        existing.sync_synced_at = Some(synced_at.to_string());
         return false;
     }
 
@@ -292,6 +298,9 @@ fn merge_remote_profile_into_local(
     if !is_non_empty(merged.base_url.as_deref()) && is_non_empty(resolved_base_url.as_deref()) {
         merged.base_url = resolved_base_url;
     }
+    merged.sync_source_device_name = Some(source_device_name.to_string());
+    merged.sync_source_host_id = Some(source_host_id.to_string());
+    merged.sync_synced_at = Some(synced_at.to_string());
     local_profiles.push(merged);
     true
 }
@@ -573,6 +582,7 @@ pub struct RemoteAuthSyncResult {
 pub async fn remote_sync_profiles_to_local_auth(
     pool: State<'_, SshConnectionPool>,
     host_id: String,
+    source_device_name: Option<String>,
 ) -> Result<RemoteAuthSyncResult, String> {
     let (remote_profiles, _) = collect_remote_profiles_from_openclaw(&pool, &host_id, true).await?;
     if remote_profiles.is_empty() {
@@ -589,6 +599,13 @@ pub async fn remote_sync_profiles_to_local_auth(
 
     let paths = resolve_paths();
     let mut local_profiles = dedupe_profiles_by_model_key(load_model_profiles(&paths));
+    let source_name = source_device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(host_id.as_str())
+        .to_string();
+    let synced_at = chrono::Utc::now().to_rfc3339();
 
     let mut created_profiles = 0usize;
     let mut updated_profiles = 0usize;
@@ -652,6 +669,9 @@ pub async fn remote_sync_profiles_to_local_auth(
             remote,
             resolved_api_key,
             resolved_base_url,
+            &source_name,
+            &host_id,
+            &synced_at,
         ) {
             created_profiles += 1;
         } else {

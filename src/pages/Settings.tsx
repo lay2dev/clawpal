@@ -11,6 +11,7 @@ import type { FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { hasGuidanceEmitted, useApi } from "@/lib/use-api";
+import { api } from "@/lib/api";
 import { isAlreadyExplainedGuidanceError } from "@/lib/guidance";
 import { useTheme } from "@/lib/use-theme";
 import { useFont } from "@/lib/use-font";
@@ -21,6 +22,7 @@ import type {
   ModelProfile,
   ProviderAuthSuggestion,
   ResolvedApiKey,
+  SshHost,
 } from "@/lib/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { BugReportSettings } from "@/components/BugReportSettings";
@@ -105,6 +107,10 @@ export function Settings({
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
+  const [remoteDevices, setRemoteDevices] = useState<SshHost[]>([]);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [selectedSyncHostIds, setSelectedSyncHostIds] = useState<string[]>([]);
+  const [syncStatusByHostId, setSyncStatusByHostId] = useState<Record<string, "idle" | "syncing" | "success" | "failed">>({});
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -144,6 +150,15 @@ export function Settings({
   };
 
   useEffect(refreshProfiles, [ua]);
+
+  useEffect(() => {
+    ua.listSshHosts()
+      .then((hosts) => setRemoteDevices(hosts))
+      .catch((e) => {
+        console.error("Failed to load SSH hosts:", e);
+        setRemoteDevices([]);
+      });
+  }, [ua]);
 
   useEffect(() => {
     ua.getAppPreferences()
@@ -429,6 +444,47 @@ export function Settings({
   const showProfiles = section !== "preferences";
   const showPreferences = section !== "profiles";
 
+  const syncedDeviceCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const profile of profiles || []) {
+      const source = profile.syncSourceHostId?.trim();
+      if (source) ids.add(source);
+    }
+    return ids.size;
+  }, [profiles]);
+
+  const syncButtonText = remoteDevices.length > 0 && selectedSyncHostIds.length === 0
+    ? "从设备同步"
+    : t("settings.syncFromDevicesAction", { count: selectedSyncHostIds.length });
+
+  const formatSyncedAt = (value?: string) => {
+    if (!value) return "-";
+    const timestamp = Date.parse(value);
+    if (Number.isNaN(timestamp)) return value;
+    return new Date(timestamp).toLocaleString();
+  };
+
+  const runDeviceSync = useCallback(async () => {
+    if (selectedSyncHostIds.length === 0) {
+      toast.message("从设备同步");
+      return;
+    }
+    for (const hostId of selectedSyncHostIds) {
+      const device = remoteDevices.find((item) => item.id === hostId);
+      const deviceName = device?.label || hostId;
+      setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "syncing" }));
+      try {
+        await api.remoteSyncProfilesToLocalAuth(hostId, deviceName);
+        setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "success" }));
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "failed" }));
+        toast.error(`${deviceName} 同步失败：${errorText}`);
+      }
+    }
+    refreshProfiles();
+  }, [remoteDevices, selectedSyncHostIds, ua]);
+
   const handleSshTransferSpeedUiToggle = useCallback((nextChecked: boolean) => {
     setShowSshTransferSpeedUi(nextChecked);
     ua.setSshTransferSpeedUiPreference(nextChecked)
@@ -562,6 +618,9 @@ export function Settings({
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <CardTitle>{t('settings.modelProfiles')}</CardTitle>
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => setSyncDialogOpen(true)}>
+                      {t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
+                    </Button>
                     <Button size="sm" onClick={openAddProfile}>{t('settings.addProfile')}</Button>
                   </div>
                 </div>
@@ -623,6 +682,14 @@ export function Settings({
                             URL: {profile.baseUrl}
                           </div>
                         )}
+                        {(profile.syncSourceDeviceName || profile.syncSyncedAt) && (
+                          <div className="text-sm text-muted-foreground mt-0.5">
+                            {t("settings.profileSyncSource", {
+                              device: profile.syncSourceDeviceName || "-",
+                              syncedAt: formatSyncedAt(profile.syncSyncedAt),
+                            })}
+                          </div>
+                        )}
                         <div className="flex gap-1.5 mt-1.5">
                           {profileUi.actions.includes("edit") ? (
                             <Button
@@ -678,6 +745,50 @@ export function Settings({
 
             {showPreferences && <BugReportSettings />}
           </div>
+
+      <Dialog open={syncDialogOpen} onOpenChange={setSyncDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("settings.syncDevicesTitle")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 max-h-[320px] overflow-y-auto">
+            {remoteDevices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("settings.noSyncDevices")}</p>
+            ) : remoteDevices.map((device) => {
+              const checked = selectedSyncHostIds.includes(device.id);
+              const status = syncStatusByHostId[device.id] || "idle";
+              const statusText = status === "syncing"
+                ? t("settings.syncStatusSyncing")
+                : status === "success"
+                  ? t("settings.syncStatusSuccess")
+                  : status === "failed"
+                    ? t("settings.syncStatusFailed")
+                    : t("settings.syncStatusIdle");
+              return (
+                <label key={device.id} className="flex items-center justify-between gap-3 border border-border rounded-md px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) => {
+                        const enabled = Boolean(value);
+                        setSelectedSyncHostIds((prev) => enabled
+                          ? [...prev, device.id]
+                          : prev.filter((id) => id !== device.id));
+                      }}
+                    />
+                    <span className="text-sm">{device.label}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{statusText}</span>
+                </label>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSyncDialogOpen(false)}>{t("settings.cancel")}</Button>
+            <Button onClick={runDeviceSync}>{syncButtonText}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {message && (
         <p className="text-sm text-muted-foreground mt-3">{message}</p>

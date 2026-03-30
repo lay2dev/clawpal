@@ -175,6 +175,7 @@ export function useSshConnection(params: UseSshConnectionParams) {
   }, [activeInstance, requestPassphrase, sshHosts, t, setPersistenceScope, setPersistenceResolved]);
 
   const syncRemoteAuthAfterConnect = useCallback(async (hostId: string) => {
+    const hostLabel = sshHosts.find((host) => host.id === hostId)?.label || hostId;
     const now = Date.now();
     const last = remoteAuthSyncAtRef.current[hostId] || 0;
     if (now - last < 30_000) return;
@@ -182,10 +183,10 @@ export function useSshConnection(params: UseSshConnectionParams) {
     setProfileSyncStatus({
       phase: "syncing",
       message: t("doctor.profileSyncStarted"),
-      instanceId: hostId,
+      instanceId: hostLabel,
     });
     try {
-      const result = await api.remoteSyncProfilesToLocalAuth(hostId);
+      const result = await api.remoteSyncProfilesToLocalAuth(hostId, hostLabel);
       invalidateGlobalReadCache(["listModelProfiles", "resolveApiKeys"]);
       const localProfiles = await api.listModelProfiles().catch((error) => {
         logDevIgnoredError("syncRemoteAuthAfterConnect listModelProfiles", error);
@@ -198,27 +199,27 @@ export function useSshConnection(params: UseSshConnectionParams) {
             resolvedKeys: result.resolvedKeys,
           });
           showToast(message, "success");
-          setProfileSyncStatus({ phase: "success", message, instanceId: hostId });
+          setProfileSyncStatus({ phase: "success", message, instanceId: hostLabel });
         } else {
           const message = t("doctor.profileSyncNoLocalProfiles");
           showToast(message, "error");
-          setProfileSyncStatus({ phase: "error", message, instanceId: hostId });
+          setProfileSyncStatus({ phase: "error", message, instanceId: hostLabel });
         }
       } else if (result.totalRemoteProfiles > 0) {
         const message = t("doctor.profileSyncNoUsableKeys");
         showToast(message, "error");
-        setProfileSyncStatus({ phase: "error", message, instanceId: hostId });
+        setProfileSyncStatus({ phase: "error", message, instanceId: hostLabel });
       } else {
         const message = t("doctor.profileSyncNoProfiles");
         showToast(message, "error");
-        setProfileSyncStatus({ phase: "error", message, instanceId: hostId });
+        setProfileSyncStatus({ phase: "error", message, instanceId: hostLabel });
       }
     } catch (e) {
       const message = t("doctor.profileSyncFailed", { error: String(e) });
       showToast(message, "error");
-      setProfileSyncStatus({ phase: "error", message, instanceId: hostId });
+      setProfileSyncStatus({ phase: "error", message, instanceId: hostLabel });
     }
-  }, [showToast, t]);
+  }, [showToast, sshHosts, t]);
 
   // SSH self-healing: detect dropped connections and reconnect
   useEffect(() => {

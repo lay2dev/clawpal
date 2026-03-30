@@ -21,6 +21,12 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
+    pub sync_source_device_name: Option<String>,
+    #[serde(default)]
+    pub sync_source_host_id: Option<String>,
+    #[serde(default)]
+    pub sync_synced_at: Option<String>,
     pub enabled: bool,
 }
 

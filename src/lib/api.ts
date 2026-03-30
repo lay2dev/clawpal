@@ -380,8 +380,11 @@ export const api = {
     invoke("remote_test_model_profile", { hostId, profileId }),
   remoteResolveApiKeys: (hostId: string): Promise<ResolvedApiKey[]> =>
     invoke("remote_resolve_api_keys", { hostId }),
-  remoteSyncProfilesToLocalAuth: (hostId: string): Promise<RemoteAuthSyncResult> =>
-    invoke("remote_sync_profiles_to_local_auth", { hostId }),
+  remoteSyncProfilesToLocalAuth: (hostId: string, sourceDeviceName?: string): Promise<RemoteAuthSyncResult> =>
+    invoke("remote_sync_profiles_to_local_auth", {
+      hostId,
+      sourceDeviceName: sourceDeviceName ?? null,
+    }),
   pushModelProfilesToLocalOpenclaw: (profileIds: string[]): Promise<ProfilePushResult> =>
     invoke("push_model_profiles_to_local_openclaw", { profileIds }),
   pushModelProfilesToRemoteOpenclaw: (hostId: string, profileIds: string[]): Promise<ProfilePushResult> =>
