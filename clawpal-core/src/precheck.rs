@@ -95,6 +95,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         }];
         let issues = precheck_auth(&profiles);
@@ -112,6 +115,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         }];
         let issues = precheck_auth(&profiles);
@@ -129,6 +135,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: false,
         }];
         let issues = precheck_auth(&profiles);
@@ -191,6 +200,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         }];
         let issues = precheck_auth(&profiles);
@@ -209,6 +221,9 @@ mod tests {
                 api_key: None,
                 base_url: None,
                 description: None,
+                sync_source_device_name: None,
+                sync_source_host_id: None,
+                sync_synced_at: None,
                 enabled: true,
             },
             ModelProfile {
@@ -220,6 +235,9 @@ mod tests {
                 api_key: None,
                 base_url: None,
                 description: None,
+                sync_source_device_name: None,
+                sync_source_host_id: None,
+                sync_synced_at: None,
                 enabled: true,
             },
         ];

@@ -73,6 +73,9 @@ fn e2e_create_oauth_profile_and_probe() {
         api_key: Some(oauth_token.clone()),
         base_url: None,
         description: Some("E2E OAuth token test profile".to_string()),
+        sync_source_device_name: None,
+        sync_source_host_id: None,
+        sync_synced_at: None,
         enabled: true,
     };
 

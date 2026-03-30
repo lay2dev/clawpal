@@ -421,6 +421,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         }
     }
@@ -586,6 +589,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         };
         let content = serde_json::json!({ "profiles": [donor], "version": 1 }).to_string();
@@ -609,6 +615,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         };
         let second = ModelProfile {
@@ -620,6 +629,9 @@ mod tests {
             api_key: None,
             base_url: None,
             description: None,
+            sync_source_device_name: None,
+            sync_source_host_id: None,
+            sync_synced_at: None,
             enabled: true,
         };
 
