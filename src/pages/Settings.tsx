@@ -106,7 +106,6 @@ export function Settings({
   const [form, setForm] = useState<ProfileForm>(emptyForm());
   const [credentialSource, setCredentialSource] = useState<CredentialSource>("manual");
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
-  const [message, setMessage] = useState("");
   const [authSuggestion, setAuthSuggestion] = useState<ProviderAuthSuggestion | null>(null);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
@@ -302,7 +301,7 @@ export function Settings({
 
   const saveProfile = async (authRefOverride?: string): Promise<boolean> => {
     if (!form.provider || !form.model) {
-      setMessage(t('settings.providerModelRequired'));
+      toast.error(t('settings.providerModelRequired'));
       return false;
     }
     const apiKeyOptional = form.useCustomUrl || providerSupportsOptionalApiKey(form.provider);
@@ -310,7 +309,7 @@ export function Settings({
     const envSource = credentialSource === "env";
     const manualSource = credentialSource === "manual";
     if (!ua.isRemote && manualSource && !form.apiKey && !form.id && !apiKeyOptional) {
-      setMessage(t('settings.apiKeyRequired'));
+      toast.error(t('settings.apiKeyRequired'));
       return false;
     }
     const overrideAuthRef = (authRefOverride || "").trim();
@@ -337,14 +336,15 @@ export function Settings({
     };
     try {
       await ua.upsertModelProfile(profileData);
-      setMessage(t('settings.profileSaved'));
+      toast.success(t('settings.profileSaved'));
       setForm(emptyForm());
       setProfileDialogOpen(false);
       refreshProfiles();
       onDataChange?.();
       return true;
     } catch (e) {
-      setMessage(t('settings.saveFailed', { error: String(e) }));
+      const errorText = e instanceof Error ? e.message : String(e);
+      toast.error(t('settings.saveFailed', { error: errorText }));
       return false;
     }
   };
@@ -378,14 +378,17 @@ export function Settings({
   const deleteProfile = (id: string) => {
     ua.deleteModelProfile(id)
       .then(() => {
-        setMessage(t('settings.profileDeleted'));
+        toast.success(t('settings.profileDeleted'));
         if (form.id === id) {
           setForm(emptyForm());
         }
         refreshProfiles();
         onDataChange?.();
       })
-      .catch((e) => setMessage(t('settings.deleteFailed', { error: String(e) })));
+      .catch((e) => {
+        const errorText = e instanceof Error ? e.message : String(e);
+        toast.error(t('settings.deleteFailed', { error: errorText }));
+      });
   };
 
   const toggleProfileEnabled = (profile: ModelProfile) => {
@@ -876,10 +879,6 @@ export function Settings({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {message && (
-        <p className="text-sm text-muted-foreground mt-3">{message}</p>
-      )}
 
       {/* Add / Edit Profile Dialog */}
       <Dialog open={profileDialogOpen} onOpenChange={(open) => {
