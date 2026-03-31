@@ -282,6 +282,7 @@
   "settings.syncStarted": "Started syncing {{count}} devices",
   "settings.syncFailedForDevice": "Sync failed for {{device}}: {{error}}",
   "settings.connectDevice": "Connect",
+  "settings.connecting": "Connecting",
   "settings.disconnected": "Disconnected",
   "settings.connectDeviceFirst": "Please connect device first: {{device}}",
   "settings.syncStatusIdle": "Idle",

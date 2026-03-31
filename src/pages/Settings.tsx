@@ -65,6 +65,7 @@ const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
 let syncSelectionSessionCache: string[] = [];
+let syncStatusSessionCache: Record<string, "idle" | "syncing" | "success" | "failed"> = {};
 const PROVIDER_FALLBACK_OPTIONS = [
   "openai",
   "openai-codex",
@@ -113,8 +114,9 @@ export function Settings({
   const [remoteDevices, setRemoteDevices] = useState<SshHost[]>([]);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [selectedSyncHostIds, setSelectedSyncHostIds] = useState<string[]>(() => [...syncSelectionSessionCache]);
-  const [syncStatusByHostId, setSyncStatusByHostId] = useState<Record<string, "idle" | "syncing" | "success" | "failed">>({});
+  const [syncStatusByHostId, setSyncStatusByHostId] = useState<Record<string, "idle" | "syncing" | "success" | "failed">>(() => ({ ...syncStatusSessionCache }));
   const [hostConnectionById, setHostConnectionById] = useState<Record<string, boolean>>({});
+  const [hostConnectingById, setHostConnectingById] = useState<Record<string, boolean>>({});
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -192,6 +194,10 @@ export function Settings({
   useEffect(() => {
     syncSelectionSessionCache = selectedSyncHostIds;
   }, [selectedSyncHostIds]);
+
+  useEffect(() => {
+    syncStatusSessionCache = syncStatusByHostId;
+  }, [syncStatusByHostId]);
 
   useEffect(() => {
     ua.getAppPreferences()
@@ -518,12 +524,15 @@ export function Settings({
     for (const hostId of selectedSyncHostIds) {
       const device = remoteDevices.find((item) => item.id === hostId);
       const deviceName = device?.label || hostId;
+      syncStatusSessionCache = { ...syncStatusSessionCache, [hostId]: "syncing" };
       setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "syncing" }));
       try {
         await api.remoteSyncProfilesToLocalAuth(hostId, deviceName);
+        syncStatusSessionCache = { ...syncStatusSessionCache, [hostId]: "success" };
         setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "success" }));
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
+        syncStatusSessionCache = { ...syncStatusSessionCache, [hostId]: "failed" };
         setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "failed" }));
         toast.error(t("settings.syncFailedForDevice", { device: deviceName, error: errorText }));
       }
@@ -827,19 +836,23 @@ export function Settings({
             ) : remoteDevices.map((device) => {
               const checked = selectedSyncHostIds.includes(device.id);
               const connected = hostConnectionById[device.id] ?? false;
+              const connecting = hostConnectingById[device.id] ?? false;
               const status = syncStatusByHostId[device.id] || "idle";
-              const statusText = status === "syncing"
-                ? t("settings.syncStatusSyncing")
-                : status === "success"
-                  ? t("settings.syncStatusSuccess")
-                  : status === "failed"
-                    ? t("settings.syncStatusFailed")
-                    : t("settings.syncStatusIdle");
+              const statusText = connecting
+                ? t("settings.connecting")
+                : status === "syncing"
+                  ? t("settings.syncStatusSyncing")
+                  : status === "success"
+                    ? t("settings.syncStatusSuccess")
+                    : status === "failed"
+                      ? t("settings.syncStatusFailed")
+                      : t("settings.syncStatusIdle");
               return (
                 <label key={device.id} className={`flex items-center justify-between gap-3 border border-border rounded-md px-3 py-2 ${connected ? "" : "opacity-70"}`}>
                   <div className="flex items-center gap-2">
                     <Checkbox
                       checked={checked}
+                      disabled={connecting}
                       onCheckedChange={async (value) => {
                         const enabled = Boolean(value);
                         if (!enabled) {
@@ -848,7 +861,9 @@ export function Settings({
                         }
                         if (!connected) {
                           if (!onConnectDevice) return;
+                          setHostConnectingById((prev) => ({ ...prev, [device.id]: true }));
                           const connectedNow = await onConnectDevice(device.id);
+                          setHostConnectingById((prev) => ({ ...prev, [device.id]: false }));
                           if (!connectedNow) return;
                           setHostConnectionById((prev) => ({ ...prev, [device.id]: true }));
                         }
@@ -858,7 +873,7 @@ export function Settings({
                     <span className={`text-sm ${connected ? "" : "text-muted-foreground"}`}>{device.label}</span>
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    {connected ? statusText : t("settings.disconnected")}
+                    {connected || connecting ? statusText : t("settings.disconnected")}
                   </span>
                 </label>
               );

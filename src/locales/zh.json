@@ -281,6 +281,7 @@
   "settings.syncStarted": "已开始同步 {{count}} 个设备",
   "settings.syncFailedForDevice": "{{device}} 同步失败：{{error}}",
   "settings.connectDevice": "连接",
+  "settings.connecting": "连接中",
   "settings.disconnected": "未连接",
   "settings.connectDeviceFirst": "请先连接设备：{{device}}",
   "settings.syncStatusIdle": "未同步",
