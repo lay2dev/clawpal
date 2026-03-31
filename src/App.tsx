@@ -473,12 +473,12 @@ export function App() {
               onConnectDevice={(hostId) => {
                 void connectWithPassphraseFallback(hostId)
                   .then(() => {
-                    openTab(hostId);
-                    setInStart(false);
+                    setInStart(true);
+                    setStartSection("profiles");
                   })
                   .catch(() => {
                     setInStart(true);
-                    setStartSection("overview");
+                    setStartSection("profiles");
                   });
               }}
               onDataChange={bumpConfigVersion}
@@ -493,12 +493,12 @@ export function App() {
               onConnectDevice={(hostId) => {
                 void connectWithPassphraseFallback(hostId)
                   .then(() => {
-                    openTab(hostId);
-                    setInStart(false);
+                    setInStart(true);
+                    setStartSection("profiles");
                   })
                   .catch(() => {
                     setInStart(true);
-                    setStartSection("overview");
+                    setStartSection("profiles");
                   });
               }}
               onDataChange={bumpConfigVersion}
