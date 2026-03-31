@@ -687,32 +687,43 @@ export function Settings({
                             </Badge>
                           ) : null}
                         </div>
-                        <div className="text-sm text-muted-foreground mt-1">
-                          {t('settings.credential')}: {t(`settings.credentialKind.${credential.kind}`)}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          <Badge variant="outline" title={`${t('settings.credential')}: ${t(`settings.credentialKind.${credential.kind}`)}`}>
+                            {t(`settings.credentialKind.${credential.kind}`)}
+                          </Badge>
+                          {showCredentialRef && (
+                            <Badge
+                              variant="outline"
+                              title={`${t("settings.credentialRef")}: ${credential.authRef || "-"}`}
+                            >
+                              Ref
+                            </Badge>
+                          )}
+                          {showCredentialStatus && (
+                            <Badge
+                              variant="outline"
+                              title={`${t("settings.credentialStatus")}: ${credentialStatusText}`}
+                            >
+                              {credentialStatusText}
+                            </Badge>
+                          )}
+                          {profile.baseUrl && (
+                            <Badge variant="outline" title={`URL: ${profile.baseUrl}`}>
+                              URL
+                            </Badge>
+                          )}
+                          {(profile.syncSourceDeviceName || profile.syncSyncedAt) && (
+                            <Badge
+                              variant="outline"
+                              title={t("settings.profileSyncSource", {
+                                device: profile.syncSourceDeviceName || "-",
+                                syncedAt: formatSyncedAt(profile.syncSyncedAt),
+                              })}
+                            >
+                              {profile.syncSourceDeviceName || "-"}
+                            </Badge>
+                          )}
                         </div>
-                        {showCredentialRef && (
-                          <div className="text-sm text-muted-foreground mt-0.5">
-                            {t("settings.credentialRef")}: {credential.authRef || "-"}
-                          </div>
-                        )}
-                        {showCredentialStatus && (
-                          <div className="text-sm text-muted-foreground mt-0.5">
-                            {t("settings.credentialStatus")}: {credentialStatusText}
-                          </div>
-                        )}
-                        {profile.baseUrl && (
-                          <div className="text-sm text-muted-foreground mt-0.5">
-                            URL: {profile.baseUrl}
-                          </div>
-                        )}
-                        {(profile.syncSourceDeviceName || profile.syncSyncedAt) && (
-                          <div className="text-sm text-muted-foreground mt-0.5">
-                            {t("settings.profileSyncSource", {
-                              device: profile.syncSourceDeviceName || "-",
-                              syncedAt: formatSyncedAt(profile.syncSyncedAt),
-                            })}
-                          </div>
-                        )}
                         <div className="flex gap-1.5 mt-1.5">
                           {profileUi.actions.includes("edit") ? (
                             <Button
