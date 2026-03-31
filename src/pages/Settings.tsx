@@ -483,7 +483,7 @@ export function Settings({
   }, [profiles]);
 
   const syncButtonText = remoteDevices.length > 0 && selectedSyncHostIds.length === 0
-    ? "从设备同步"
+    ? t("settings.syncFromDevices")
     : t("settings.syncFromDevicesAction", { count: selectedSyncHostIds.length });
 
   const isDeviceSyncing = useMemo(
@@ -500,11 +500,11 @@ export function Settings({
 
   const runDeviceSync = useCallback(async () => {
     if (selectedSyncHostIds.length === 0) {
-      toast.message("从设备同步");
+      toast.message(t("settings.syncFromDevices"));
       return;
     }
 
-    toast.success(`已开始同步 ${selectedSyncHostIds.length} 个设备`);
+    toast.success(t("settings.syncStarted", { count: selectedSyncHostIds.length }));
     setSyncDialogOpen(false);
 
     for (const hostId of selectedSyncHostIds) {
@@ -517,7 +517,7 @@ export function Settings({
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
         setSyncStatusByHostId((prev) => ({ ...prev, [hostId]: "failed" }));
-        toast.error(`${deviceName} 同步失败：${errorText}`);
+        toast.error(t("settings.syncFailedForDevice", { device: deviceName, error: errorText }));
       }
     }
     refreshProfiles();
@@ -820,17 +820,15 @@ export function Settings({
               const checked = selectedSyncHostIds.includes(device.id);
               const connected = hostConnectionById[device.id] ?? false;
               const status = syncStatusByHostId[device.id] || "idle";
-              const statusText = !connected
-                ? "未连接"
-                : status === "syncing"
-                  ? t("settings.syncStatusSyncing")
-                  : status === "success"
-                    ? t("settings.syncStatusSuccess")
-                    : status === "failed"
-                      ? t("settings.syncStatusFailed")
-                      : t("settings.syncStatusIdle");
+              const statusText = status === "syncing"
+                ? t("settings.syncStatusSyncing")
+                : status === "success"
+                  ? t("settings.syncStatusSuccess")
+                  : status === "failed"
+                    ? t("settings.syncStatusFailed")
+                    : t("settings.syncStatusIdle");
               return (
-                <label key={device.id} className="flex items-center justify-between gap-3 border border-border rounded-md px-3 py-2">
+                <label key={device.id} className={`flex items-center justify-between gap-3 border border-border rounded-md px-3 py-2 ${connected ? "" : "opacity-70"}`}>
                   <div className="flex items-center gap-2">
                     <Checkbox
                       checked={checked}
@@ -843,27 +841,27 @@ export function Settings({
                           : prev.filter((id) => id !== device.id));
                       }}
                     />
-                    <span className="text-sm">{device.label}</span>
+                    <span className={`text-sm ${connected ? "" : "text-muted-foreground"}`}>{device.label}</span>
                     {!connected && (
                       <Button
                         type="button"
                         size="icon"
                         variant="ghost"
                         className="h-6 w-6"
-                        title="去连接此设备"
+                        title={t("settings.connectDevice")}
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
                           setSyncDialogOpen(false);
                           onOpenStart?.();
-                          toast.message(`请先连接设备：${device.label}`);
+                          toast.message(t("settings.connectDeviceFirst", { device: device.label }));
                         }}
                       >
-                        <LinkIcon className="h-3.5 w-3.5" />
+                        <LinkIcon className="h-2.5 w-2.5" />
                       </Button>
                     )}
                   </div>
-                  <span className="text-xs text-muted-foreground">{statusText}</span>
+                  <span className="text-xs text-muted-foreground">{connected ? statusText : ""}</span>
                 </label>
               );
             })}
