@@ -58,12 +58,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Link2Icon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { PlusIcon, RefreshCwIcon } from "lucide-react";
 
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 let modelCatalogCache: { value: ModelCatalogProvider[]; expiresAt: number } | null = null;
 let profilesExtractedOnce = false;
+let syncSelectionSessionCache: string[] = [];
 const PROVIDER_FALLBACK_OPTIONS = [
   "openai",
   "openai-codex",
@@ -111,7 +112,7 @@ export function Settings({
   const [showSshTransferSpeedUi, setShowSshTransferSpeedUi] = useState(false);
   const [remoteDevices, setRemoteDevices] = useState<SshHost[]>([]);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
-  const [selectedSyncHostIds, setSelectedSyncHostIds] = useState<string[]>([]);
+  const [selectedSyncHostIds, setSelectedSyncHostIds] = useState<string[]>(() => [...syncSelectionSessionCache]);
   const [syncStatusByHostId, setSyncStatusByHostId] = useState<Record<string, "idle" | "syncing" | "success" | "failed">>({});
   const [hostConnectionById, setHostConnectionById] = useState<Record<string, boolean>>({});
 
@@ -187,6 +188,10 @@ export function Settings({
       cancelled = true;
     };
   }, [remoteDevices, syncDialogOpen, ua]);
+
+  useEffect(() => {
+    syncSelectionSessionCache = selectedSyncHostIds;
+  }, [selectedSyncHostIds]);
 
   useEffect(() => {
     ua.getAppPreferences()
@@ -835,39 +840,25 @@ export function Settings({
                   <div className="flex items-center gap-2">
                     <Checkbox
                       checked={checked}
-                      disabled={!connected}
-                      onCheckedChange={(value) => {
-                        if (!connected) return;
+                      onCheckedChange={async (value) => {
                         const enabled = Boolean(value);
-                        setSelectedSyncHostIds((prev) => enabled
-                          ? [...prev, device.id]
-                          : prev.filter((id) => id !== device.id));
+                        if (!enabled) {
+                          setSelectedSyncHostIds((prev) => prev.filter((id) => id !== device.id));
+                          return;
+                        }
+                        if (!connected) {
+                          if (!onConnectDevice) return;
+                          const connectedNow = await onConnectDevice(device.id);
+                          if (!connectedNow) return;
+                          setHostConnectionById((prev) => ({ ...prev, [device.id]: true }));
+                        }
+                        setSelectedSyncHostIds((prev) => prev.includes(device.id) ? prev : [...prev, device.id]);
                       }}
                     />
                     <span className={`text-sm ${connected ? "" : "text-muted-foreground"}`}>{device.label}</span>
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    {connected ? statusText : (
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6"
-                        title={t("settings.connectDevice")}
-                        onClick={async (event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          if (!onConnectDevice) return;
-                          const connectedNow = await onConnectDevice(device.id);
-                          if (connectedNow) {
-                            setHostConnectionById((prev) => ({ ...prev, [device.id]: true }));
-                            setSelectedSyncHostIds((prev) => prev.includes(device.id) ? prev : [...prev, device.id]);
-                          }
-                        }}
-                      >
-                        <Link2Icon className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
+                    {connected ? statusText : t("settings.disconnected")}
                   </span>
                 </label>
               );
