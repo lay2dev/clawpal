@@ -94,7 +94,7 @@ export function Settings({
   globalMode?: boolean;
   section?: "all" | "profiles" | "preferences";
   onOpenDoctor?: () => void;
-  onConnectDevice?: (hostId: string) => void;
+  onConnectDevice?: (hostId: string) => Promise<boolean>;
 }) {
   const { t, i18n } = useTranslation();
   const ua = useApi();
@@ -851,12 +851,15 @@ export function Settings({
                         variant="ghost"
                         className="h-6 w-6"
                         title={t("settings.connectDevice")}
-                        onClick={(event) => {
+                        onClick={async (event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          setSyncDialogOpen(false);
-                          onConnectDevice?.(device.id);
-                          toast.message(t("settings.connectDeviceFirst", { device: device.label }));
+                          if (!onConnectDevice) return;
+                          const connectedNow = await onConnectDevice(device.id);
+                          if (connectedNow) {
+                            setHostConnectionById((prev) => ({ ...prev, [device.id]: true }));
+                            setSelectedSyncHostIds((prev) => prev.includes(device.id) ? prev : [...prev, device.id]);
+                          }
                         }}
                       >
                         <Link2Icon className="h-3.5 w-3.5" />

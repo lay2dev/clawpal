@@ -470,17 +470,11 @@ export function App() {
               globalMode
               section="profiles"
               onOpenDoctor={openDoctor}
-              onConnectDevice={(hostId) => {
-                void connectWithPassphraseFallback(hostId)
-                  .then(() => {
-                    setInStart(true);
-                    setStartSection("profiles");
-                  })
-                  .catch(() => {
-                    setInStart(true);
-                    setStartSection("profiles");
-                  });
-              }}
+              onConnectDevice={(hostId) => (
+                connectWithPassphraseFallback(hostId)
+                  .then(() => true)
+                  .catch(() => false)
+              )}
               onDataChange={bumpConfigVersion}
             />
           )}
@@ -490,17 +484,11 @@ export function App() {
               globalMode
               section="preferences"
               onOpenDoctor={openDoctor}
-              onConnectDevice={(hostId) => {
-                void connectWithPassphraseFallback(hostId)
-                  .then(() => {
-                    setInStart(true);
-                    setStartSection("profiles");
-                  })
-                  .catch(() => {
-                    setInStart(true);
-                    setStartSection("profiles");
-                  });
-              }}
+              onConnectDevice={(hostId) => (
+                connectWithPassphraseFallback(hostId)
+                  .then(() => true)
+                  .catch(() => false)
+              )}
               onDataChange={bumpConfigVersion}
               hasAppUpdate={appUpdateAvailable}
               onAppUpdateSeen={() => setAppUpdateAvailable(false)}
