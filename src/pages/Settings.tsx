@@ -458,6 +458,11 @@ export function Settings({
     ? "从设备同步"
     : t("settings.syncFromDevicesAction", { count: selectedSyncHostIds.length });
 
+  const isDeviceSyncing = useMemo(
+    () => Object.values(syncStatusByHostId).some((status) => status === "syncing"),
+    [syncStatusByHostId],
+  );
+
   const formatSyncedAt = (value?: string) => {
     if (!value) return "-";
     const timestamp = Date.parse(value);
@@ -470,6 +475,10 @@ export function Settings({
       toast.message("从设备同步");
       return;
     }
+
+    toast.success(`已开始同步 ${selectedSyncHostIds.length} 个设备`);
+    setSyncDialogOpen(false);
+
     for (const hostId of selectedSyncHostIds) {
       const device = remoteDevices.find((item) => item.id === hostId);
       const deviceName = device?.label || hostId;
@@ -626,7 +635,7 @@ export function Settings({
                       title={t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
                       aria-label={t("settings.syncedDevicesCount", { count: syncedDeviceCount })}
                     >
-                      <RefreshCwIcon className="h-4 w-4" />
+                      <RefreshCwIcon className={`h-4 w-4 ${isDeviceSyncing ? "animate-spin" : ""}`} />
                     </Button>
                     <Button
                       size="icon"
