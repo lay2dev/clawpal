@@ -58,7 +58,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { LinkIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { PlusIcon, RefreshCwIcon } from "lucide-react";
 
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
@@ -843,11 +843,9 @@ export function Settings({
                     />
                     <span className={`text-sm ${connected ? "" : "text-muted-foreground"}`}>{device.label}</span>
                     {!connected && (
-                      <Button
+                      <button
                         type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6"
+                        className="group"
                         title={t("settings.connectDevice")}
                         onClick={(event) => {
                           event.preventDefault();
@@ -857,8 +855,11 @@ export function Settings({
                           toast.message(t("settings.connectDeviceFirst", { device: device.label }));
                         }}
                       >
-                        <LinkIcon className="h-2.5 w-2.5" />
-                      </Button>
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
+                          <span className="group-hover:hidden">{t("settings.disconnected")}</span>
+                          <span className="hidden group-hover:inline">{t("settings.connectDevice")}</span>
+                        </Badge>
+                      </button>
                     )}
                   </div>
                   <span className="text-xs text-muted-foreground">{connected ? statusText : ""}</span>
