@@ -842,10 +842,12 @@ export function Settings({
                       }}
                     />
                     <span className={`text-sm ${connected ? "" : "text-muted-foreground"}`}>{device.label}</span>
-                    {!connected && (
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {connected ? statusText : (
                       <button
                         type="button"
-                        className="group"
+                        className="group inline-flex"
                         title={t("settings.connectDevice")}
                         onClick={(event) => {
                           event.preventDefault();
@@ -855,14 +857,13 @@ export function Settings({
                           toast.message(t("settings.connectDeviceFirst", { device: device.label }));
                         }}
                       >
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
+                        <Badge variant="outline" className="w-[72px] justify-center text-[10px] px-1.5 py-0 h-5">
                           <span className="group-hover:hidden">{t("settings.disconnected")}</span>
                           <span className="hidden group-hover:inline">{t("settings.connectDevice")}</span>
                         </Badge>
                       </button>
                     )}
-                  </div>
-                  <span className="text-xs text-muted-foreground">{connected ? statusText : ""}</span>
+                  </span>
                 </label>
               );
             })}
