@@ -58,7 +58,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { PlusIcon, RefreshCwIcon } from "lucide-react";
+import { LinkIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 
 
 const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
@@ -86,6 +86,7 @@ export function Settings({
   globalMode = false,
   section = "all",
   onOpenDoctor,
+  onOpenStart,
 }: {
   onDataChange?: () => void;
   hasAppUpdate?: boolean;
@@ -93,6 +94,7 @@ export function Settings({
   globalMode?: boolean;
   section?: "all" | "profiles" | "preferences";
   onOpenDoctor?: () => void;
+  onOpenStart?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const ua = useApi();
@@ -112,6 +114,7 @@ export function Settings({
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [selectedSyncHostIds, setSelectedSyncHostIds] = useState<string[]>([]);
   const [syncStatusByHostId, setSyncStatusByHostId] = useState<Record<string, "idle" | "syncing" | "success" | "failed">>({});
+  const [hostConnectionById, setHostConnectionById] = useState<Record<string, boolean>>({});
 
   const [catalogRefreshed, setCatalogRefreshed] = useState(false);
 
@@ -160,6 +163,31 @@ export function Settings({
         setRemoteDevices([]);
       });
   }, [ua]);
+
+  useEffect(() => {
+    if (!syncDialogOpen || remoteDevices.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      remoteDevices.map(async (device) => {
+        try {
+          const status = await ua.sshStatus(device.id);
+          const text = String(status).toLowerCase();
+          const connected = text.includes("connected") && !text.includes("disconnected") && !text.includes("no connection");
+          return [device.id, connected] as const;
+        } catch {
+          return [device.id, false] as const;
+        }
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next = Object.fromEntries(pairs);
+      setHostConnectionById(next);
+      setSelectedSyncHostIds((prev) => prev.filter((id) => next[id]));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteDevices, syncDialogOpen, ua]);
 
   useEffect(() => {
     ua.getAppPreferences()
@@ -790,20 +818,25 @@ export function Settings({
               <p className="text-sm text-muted-foreground">{t("settings.noSyncDevices")}</p>
             ) : remoteDevices.map((device) => {
               const checked = selectedSyncHostIds.includes(device.id);
+              const connected = hostConnectionById[device.id] ?? false;
               const status = syncStatusByHostId[device.id] || "idle";
-              const statusText = status === "syncing"
-                ? t("settings.syncStatusSyncing")
-                : status === "success"
-                  ? t("settings.syncStatusSuccess")
-                  : status === "failed"
-                    ? t("settings.syncStatusFailed")
-                    : t("settings.syncStatusIdle");
+              const statusText = !connected
+                ? "未连接"
+                : status === "syncing"
+                  ? t("settings.syncStatusSyncing")
+                  : status === "success"
+                    ? t("settings.syncStatusSuccess")
+                    : status === "failed"
+                      ? t("settings.syncStatusFailed")
+                      : t("settings.syncStatusIdle");
               return (
                 <label key={device.id} className="flex items-center justify-between gap-3 border border-border rounded-md px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Checkbox
                       checked={checked}
+                      disabled={!connected}
                       onCheckedChange={(value) => {
+                        if (!connected) return;
                         const enabled = Boolean(value);
                         setSelectedSyncHostIds((prev) => enabled
                           ? [...prev, device.id]
@@ -811,6 +844,24 @@ export function Settings({
                       }}
                     />
                     <span className="text-sm">{device.label}</span>
+                    {!connected && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6"
+                        title="去连接此设备"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSyncDialogOpen(false);
+                          onOpenStart?.();
+                          toast.message(`请先连接设备：${device.label}`);
+                        }}
+                      >
+                        <LinkIcon className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                   </div>
                   <span className="text-xs text-muted-foreground">{statusText}</span>
                 </label>

@@ -470,6 +470,10 @@ export function App() {
               globalMode
               section="profiles"
               onOpenDoctor={openDoctor}
+              onOpenStart={() => {
+                setInStart(true);
+                setStartSection("overview");
+              }}
               onDataChange={bumpConfigVersion}
             />
           )}
@@ -479,6 +483,10 @@ export function App() {
               globalMode
               section="preferences"
               onOpenDoctor={openDoctor}
+              onOpenStart={() => {
+                setInStart(true);
+                setStartSection("overview");
+              }}
               onDataChange={bumpConfigVersion}
               hasAppUpdate={appUpdateAvailable}
               onAppUpdateSeen={() => setAppUpdateAvailable(false)}
