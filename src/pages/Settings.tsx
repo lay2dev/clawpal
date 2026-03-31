@@ -86,7 +86,7 @@ export function Settings({
   globalMode = false,
   section = "all",
   onOpenDoctor,
-  onOpenStart,
+  onConnectDevice,
 }: {
   onDataChange?: () => void;
   hasAppUpdate?: boolean;
@@ -94,7 +94,7 @@ export function Settings({
   globalMode?: boolean;
   section?: "all" | "profiles" | "preferences";
   onOpenDoctor?: () => void;
-  onOpenStart?: () => void;
+  onConnectDevice?: (hostId: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const ua = useApi();
@@ -853,7 +853,7 @@ export function Settings({
                           event.preventDefault();
                           event.stopPropagation();
                           setSyncDialogOpen(false);
-                          onOpenStart?.();
+                          onConnectDevice?.(device.id);
                           toast.message(t("settings.connectDeviceFirst", { device: device.label }));
                         }}
                       >
